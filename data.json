@@ -1,0 +1,19 @@
+{
+  "discord": {
+    "guildID": "",
+    "botToken": "",
+    "remcmd": true
+  },
+  "dbKey" : {
+    "server": "",
+    "port": "",
+    "user": "",
+    "password": "",
+    "database": ""
+  },
+  "monitor": {
+    "webhook": ""
+
+  }
+
+}
