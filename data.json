@@ -1,4 +1,8 @@
 {
+  "setUp": {
+    "completed": false
+
+  },
   "discord": {
     "guildID": "",
     "botToken": "",

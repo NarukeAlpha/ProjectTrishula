@@ -1,16 +1,16 @@
 package dbService
 
 import (
-	"ProjectTrishula/dbService/core"
+	"ProjectTrishula/dbService/dbcore"
 	_ "github.com/denisenkom/go-mssqldb"
 	"net/http"
 )
 
 func Main() {
 
-	var MangaList = core.SqlInit()
+	var MangaList = dbcore.SqlInit()
 
-	r := core.InitHttpServerMux(MangaList)
+	r := dbcore.InitHttpServerMux(MangaList)
 
 	http.ListenAndServe("localhost:8080", &r)
 

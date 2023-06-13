@@ -1,7 +1,6 @@
-package core
+package dbcore
 
 import (
-	_ "ProjectTrishula/dbService"
 	"encoding/json"
 	"github.com/gorilla/mux"
 	"log"

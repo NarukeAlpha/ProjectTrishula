@@ -1,4 +1,4 @@
-package Core
+package mcore
 
 import (
 	"encoding/csv"

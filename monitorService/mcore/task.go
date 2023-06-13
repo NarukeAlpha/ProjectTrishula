@@ -1,6 +1,7 @@
-package Core
+package mcore
 
 import (
+	"ProjectTrishula/resources"
 	"github.com/playwright-community/playwright-go"
 	"io"
 	"log"
@@ -133,7 +134,7 @@ func Task(mw io.Writer, proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
 		}
 	}
 	log.Printf("finished task for proxy :%v", proxy.ip)
-	AssertErrorToNil("Failed to close Page", page.Close())
-	AssertErrorToNil("Failed to close Browser", browser.Close())
+	resources.AssertErrorToNil("Failed to close Page", page.Close())
+	resources.AssertErrorToNil("Failed to close Browser", browser.Close())
 
 }

@@ -1,4 +1,4 @@
-package Core
+package mcore
 
 import (
 	"bytes"

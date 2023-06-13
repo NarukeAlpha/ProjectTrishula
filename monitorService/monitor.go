@@ -1,7 +1,7 @@
 package monitorService
 
 import (
-	"ProjectTrishula/monitorService/core"
+	"ProjectTrishula/monitorService/mcore"
 	"fmt"
 	"github.com/joho/godotenv"
 	"github.com/playwright-community/playwright-go"
@@ -22,8 +22,8 @@ func Main() {
 
 	//making the channels for the go routines to communicate and reduce execution time before monitor starts
 	var wg sync.WaitGroup
-	mChannel := make(chan []Core.DbMangaEntry)
-	pChannel := make(chan []Core.ProxyStruct)
+	mChannel := make(chan []mcore.DbMangaEntry)
+	pChannel := make(chan []mcore.ProxyStruct)
 	//opening log file and creating a multiwriter to write to both stdout and file
 	file, err := os.Open("QuerySelector.log")
 	if err != nil {
@@ -34,8 +34,8 @@ func Main() {
 
 	//waitgroup to launch all 2 go routines and wait until each one is done before attempting to reach from each channel.
 	wg.Add(2)
-	go Core.MangaSync(mChannel, &wg)
-	go Core.ProxyLoad(pChannel, &wg)
+	go mcore.MangaSync(mChannel, &wg)
+	go mcore.ProxyLoad(pChannel, &wg)
 	//	wg.Wait()
 
 	//receiving from each channel and closing them
@@ -46,7 +46,7 @@ func Main() {
 
 	log.Printf("Starting monitor")
 	//initializing the monitor
-	Core.TaskInit(mw, mL, pL, wbKey)
+	mcore.TaskInit(mw, mL, pL, wbKey)
 
 	//for {
 	//	//infinite loop to keep the program running

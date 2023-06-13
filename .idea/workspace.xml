@@ -4,29 +4,24 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/discord.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/ProjectTrishula.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/dbService/core/dbInit.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/dbService/core/httpSrv.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/dbService/database.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/goStructs.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/core/goStructs.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/core/httpHandler.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/core/task.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/core/taskHandler.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/core/webhookManager.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/core/webhookManager_test.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/monitorService/pwtesting.go" afterDir="false" />
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Joined all 3 separate projects into one working file.">
+      <change afterPath="$PROJECT_DIR$/.idea/dataSources.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data.dev.json" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/resources/funcs.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data.json" beforeDir="false" afterPath="$PROJECT_DIR$/data.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/core/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/core/httpSrv.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/database.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/database.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/core/goStructs.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/core/httpHandler.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/httpHandler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/core/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/core/taskHandler.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/taskHandler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/core/webhookManager.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/webhookManager.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/core/webhookManager_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/monitor.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -44,6 +39,9 @@
   <component name="GOROOT" url="file://$PROJECT_DIR$/../../../../Program Files/Go" />
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/data.dev.json" root0="SKIP_HIGHLIGHTING" />
   </component>
   <component name="MarkdownSettingsMigration">
     <option name="stateVersion" value="1" />
@@ -67,14 +65,36 @@
     "git-widget-placeholder": "master",
     "go.import.settings.migrated": "true",
     "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "C:/Users/bagaa/IdeaProjects/ProjectTrishula/main.go",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "vue.rearranger.settings.migration": "true"
+  },
+  "keyToStringList": {
+    "DatabaseDriversLRU": [
+      "sqlserver"
+    ]
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\bagaa\IdeaProjects\ProjectTrishula" />
+    </key>
+  </component>
+  <component name="RunManager">
+    <configuration name="go build ProjectTrishula main.go" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="ProjectTrishula" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="DIRECTORY" />
+      <package value="ProjectTrishula" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$/../ProjectTrishula|$PROJECT_DIR$/main.go|$PROJECT_DIR$/main.go" />
+      <method v="2" />
+    </configuration>
+  </component>
   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
   <component name="TaskManager">
     <task active="true" id="Default" summary="Default task">
@@ -83,12 +103,35 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1686617836916</updated>
-      <workItem from="1686617837925" duration="4122000" />
+      <workItem from="1686617837925" duration="13501000" />
     </task>
+    <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
+      <created>1686622578398</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1686622578398</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Joined all 3 separate projects into one working file." />
+    <option name="LAST_COMMIT_MESSAGE" value="Joined all 3 separate projects into one working file." />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
