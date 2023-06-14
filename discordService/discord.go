@@ -3,7 +3,6 @@ package discordService
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"github.com/bwmarrin/discordgo"
 	"log"
@@ -32,16 +31,6 @@ var (
 )
 
 var s *discordgo.Session
-
-func init() { flag.Parse() }
-
-func init() {
-	var err error
-	s, err = discordgo.New("Bot " + BotToken)
-	if err != nil {
-		log.Fatalf("Invalid bot parameters: %v", err)
-	}
-}
 
 var (
 	integerOptionMinValue          = 1.0
@@ -148,19 +137,31 @@ var (
 	}
 )
 
-func init() {
+func Main(discordConnection struct {
+	GuildID  string `json:"guildID"`
+	BotToken string `json:"botToken"`
+	RemCmd   bool   `json:"remCmd"`
+}) {
+
+	GuildID = discordConnection.GuildID
+	BotToken = discordConnection.BotToken
+	RemoveCommands = discordConnection.RemCmd
+
+	var err error
+	s, err = discordgo.New("Bot " + BotToken)
+	if err != nil {
+		log.Fatalf("Invalid bot parameters: %v", err)
+	}
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
 			h(s, i)
 		}
 	})
-}
 
-func Main() {
 	s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("Logged in as: %v#%v", s.State.User.Username, s.State.User.Discriminator)
 	})
-	err := s.Open()
+	err = s.Open()
 	if err != nil {
 		log.Fatalf("Cannot open the session: %v", err)
 	}

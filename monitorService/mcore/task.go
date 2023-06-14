@@ -1,7 +1,7 @@
 package mcore
 
 import (
-	"ProjectTrishula/resources"
+	"ProjectTrishula/Core"
 	"github.com/playwright-community/playwright-go"
 	"io"
 	"log"
@@ -51,6 +51,15 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 		return false
 
 	},
+	"readeleceed": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
+		return false
+	},
+	"mangasee123": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
+		return false
+	},
+	"legendasura": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
+		return false
+	},
 }
 
 func TaskInit(mw io.Writer, mL []DbMangaEntry, pL []ProxyStruct, wbKey string) {
@@ -63,7 +72,7 @@ func TaskInit(mw io.Writer, mL []DbMangaEntry, pL []ProxyStruct, wbKey string) {
 			if err := recover(); err != nil {
 				log.Printf("Recovered from panic: %v", err)
 			}
-			time.Sleep(5 * time.Minute)
+			time.Sleep(3 * time.Minute)
 
 		}
 		var wg sync.WaitGroup
@@ -120,7 +129,7 @@ func Task(mw io.Writer, proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
 	if err != nil {
 		log.Fatalf("could not create page: %v", err)
 	}
-	for i := 1; i < len(manga); i++ {
+	for i := 0; i < len(manga); i++ {
 		cLink := ChapterLinkIncrementer(manga[i].DchapterLink, manga[i].DlastChapter)
 		if theMap[manga[i].Didentifier](manga[i], browser, page, cLink) {
 			WebhookSend(manga[i], wbKey)
@@ -134,7 +143,7 @@ func Task(mw io.Writer, proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
 		}
 	}
 	log.Printf("finished task for proxy :%v", proxy.ip)
-	resources.AssertErrorToNil("Failed to close Page", page.Close())
-	resources.AssertErrorToNil("Failed to close Browser", browser.Close())
+	Core.AssertErrorToNil("Failed to close Page", page.Close())
+	Core.AssertErrorToNil("Failed to close Browser", browser.Close())
 
 }

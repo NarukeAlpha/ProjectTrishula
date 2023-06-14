@@ -4,9 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/joho/godotenv"
 	"log"
-	"os"
 )
 
 type DbMangaEntry struct {
@@ -20,13 +18,7 @@ type DbMangaEntry struct {
 
 /* dbConnection is a function that returns a sql.DB object dynamically, to be used in other functions
  */
-func dbConnection() sql.DB {
-	//loading sql key from .env
-	err := godotenv.Load(".env")
-	if err != nil {
-		log.Fatal("failed to load .env file")
-	}
-	connString := fmt.Sprintf(os.Getenv("dbkey"))
+func dbConnection(connString string) sql.DB {
 
 	//sql server connection
 	db, err := sql.Open("sqlserver", connString)
@@ -36,9 +28,9 @@ func dbConnection() sql.DB {
 	return *db
 }
 
-func SqlInit() []DbMangaEntry {
+func SqlInit(key string) []DbMangaEntry {
 
-	var db sql.DB = dbConnection()
+	var db sql.DB = dbConnection(key)
 	defer db.Close()
 	var mangaEntry []DbMangaEntry = readingMangaTable(db)
 

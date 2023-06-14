@@ -8,7 +8,7 @@ import (
 	"os"
 )
 
-func InitHttpServerMux(mL []DbMangaEntry) mux.Router {
+func InitHttpServerMux(mL []DbMangaEntry, key string) mux.Router {
 	rt := mux.NewRouter()
 	rt.HandleFunc("/exit", func(w http.ResponseWriter, r *http.Request) {
 		os.Exit(2)
@@ -32,7 +32,7 @@ func InitHttpServerMux(mL []DbMangaEntry) mux.Router {
 			//mL = append(mL, mangaEntry)
 			mL[(mangaEntry.Did - 1)].DlastChapter = mangaEntry.DlastChapter
 			mL[(mangaEntry.Did - 1)].DchapterLink = mangaEntry.DchapterLink
-			var db = dbConnection()
+			var db = dbConnection(key)
 			defer db.Close()
 			addChapterToTable(db, mangaEntry)
 
@@ -44,7 +44,7 @@ func InitHttpServerMux(mL []DbMangaEntry) mux.Router {
 				return
 			}
 			mL = append(mL, mangaEntry)
-			var db = dbConnection()
+			var db = dbConnection(key)
 			defer db.Close()
 			addNewMangaToTable(db, mangaEntry)
 

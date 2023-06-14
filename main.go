@@ -1,12 +1,16 @@
 package main
 
 import (
-	"ProjectTrishula/resources"
+	"ProjectTrishula/Core"
+	"ProjectTrishula/dbService"
+	"ProjectTrishula/discordService"
+	"ProjectTrishula/monitorService"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 )
 
 var SetUp struct {
@@ -29,6 +33,7 @@ var Monitor struct {
 }
 
 func init() {
+
 	// load json data file
 	// load data into variables
 	// check if data is valid
@@ -60,10 +65,10 @@ func init() {
 			log.Panicf("Error decoding data.json: %v", err)
 
 		}
-		resources.AssertErrorToNil("failed to close file: %v", file.Close())
+		Core.AssertErrorToNil("failed to close file: %v", file.Close())
 
 	} else {
-		resources.AssertErrorToNil("failed to close file: %v", file.Close())
+		Core.AssertErrorToNil("failed to close file: %v", file.Close())
 
 		// Ask for Discord configuration values
 		fmt.Println("Enter Discord configuration:")
@@ -112,17 +117,21 @@ func init() {
 		if err = encoder.Encode(Monitor); err != nil {
 			log.Panicf("Error encoding data.json: %v", err)
 		}
-		resources.AssertErrorToNil("Error closing data.json: %v", file.Close())
+		Core.AssertErrorToNil("Error closing data.json: %v", file.Close())
 
 	}
 
 }
 
 func main() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go dbService.Main(DbKey, &wg)
+	wg.Wait()
+	log.Printf("DB service started")
 
-	//go dbService.Main()
-	//go discordService.Main()
-	//go monitorService.Main()
+	go discordService.Main(DiscordS)
+	go monitorService.Main(Monitor.Webhook)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)

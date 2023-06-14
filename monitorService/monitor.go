@@ -2,8 +2,6 @@ package monitorService
 
 import (
 	"ProjectTrishula/monitorService/mcore"
-	"fmt"
-	"github.com/joho/godotenv"
 	"github.com/playwright-community/playwright-go"
 	"io"
 	"log"
@@ -12,13 +10,8 @@ import (
 	"sync"
 )
 
-func Main() {
-	err := godotenv.Load(".env")
-	if err != nil {
-		log.Fatal("failed to load .env file")
-	}
-	wbKey := fmt.Sprintf(os.Getenv("webKey"))
-	err = playwright.Install()
+func Main(wbKey string) {
+	err := playwright.Install()
 
 	//making the channels for the go routines to communicate and reduce execution time before monitor starts
 	var wg sync.WaitGroup
