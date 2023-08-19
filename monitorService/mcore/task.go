@@ -10,58 +10,6 @@ import (
 	"time"
 )
 
-var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool{
-
-	"asurascans": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
-		if _, err := page.Goto(manga.DchapterLink); err != nil {
-			log.Printf("Couldn't hit webpage chapter specific link: %v \n err: %v", clink, err)
-		}
-		options, err := page.QuerySelectorAll("#chapter option")
-		if err != nil {
-			log.Fatal(err)
-		}
-		var optionTexts []string
-		for _, option := range options {
-			optionText, err := option.TextContent()
-			if err != nil {
-				log.Fatal(err)
-			}
-			optionTexts = append(optionTexts, optionText)
-		}
-		for x := 0; x < len(optionTexts); x++ {
-			if ChapterRegex(optionTexts[x], manga.DlastChapter) {
-				if _, err := page.Goto(clink); err != nil {
-					log.Printf("Couldn't hit webpage chapter specific link \n after finding new chapter in chapter selector: %v \n err: %v", clink, err)
-					return false
-				}
-				title, err := page.Title()
-				if err != nil {
-					log.Printf("Couldn't get page title: %v \n err: %v", clink, err)
-					return false
-				}
-				if titleHas404(title) {
-					return true
-				} else {
-					return false
-				}
-
-			}
-
-		}
-		return false
-
-	},
-	"readeleceed": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
-		return false
-	},
-	"mangasee123": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
-		return false
-	},
-	"legendasura": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
-		return false
-	},
-}
-
 func TaskInit(mw io.Writer, mL []DbMangaEntry, pL []ProxyStruct, wbKey string) {
 	//old implementation was gigascuffed, needs a full rewrite to take advantage of concurrency
 	//removed go routines for now, will be redone as application grows bigger but initial structure was made
