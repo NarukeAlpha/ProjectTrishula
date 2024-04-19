@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <dataSource name="Delta@localhost">
-  <database-model serializer="dbm" dbms="MSSQL" family-id="MSSQL" format-version="4.48">
+  <database-model serializer="dbm" dbms="MSSQL" family-id="MSSQL" format-version="4.52">
     <root id="1">
       <Grants>2|||2|connect|G
 3|||2|connect|G
@@ -16841,7 +16841,6 @@
 2005582183|||5|take ownership|G
 2005582183|||5|update|G
 2005582183|||5|view definition|G</Grants>
-      <IntrospectionTimestamp>2023-06-12.12:26:36.087</IntrospectionTimestamp>
       <ObjectId>1</ObjectId>
       <PermissionsCheckSum>27127892211</PermissionsCheckSum>
     </schema>

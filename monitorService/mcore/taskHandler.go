@@ -13,14 +13,13 @@ import (
 )
 
 func ProxyLoad(c chan []ProxyStruct, wg *sync.WaitGroup) {
-	defer wg.Done()
 	var returnPS []ProxyStruct
 	var path = "./ProxyList.csv"
 	f, err := os.Open(path)
 	if err != nil {
 		log.Fatalf("couldn't open - err: %v", err)
 	}
-	defer f.Close()
+
 	csvReader := csv.NewReader(f)
 	for i := 0; true; i++ {
 		if i == 0 {
@@ -54,7 +53,12 @@ func ProxyLoad(c chan []ProxyStruct, wg *sync.WaitGroup) {
 		}
 
 	}
+	err = f.Close()
+	if err != nil {
+		log.Fatalf("failed to close file - err: %v", err)
+	}
 	c <- returnPS
+	wg.Done()
 	return
 }
 
