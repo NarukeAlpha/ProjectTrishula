@@ -3,22 +3,27 @@ package mcore
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 )
 
 func MangaSync(c chan []DbMangaEntry, wg *sync.WaitGroup) {
-	defer wg.Done()
 	r, err := http.Get("http://localhost:8080/MangaList")
 	if err != nil {
 		panic(err)
 	}
-	defer r.Body.Close()
+
 	var MangaList []DbMangaEntry
 	if err = json.NewDecoder(r.Body).Decode(&MangaList); err != nil {
 		panic(err)
 	}
 	c <- MangaList
+	wg.Done()
+	err = r.Body.Close()
+	if err != nil {
+		log.Panic(err)
+	}
 	return
 }
 
@@ -37,6 +42,9 @@ func MangaUpdate(manga DbMangaEntry) {
 	if err != nil {
 		panic(err)
 	}
-	defer resp.Body.Close()
+	err = resp.Body.Close()
+	if err != nil {
+		log.Println(err)
+	}
 
 }

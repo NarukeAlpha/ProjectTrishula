@@ -1,16 +1,18 @@
 package main
 
 import (
-	"ProjectTrishula/Core"
-	"ProjectTrishula/dbService"
-	"ProjectTrishula/discordService"
-	"ProjectTrishula/monitorService"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"sync"
+
+	"ProjectTrishula/Core"
+	"ProjectTrishula/dbService"
+	"ProjectTrishula/discordService"
+	"ProjectTrishula/monitorService"
 )
 
 var SetUp struct {
@@ -31,6 +33,7 @@ var DbKey struct {
 var Monitor struct {
 	Webhook string `json:"webhook"`
 }
+var mw io.Writer
 
 func init() {
 
@@ -38,7 +41,19 @@ func init() {
 	// load data into variables
 	// check if data is valid
 	// if data is not valid, start a setup process
-	file, err := os.Open("data.dev.json")
+	_, err := os.Stat("data.json")
+	if os.IsNotExist(err) {
+		_, err = os.Create("data.json")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	_, err = os.Stat("ProxyList.csv")
+	if os.IsNotExist(err) {
+		log.Fatalln("PoxyList.csv not found, please provide a csv file named ProxyList in the same directory as the exe")
+
+	}
+	file, err := os.Open("data.json")
 	if err != nil {
 		log.Panicf("Error opening data.json: %v", err)
 
@@ -120,18 +135,34 @@ func init() {
 		Core.AssertErrorToNil("Error closing data.json: %v", file.Close())
 
 	}
+	_, err = os.Stat("log.txt")
+	if os.IsNotExist(err) {
+		file, err = os.Create("log.txt")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	file, err = os.OpenFile("log.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	mw = io.MultiWriter(os.Stdout, file)
+	log.SetOutput(mw)
+	log.Println("This is a log message")
 
 }
 
 func main() {
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go dbService.Main(DbKey, &wg)
+	go discordService.Main(DiscordS, &wg)
 	wg.Wait()
-	log.Printf("DB service started")
 
-	go discordService.Main(DiscordS)
+	log.Println("starting monitor service")
 	go monitorService.Main(Monitor.Webhook)
+	log.Println("All services started")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)

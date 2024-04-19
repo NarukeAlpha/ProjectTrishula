@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/bwmarrin/discordgo"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 type MangaEntry struct {
@@ -123,7 +126,7 @@ var (
 			}
 			MangaUpdate(entry)
 
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				// Ignore type for now, they will be discussed in "responses"
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -133,6 +136,10 @@ var (
 					),
 				},
 			})
+			if err != nil {
+				log.Println(err)
+				return
+			}
 		},
 	}
 )
@@ -141,7 +148,7 @@ func Main(discordConnection struct {
 	GuildID  string `json:"guildID"`
 	BotToken string `json:"botToken"`
 	RemCmd   bool   `json:"remCmd"`
-}) {
+}, group *sync.WaitGroup) {
 
 	GuildID = discordConnection.GuildID
 	BotToken = discordConnection.BotToken
@@ -176,7 +183,13 @@ func Main(discordConnection struct {
 		registeredCommands[i] = cmd
 	}
 
-	defer s.Close()
+	defer func(s *discordgo.Session) {
+		err := s.Close()
+		if err != nil {
+
+		}
+	}(s)
+	group.Done()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
@@ -216,7 +229,12 @@ func MangaUpdate(manga MangaEntry) {
 
 		log.Println(err)
 	}
-	defer r.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(r.Body)
 	r.Header.Set("Content-Type", "application/json")
 	clnt := http.DefaultClient
 	resp, err := clnt.Do(r)
@@ -224,6 +242,11 @@ func MangaUpdate(manga MangaEntry) {
 		log.Println(err)
 
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 	//built in a response reader, to be used later for feature completion.
 }
