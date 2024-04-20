@@ -14,17 +14,11 @@ func TaskInit(mL []DbMangaEntry, pL []ProxyStruct, wbKey string) {
 	//old implementation was gigascuffed, needs a full rewrite to take advantage of concurrency
 	//removed go routines for now, will be redone as application grows bigger but initial structure was made
 	//keeping in mind later implementation.
-	errch := make(chan error)
-	var err error
 	for {
 		for _, proxy := range pL {
 			go Task(proxy, mL, wbKey)
-			err = <-errch
-			if err != nil {
-				continue
-			} else {
-				time.Sleep(3 * time.Minute)
-			}
+
+			time.Sleep(1 * time.Minute)
 		}
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -124,9 +118,9 @@ func Task(proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
 			manga[i].DlastChapter = manga[i].DlastChapter + 1
 			manga[i].DchapterLink = cLink
 			MangaUpdate(manga[i])
-			log.Printf("PAGE IS LIVE")
+			log.Printf("PAGE IS LIVE for %v, updated chapter to %v", manga[i].Dmanga, manga[i].DlastChapter)
 		} else {
-			log.Printf("Page not live, will keep monitoring")
+			log.Printf("Page not live for %v, will keep monitoring", manga[i].Dmanga)
 			continue
 		}
 	}

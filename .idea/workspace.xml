@@ -4,21 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Finished Json implementation for set up. bot now can restart and automatically read settings based on user defined Json. added 3 webpages to map logic but still need work, only asurascans supported at the moment.">
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/e90f87e8-6e5f-48ac-bc26-5780123ed882.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources/e90f87e8-6e5f-48ac-bc26-5780123ed882.xml" afterDir="false" />
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Started rewrite with better code practices.&#10;&#10;Touched main and Discord service. &#10;&#10;WIP on monitor task&#10;&#10;DB service is non-functional (Needs mongodb rewrite)">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/QuerySelector.log" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/discordService/discord.go" beforeDir="false" afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/go.mod" beforeDir="false" afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/go.sum" beforeDir="false" afterPath="$PROJECT_DIR$/go.sum" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/goStructs.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/httpHandler.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/httpHandler.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/monitorService/mcore/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/taskHandler.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/taskHandler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/monitor.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -138,7 +127,7 @@
       <workItem from="1688617144984" duration="41000" />
       <workItem from="1688617200347" duration="209000" />
       <workItem from="1689265444335" duration="595000" />
-      <workItem from="1713493470349" duration="5941000" />
+      <workItem from="1713493470349" duration="17531000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -175,7 +164,15 @@
       <option name="project" value="LOCAL" />
       <updated>1686734235297</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Started rewrite with better code practices.&#10;&#10;Touched main and Discord service. &#10;&#10;WIP on monitor task&#10;&#10;DB service is non-functional (Needs mongodb rewrite)">
+      <option name="closed" value="true" />
+      <created>1713501302312</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1713501302312</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -197,7 +194,8 @@
     <MESSAGE value="Addede a data.json file to store values.  Added first time logic to gather information to run programs, if they exist goes straight to initialization.  Need to implement further to all 3 modules" />
     <MESSAGE value="builded main.go out to push as a release in github" />
     <MESSAGE value="Finished Json implementation for set up. bot now can restart and automatically read settings based on user defined Json. added 3 webpages to map logic but still need work, only asurascans supported at the moment." />
-    <option name="LAST_COMMIT_MESSAGE" value="Finished Json implementation for set up. bot now can restart and automatically read settings based on user defined Json. added 3 webpages to map logic but still need work, only asurascans supported at the moment." />
+    <MESSAGE value="Started rewrite with better code practices.&#10;&#10;Touched main and Discord service. &#10;&#10;WIP on monitor task&#10;&#10;DB service is non-functional (Needs mongodb rewrite)" />
+    <option name="LAST_COMMIT_MESSAGE" value="Started rewrite with better code practices.&#10;&#10;Touched main and Discord service. &#10;&#10;WIP on monitor task&#10;&#10;DB service is non-functional (Needs mongodb rewrite)" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
@@ -206,9 +204,9 @@
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" type="DlvLineBreakpoint">
-          <url>file://$PROJECT_DIR$/monitorService/mcore/task.go</url>
-          <line>103</line>
-          <option name="timeStamp" value="6" />
+          <url>file://$PROJECT_DIR$/monitorService/mcore/websiteMap.go</url>
+          <line>11</line>
+          <option name="timeStamp" value="7" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
