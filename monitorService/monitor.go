@@ -43,7 +43,7 @@ func Main(wbKey string) {
 
 	log.Printf("Starting monitor")
 	//initializing the monitor
-	mcore.TaskInit(mw, mL, pL, wbKey)
+	mcore.TaskInit(mL, pL, wbKey)
 
 	//for {
 	//	//infinite loop to keep the program running

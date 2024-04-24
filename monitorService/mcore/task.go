@@ -112,11 +112,11 @@ func Task(proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
 		log.Fatalf("could not create page: %v", err)
 	}
 	for i := 0; i < len(manga); i++ {
-		cLink := ChapterLinkIncrementer(manga[i].DchapterLink, manga[i].DlastChapter)
-		if theMap[manga[i].Didentifier](manga[i], browser, page, cLink) {
+		//cLink := ChapterLinkIncrementer(manga[i].DchapterLink, manga[i].DlastChapter)
+		if theMap[manga[i].Didentifier](manga[i], browser, page) {
 			WebhookSend(manga[i], wbKey)
 			manga[i].DlastChapter = manga[i].DlastChapter + 1
-			manga[i].DchapterLink = cLink
+			manga[i].DchapterLink = page.URL()
 			MangaUpdate(manga[i])
 			log.Printf("PAGE IS LIVE for %v, updated chapter to %v", manga[i].Dmanga, manga[i].DlastChapter)
 		} else {

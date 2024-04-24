@@ -2,13 +2,15 @@ package dbcore
 
 import (
 	"encoding/json"
-	"github.com/gorilla/mux"
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func InitHttpServerMux(mL []DbMangaEntry, key string) mux.Router {
+func InitHttpServerMux(mL []DbMangaEntry, collection mongo.Collection) mux.Router {
 	rt := mux.NewRouter()
 	rt.HandleFunc("/exit", func(w http.ResponseWriter, r *http.Request) {
 		os.Exit(2)
@@ -30,11 +32,11 @@ func InitHttpServerMux(mL []DbMangaEntry, key string) mux.Router {
 				return
 			}
 			//mL = append(mL, mangaEntry)
-			mL[(mangaEntry.Did - 1)].DlastChapter = mangaEntry.DlastChapter
-			mL[(mangaEntry.Did - 1)].DchapterLink = mangaEntry.DchapterLink
-			var db = dbConnection(key)
-			defer db.Close()
-			addChapterToTable(db, mangaEntry)
+			var index int = getSliceIndex(mL, mangaEntry.Did)
+			mL[index].DlastChapter = mangaEntry.DlastChapter
+			mL[index].DchapterLink = mangaEntry.DchapterLink
+
+			addChapterToTable(collection, mangaEntry)
 
 		case "POST":
 			log.Print("POST request called by ", request.RemoteAddr)
@@ -44,9 +46,7 @@ func InitHttpServerMux(mL []DbMangaEntry, key string) mux.Router {
 				return
 			}
 			mL = append(mL, mangaEntry)
-			var db = dbConnection(key)
-			defer db.Close()
-			addNewMangaToTable(db, mangaEntry)
+			addNewMangaToTable(collection, mangaEntry)
 
 		}
 	}).Methods("GET", "PUT", "POST")

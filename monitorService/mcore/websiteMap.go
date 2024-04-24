@@ -7,11 +7,11 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
-var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool{
+var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page) bool{
 
-	"asurascans": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page, clink string) bool {
+	"asurascans": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page) bool {
 		if _, err := page.Goto(manga.DchapterLink); err != nil {
-			log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", clink, err)
+			log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", manga.DchapterLink, err)
 
 		}
 		// Get the element with the class "ch-next-btn disabled"
