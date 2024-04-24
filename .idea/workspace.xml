@@ -4,10 +4,20 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="started work on monitor task, re did website map for asurascans, its also the only supported website for now.">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/e90f87e8-6e5f-48ac-bc26-5780123ed882.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources/e90f87e8-6e5f-48ac-bc26-5780123ed882.xml" afterDir="false" />
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="edited .gitignore">
+      <change afterPath="$PROJECT_DIR$/.idea/codeStyles/codeStyleConfig.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/database.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/database.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/go.mod" beforeDir="false" afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/go.sum" beforeDir="false" afterPath="$PROJECT_DIR$/go.sum" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/monitor.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -58,36 +68,40 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;DefaultGoTemplateProperty&quot;: &quot;Go File&quot;,
-    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.formatter.settings.were.checked&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.migrated.go.modules.settings&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.modules.automatic.dependencies.download&quot;: &quot;true&quot;,
-    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;WebServerToolWindowFactoryState&quot;: &quot;false&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;Re-write&quot;,
-    &quot;go.import.settings.migrated&quot;: &quot;true&quot;,
-    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/bagaa/IdeaProjects/ProjectTrishula/main.go&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;go.vgo&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "DefaultGoTemplateProperty": "Go File",
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.go.migrated.go.modules.settings": "true",
+    "RunOnceActivity.go.modules.automatic.dependencies.download": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "WebServerToolWindowFactoryState": "false",
+    "git-widget-placeholder": "Re-write",
+    "go.import.settings.migrated": "true",
+    "ignore.virus.scanning.warn.message": "true",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/bagaa/IdeaProjects/ProjectTrishula/main.go",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "project.structure.last.edited": "Problems",
+    "project.structure.proportion": "0.0",
+    "project.structure.side.proportion": "0.2",
+    "settings.editor.selected.configurable": "com.github.copilot.settings.ApplicationConfigurable",
+    "vue.rearranger.settings.migration": "true"
   },
-  &quot;keyToStringList&quot;: {
-    &quot;DatabaseDriversLRU&quot;: [
-      &quot;sqlserver&quot;
+  "keyToStringList": {
+    "DatabaseDriversLRU": [
+      "sqlserver",
+      "mongo"
     ]
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\bagaa\IdeaProjects\ProjectTrishula" />
@@ -128,7 +142,7 @@
       <workItem from="1688617200347" duration="209000" />
       <workItem from="1689265444335" duration="595000" />
       <workItem from="1713493470349" duration="20607000" />
-      <workItem from="1713820348753" duration="828000" />
+      <workItem from="1713820348753" duration="13020000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -181,7 +195,15 @@
       <option name="project" value="LOCAL" />
       <updated>1713593710580</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="edited .gitignore">
+      <option name="closed" value="true" />
+      <created>1713825118986</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1713825118986</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -205,7 +227,8 @@
     <MESSAGE value="Finished Json implementation for set up. bot now can restart and automatically read settings based on user defined Json. added 3 webpages to map logic but still need work, only asurascans supported at the moment." />
     <MESSAGE value="Started rewrite with better code practices.&#10;&#10;Touched main and Discord service. &#10;&#10;WIP on monitor task&#10;&#10;DB service is non-functional (Needs mongodb rewrite)" />
     <MESSAGE value="started work on monitor task, re did website map for asurascans, its also the only supported website for now." />
-    <option name="LAST_COMMIT_MESSAGE" value="started work on monitor task, re did website map for asurascans, its also the only supported website for now." />
+    <MESSAGE value="edited .gitignore" />
+    <option name="LAST_COMMIT_MESSAGE" value="edited .gitignore" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>

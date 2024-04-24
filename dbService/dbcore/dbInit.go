@@ -2,127 +2,150 @@ package dbcore
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"log"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type DbMangaEntry struct {
-	Did          int    `json:"did"`
-	Dmanga       string `json:"dmanga"`
-	DlastChapter int    `json:"dlastChapter"`
-	Dmonitoring  bool   `json:"dmonitoring"`
-	DchapterLink string `json:"dchapterLink"`
-	Didentifier  string `json:"didentifier"`
+	Did          primitive.ObjectID `json:"_id"`
+	Dmanga       string             `json:"manga"`
+	DlastChapter int                `json:"lastchapter"`
+	Dmonitoring  bool               `json:"monitoring"`
+	DchapterLink string             `json:"chapterlink"`
+	Didentifier  string             `json:"identifier"`
 }
 
-/* dbConnection is a function that returns a sql.DB object dynamically, to be used in other functions
- */
-func dbConnection(connString string) sql.DB {
+func SqlInit(key string, database string, collctn string) ([]DbMangaEntry, mongo.Collection) {
 
-	//sql server connection
-	db, err := sql.Open("sqlserver", connString)
+	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	clientOptions := options.Client().ApplyURI(key).SetServerAPIOptions(serverAPI)
+
+	client, err := mongo.Connect(context.TODO(), clientOptions)
 	if err != nil {
-		log.Fatal("Error creating connection pool: ", err.Error())
+		log.Fatalf("Error connecting to MongoDB: %v", err)
 	}
-	return *db
+	collection := client.Database(database).Collection(collctn)
+	var mangaEntry = readingMangaTable(*collection)
+
+	return mangaEntry, *collection
 }
 
-func SqlInit(key string) []DbMangaEntry {
+func readingMangaTable(db mongo.Collection) []DbMangaEntry {
 
-	var db sql.DB = dbConnection(key)
-	defer db.Close()
-	var mangaEntry []DbMangaEntry = readingMangaTable(db)
-
-	return mangaEntry
-}
-
-func readingMangaTable(db sql.DB) []DbMangaEntry {
 	var mangaL []DbMangaEntry
-	query := "SELECT ID, Manga, LastChapter, Monitoring, ChapterLink, Identifier FROM MasterTable"
-	mangRows, err := db.QueryContext(context.Background(), query)
+	cursor, err := db.Find(context.Background(), bson.M{})
 	if err != nil {
 		log.Fatal("Error querying database: ", err.Error())
 	}
-	defer mangRows.Close()
-
-	for mangRows.Next() {
-
-		var id int
-		var manga string
-		var lastChapter int
-		var monitoring bool
-		var chapterLink string
-		var identifier string
-		err := mangRows.Scan(&id, &manga, &lastChapter, &monitoring, &chapterLink, &identifier)
+	defer func(cursor *mongo.Cursor, ctx context.Context) {
+		err := cursor.Close(ctx)
 		if err != nil {
-			log.Printf("Coudln't scan row", err)
+			log.Panicf("failed to close cursor: %v", err)
 		}
+	}(cursor, context.Background())
 
-		var entry = DbMangaEntry{
-			Did:          id,
-			Dmanga:       manga,
-			DlastChapter: lastChapter,
-			Dmonitoring:  monitoring,
-			DchapterLink: chapterLink,
-			Didentifier:  identifier,
+	for cursor.Next(context.Background()) {
+		var entry DbMangaEntry
+		err := cursor.Decode(&entry)
+		if err != nil {
+			log.Printf("Couldn't decode document: %v", err)
 		}
 		mangaL = append(mangaL, entry)
-		log.Printf("id:%d ; manga: %s; lc: %d ; mon: %t ; chapLink: %s ; identifier: %s \n", entry.Did, entry.Dmanga, entry.DlastChapter, entry.Dmonitoring, entry.DchapterLink, entry.Didentifier)
 	}
-	if err := mangRows.Err(); err != nil {
-		log.Fatal("Error iterating mangRows: ", err.Error())
+	if err := cursor.Err(); err != nil {
+		log.Fatal("Error iterating cursor: ", err.Error())
 	}
 	return mangaL
+
 }
 
-func updateOffMangaListTable(db sql.DB, entry DbMangaEntry) {
-
-	var boolean int = 0
-	/*
-		turning off monitoring when manga is completed
-	*/
-	var query = fmt.Sprintf("UPDATE MasterTable SET LastChapter = %d, Monitoring = %v WHERE ID = %d", entry.DlastChapter, boolean, entry.Did)
-	_, err := db.ExecContext(context.Background(), query)
+func updateOffMangaListTable(collection mongo.Collection, entry DbMangaEntry) {
+	filter := bson.M{"did": entry.Did}
+	update := bson.M{"$set": bson.M{"dlastChapter": entry.DlastChapter, "dmonitoring": false}}
+	_, err := collection.UpdateOne(context.Background(), filter, update)
 	if err != nil {
-		log.Fatalf("failed to update manga list row:", err.Error())
-
+		log.Fatalf("Failed to update manga list row: %v", err)
 	}
 }
-func addChapterToTable(db sql.DB, entry DbMangaEntry) {
-	var query = fmt.Sprintf("UPDATE MasterTable SET LastChapter = %v, ChapterLink ='%v' WHERE ID = %v", entry.DlastChapter, entry.DchapterLink, entry.Did)
-	_, err := db.ExecContext(context.Background(), query)
-	if err != nil {
-		log.Fatalf("failed to update latest chapter in Manga Table:", err.Error())
 
+func addChapterToTable(collection mongo.Collection, entry DbMangaEntry) {
+	filter := bson.M{"_id": entry.Did}
+	update := bson.M{"$set": bson.M{"dlastChapter": entry.DlastChapter, "dchapterLink": entry.DchapterLink}}
+	_, err := collection.UpdateOne(context.Background(), filter, update)
+	if err != nil {
+		log.Fatalf("Failed to update latest chapter in Manga Table: %v", err)
 	}
 	log.Printf("Updated latest chapter in Manga Table for %s %d", entry.Dmanga, entry.DlastChapter)
-
 }
 
-func addNewMangaToTable(db sql.DB, entry DbMangaEntry) {
-	var boolean int = 1
-	qGetLastId := fmt.Sprintf("SELECT TOP 1 ID FROM MasterTable ORDER BY ID DESC")
-	lastId, err := db.QueryContext(context.Background(), qGetLastId)
+func addNewMangaToTable(collection mongo.Collection, entry DbMangaEntry) {
+	_, err := collection.InsertOne(context.Background(), entry)
 	if err != nil {
-		log.Fatalf("failed to get last ID from Manga Table:", err.Error())
-	}
-
-	var lastIdInt int
-	for lastId.Next() {
-		err := lastId.Scan(&lastIdInt)
-		if err != nil {
-			log.Fatalf("failed to scan last ID from Manga Table:", err.Error())
-		}
-	}
-	lastId.Close()
-	var newID = lastIdInt + 1
-
-	var query = fmt.Sprintf("INSERT INTO MasterTable (ID, Manga, LastChapter, Monitoring, ChapterLink, Identifier) VALUES (%d,'%s', %d, %d, '%s', '%s')", newID, entry.Dmanga, entry.DlastChapter, boolean, entry.DchapterLink, entry.Didentifier)
-	_, err = db.ExecContext(context.Background(), query)
-	if err != nil {
-		log.Fatalf("failed to insert new manga in DB:", err.Error())
-
+		log.Fatalf("Failed to insert new manga in DB: %v", err)
 	}
 	log.Printf("Added new manga to DB: %s", entry.Dmanga)
 }
+
+func getSliceIndex(s []DbMangaEntry, id primitive.ObjectID) int {
+	for i, v := range s {
+		if v.Did == id {
+			return i
+		}
+	}
+	return -1
+}
+
+//func updateOffMangaListTable(db sql.DB, entry DbMangaEntry) {
+//
+//	var boolean int = 0
+//	/*
+//		turning off monitoring when manga is completed
+//	*/
+//	var query = fmt.Sprintf("UPDATE MasterTable SET LastChapter = %d, Monitoring = %v WHERE ID = %d", entry.DlastChapter, boolean, entry.Did)
+//	_, err := db.ExecContext(context.Background(), query)
+//	if err != nil {
+//		log.Fatalf("failed to update manga list row:", err.Error())
+//
+//	}
+//}
+//func addChapterToTable(db sql.DB, entry DbMangaEntry) {
+//	var query = fmt.Sprintf("UPDATE MasterTable SET LastChapter = %v, ChapterLink ='%v' WHERE ID = %v", entry.DlastChapter, entry.DchapterLink, entry.Did)
+//	_, err := db.ExecContext(context.Background(), query)
+//	if err != nil {
+//		log.Fatalf("failed to update latest chapter in Manga Table:", err.Error())
+//
+//	}
+//	log.Printf("Updated latest chapter in Manga Table for %s %d", entry.Dmanga, entry.DlastChapter)
+//
+//}
+//
+//func addNewMangaToTable(db sql.DB, entry DbMangaEntry) {
+//	var boolean int = 1
+//	qGetLastId := fmt.Sprintf("SELECT TOP 1 ID FROM MasterTable ORDER BY ID DESC")
+//	lastId, err := db.QueryContext(context.Background(), qGetLastId)
+//	if err != nil {
+//		log.Fatalf("failed to get last ID from Manga Table:", err.Error())
+//	}
+//
+//	var lastIdInt int
+//	for lastId.Next() {
+//		err := lastId.Scan(&lastIdInt)
+//		if err != nil {
+//			log.Fatalf("failed to scan last ID from Manga Table:", err.Error())
+//		}
+//	}
+//	lastId.Close()
+//	var newID = lastIdInt + 1
+//
+//	var query = fmt.Sprintf("INSERT INTO MasterTable (ID, Manga, LastChapter, Monitoring, ChapterLink, Identifier) VALUES (%d,'%s', %d, %d, '%s', '%s')", newID, entry.Dmanga, entry.DlastChapter, boolean, entry.DchapterLink, entry.Didentifier)
+//	_, err = db.ExecContext(context.Background(), query)
+//	if err != nil {
+//		log.Fatalf("failed to insert new manga in DB:", err.Error())
+//
+//	}
+//	log.Printf("Added new manga to DB: %s", entry.Dmanga)
+//}

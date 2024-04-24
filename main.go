@@ -24,11 +24,11 @@ var DiscordS struct {
 	RemCmd   bool   `json:"remCmd"`
 }
 var DbKey struct {
-	Server   string `json:"server"`
-	Port     string `json:"port"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Database string `json:"database"`
+	Url        string `json:"url"`
+	User       string `json:"user"`
+	Password   string `json:"password"`
+	Database   string `json:"database"`
+	Collection string `json:"collection"`
 }
 var Monitor struct {
 	Webhook string `json:"webhook"`
@@ -96,16 +96,16 @@ func init() {
 
 		// Ask for Database configuration values
 		fmt.Println("\nEnter Database configuration:")
-		fmt.Print("Server: ")
-		fmt.Scanln(&DbKey.Server)
-		fmt.Print("Port: ")
-		fmt.Scanln(&DbKey.Port)
+		fmt.Print("Url: ")
+		fmt.Scanln(&DbKey.Url)
 		fmt.Print("User: ")
 		fmt.Scanln(&DbKey.User)
 		fmt.Print("Password: ")
 		fmt.Scanln(&DbKey.Password)
 		fmt.Print("Database: ")
 		fmt.Scanln(&DbKey.Database)
+		fmt.Print("Collection: ")
+		fmt.Scanln(&DbKey.Collection)
 
 		// Ask for Monitor configuration value
 		fmt.Println("\nEnter Monitor configuration:")
