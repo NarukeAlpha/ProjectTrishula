@@ -5,19 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="edited .gitignore">
-      <change afterPath="$PROJECT_DIR$/.idea/codeStyles/codeStyleConfig.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/dbService/database.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/database.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Core/funcs.go" beforeDir="false" afterPath="$PROJECT_DIR$/Core/funcs.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/go.mod" beforeDir="false" afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/go.sum" beforeDir="false" afterPath="$PROJECT_DIR$/go.sum" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/discordService/discord.go" beforeDir="false" afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/monitor.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -30,6 +22,13 @@
         <option value="package.json" />
         <option value="Go File" />
       </list>
+    </option>
+  </component>
+  <component name="FormatOnSaveOptions">
+    <option name="myRunOnSave" value="false" />
+    <option name="myAllFileTypesSelected" value="true" />
+    <option name="mySelectedFileTypes">
+      <set />
     </option>
   </component>
   <component name="GOROOT" url="file://$PROJECT_DIR$/../../../../Program Files/Go" />
@@ -59,6 +58,13 @@
   <component name="MarkdownSettingsMigration">
     <option name="stateVersion" value="1" />
   </component>
+  <component name="OptimizeOnSaveOptions">
+    <option name="myRunOnSave" value="false" />
+    <option name="myAllFileTypesSelected" value="true" />
+    <option name="mySelectedFileTypes">
+      <set />
+    </option>
+  </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 3
 }</component>
@@ -72,6 +78,7 @@
   "keyToString": {
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "DefaultGoTemplateProperty": "Go File",
+    "Go Build.go build ProjectTrishula main.go.executor": "Debug",
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.go.formatter.settings.were.checked": "true",
@@ -143,6 +150,10 @@
       <workItem from="1689265444335" duration="595000" />
       <workItem from="1713493470349" duration="20607000" />
       <workItem from="1713820348753" duration="13020000" />
+      <workItem from="1715356496651" duration="249000" />
+      <workItem from="1715357090814" duration="422000" />
+      <workItem from="1715398776880" duration="2805000" />
+      <workItem from="1715403389961" duration="26485000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -237,9 +248,9 @@
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" type="DlvLineBreakpoint">
-          <url>file://$PROJECT_DIR$/monitorService/mcore/websiteMap.go</url>
-          <line>11</line>
-          <option name="timeStamp" value="7" />
+          <url>file://$PROJECT_DIR$/discordService/discord.go</url>
+          <line>227</line>
+          <option name="timeStamp" value="2" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
