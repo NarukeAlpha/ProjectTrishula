@@ -7,8 +7,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 
 	"github.com/bwmarrin/discordgo"
@@ -61,12 +63,6 @@ var (
 					Type:        discordgo.ApplicationCommandOptionInteger,
 					Name:        "latest-chapter",
 					Description: "The latest released chapter",
-					Required:    true,
-				},
-				{
-					Type:        discordgo.ApplicationCommandOptionString,
-					Name:        "release-method",
-					Description: "for normal releases add Release, for advanced release read the doc",
 					Required:    true,
 				},
 			},
@@ -122,7 +118,7 @@ var (
 				DlastChapter: intconv,
 				Dmonitoring:  true,
 				DchapterLink: margs[0].(string),
-				Didentifier:  margs[3].(string),
+				Didentifier:  identifierRegex(margs[3].(string)),
 			}
 			MangaUpdate(entry)
 
@@ -143,6 +139,17 @@ var (
 		},
 	}
 )
+
+func identifierRegex(identifier string) string {
+	u, err := url.Parse(identifier)
+	if err != nil {
+		log.Panicf("Invalid URL: %v", err)
+	}
+	hostParts := strings.Split(u.Hostname(), ".")
+	log.Printf("HostParts: %v was added as an identifier", hostParts)
+
+	return hostParts[len(hostParts)-2]
+}
 
 func Main(discordConnection struct {
 	GuildID  string `json:"guildID"`
