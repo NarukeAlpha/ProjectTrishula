@@ -74,7 +74,6 @@ func init() {
 	if err != nil {
 		log.Panicf("Error decoding data.json: %v", err)
 	}
-	log.Printf("Setup completed: %v", data.DbKey.User)
 	if !data.SetUp.Completed {
 
 		fmt.Print("Enter Discord GuildID: ")
@@ -125,8 +124,15 @@ func init() {
 
 	mw = io.MultiWriter(os.Stdout, file)
 	log.SetOutput(mw)
-	log.Println("This is a log message")
-
+	log.Println(`
+    _____                       ______)                  
+   (, /   )       ,            (, /     ,    /)     /)   
+    _/__ / __ ___   _ _ _/_      /  __   _  (/     // _  
+    /     / ((_) /_(/(__(__   ) /  / (_(/_)_/ )(_((/_(_(_
+ ) /          .-/            (_/                         
+(_/          (_/
+App Init
+`)
 }
 
 func main() {

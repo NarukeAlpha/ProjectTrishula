@@ -22,15 +22,19 @@ type DbMangaEntry struct {
 func SqlInit(key string, database string, collctn string) ([]DbMangaEntry, mongo.Collection) {
 
 	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
+	log.Println("set ServerAPIOptions")
 	clientOptions := options.Client().ApplyURI(key).SetServerAPIOptions(serverAPI)
+	log.Println("set ClientOptions with key: ", key)
 
 	client, err := mongo.Connect(context.TODO(), clientOptions)
 	if err != nil {
 		log.Fatalf("Error connecting to MongoDB: %v", err)
 	}
+	log.Println("Connected to MongoDB")
 	collection := client.Database(database).Collection(collctn)
+	log.Println("Pulled collection from MongoDB")
 	var mangaEntry = readingMangaTable(*collection)
-
+	log.Println("sqlInit complete")
 	return mangaEntry, *collection
 }
 

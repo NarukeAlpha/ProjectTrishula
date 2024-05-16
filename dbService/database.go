@@ -17,6 +17,7 @@ func Main(dbkey struct {
 	Collection string `json:"collection"`
 }, wg *sync.WaitGroup) {
 	var key = "mongodb+srv://" + dbkey.User + ":" + dbkey.Password + "@" + dbkey.Url
+	log.Printf("Connecting to %v", key)
 
 	var MangaList, MongoDBCollection = dbcore.SqlInit(key, dbkey.Database, dbkey.Collection)
 

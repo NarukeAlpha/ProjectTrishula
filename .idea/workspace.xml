@@ -4,11 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="edited .gitignore">
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Core/funcs.go" beforeDir="false" afterPath="$PROJECT_DIR$/Core/funcs.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/database.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/database.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/discordService/discord.go" beforeDir="false" afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -153,7 +152,7 @@
       <workItem from="1715356496651" duration="249000" />
       <workItem from="1715357090814" duration="422000" />
       <workItem from="1715398776880" duration="2805000" />
-      <workItem from="1715403389961" duration="26485000" />
+      <workItem from="1715403389961" duration="33441000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -214,7 +213,15 @@
       <option name="project" value="LOCAL" />
       <updated>1713825118986</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements">
+      <option name="closed" value="true" />
+      <created>1715752954162</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1715752954162</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -239,7 +246,8 @@
     <MESSAGE value="Started rewrite with better code practices.&#10;&#10;Touched main and Discord service. &#10;&#10;WIP on monitor task&#10;&#10;DB service is non-functional (Needs mongodb rewrite)" />
     <MESSAGE value="started work on monitor task, re did website map for asurascans, its also the only supported website for now." />
     <MESSAGE value="edited .gitignore" />
-    <option name="LAST_COMMIT_MESSAGE" value="edited .gitignore" />
+    <MESSAGE value="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements" />
+    <option name="LAST_COMMIT_MESSAGE" value="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
@@ -251,6 +259,11 @@
           <url>file://$PROJECT_DIR$/discordService/discord.go</url>
           <line>227</line>
           <option name="timeStamp" value="2" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="DlvLineBreakpoint">
+          <url>file://$PROJECT_DIR$/main.go</url>
+          <line>148</line>
+          <option name="timeStamp" value="8" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
