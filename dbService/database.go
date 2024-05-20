@@ -19,9 +19,9 @@ func Main(dbkey struct {
 	var key = "mongodb+srv://" + dbkey.User + ":" + dbkey.Password + "@" + dbkey.Url
 	log.Printf("Connecting to %v", key)
 
-	var MangaList, MongoDBCollection = dbcore.SqlInit(key, dbkey.Database, dbkey.Collection)
+	var MangaList, MongoDBCollection, IndexMap = dbcore.SqlInit(key, dbkey.Database, dbkey.Collection)
 
-	r := dbcore.InitHttpServerMux(MangaList, MongoDBCollection)
+	r := dbcore.InitHttpServerMux(MangaList, MongoDBCollection, IndexMap)
 	wg.Done()
 	err := http.ListenAndServe("localhost:8080", &r)
 	if err != nil {

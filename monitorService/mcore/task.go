@@ -1,12 +1,12 @@
 package mcore
 
 import (
+	"errors"
 	"log"
 	"math/rand"
 	"sync"
 	"time"
 
-	"ProjectTrishula/Core"
 	"github.com/playwright-community/playwright-go"
 )
 
@@ -14,11 +14,19 @@ func TaskInit(mL []DbMangaEntry, pL []ProxyStruct, wbKey string) {
 	//old implementation was gigascuffed, needs a full rewrite to take advantage of concurrency
 	//removed go routines for now, will be redone as application grows bigger but initial structure was made
 	//keeping in mind later implementation.
+	errch := make(chan error)
+	var err error
+
 	for {
 		for _, proxy := range pL {
-			go Task(proxy, mL, wbKey)
-
-			time.Sleep(1 * time.Minute)
+			go Task(proxy, mL, wbKey, errch)
+			err = <-errch
+			if err != nil {
+				//if the task panics at any point it will be caught here and the task will be restarted
+				continue
+			} else {
+				time.Sleep(2 * time.Minute)
+			}
 		}
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -47,9 +55,9 @@ func PlaywrightInit(proxy ProxyStruct, pw *playwright.Playwright) (playwright.Br
 		DeviceScaleFactor: playwright.Float(device.DeviceScaleFactor),
 		IsMobile:          playwright.Bool(device.IsMobile),
 		HasTouch:          playwright.Bool(device.HasTouch),
-		//	Headless:          playwright.Bool(false),
-		ColorScheme: playwright.ColorSchemeDark,
-		Proxy:       &pwProxyStrct,
+		Headless:          playwright.Bool(false),
+		ColorScheme:       playwright.ColorSchemeDark,
+		Proxy:             &pwProxyStrct,
 		IgnoreDefaultArgs: []string{
 			"--enable-automation",
 		},
@@ -95,15 +103,30 @@ func PlaywrightInit(proxy ProxyStruct, pw *playwright.Playwright) (playwright.Br
 	return browser, nil
 }
 
-func Task(proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
+func Task(proxy ProxyStruct, manga []DbMangaEntry, wbKey string, errch chan error) {
 	defer func() {
 		if err := recover(); err != nil {
-			log.Printf("Recovered from panic: %v", err)
+			log.Printf("Recovered from panic: %v assuming bad proxy", err)
+			time.Sleep(15 * time.Second)
+			err := errors.New("recovered from panic")
+			errch <- err
 		}
 	}()
 	log.Println("Initializing playwright instance")
 	PlaywrightInstance, err := playwright.Run()
+	defer func(PlaywrightInstance *playwright.Playwright) {
+		err := PlaywrightInstance.Stop()
+		if err != nil {
+			log.Panicf("could not stop playwright: %v", err)
+		}
+	}(PlaywrightInstance)
 	browser, err := PlaywrightInit(proxy, PlaywrightInstance)
+	defer func(browser playwright.BrowserContext, options ...playwright.BrowserContextCloseOptions) {
+		err := browser.Close()
+		if err != nil {
+			log.Panicf("could not close browser: %v", err)
+		}
+	}(browser)
 	if err != nil {
 		log.Panicf("could not initialize playwright: %v", err)
 	}
@@ -111,12 +134,18 @@ func Task(proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
 	if err != nil {
 		log.Fatalf("could not create page: %v", err)
 	}
+	defer func(page playwright.Page, options ...playwright.PageCloseOptions) {
+		err := page.Close()
+		if err != nil {
+
+		}
+	}(page)
 	for i := 0; i < len(manga); i++ {
 		//cLink := ChapterLinkIncrementer(manga[i].DchapterLink, manga[i].DlastChapter)
 		if theMap[manga[i].Didentifier](manga[i], browser, page) {
-			WebhookSend(manga[i], wbKey)
 			manga[i].DlastChapter = manga[i].DlastChapter + 1
 			manga[i].DchapterLink = page.URL()
+			WebhookSend(manga[i], wbKey)
 			MangaUpdate(manga[i])
 			log.Printf("PAGE IS LIVE for %v, updated chapter to %v", manga[i].Dmanga, manga[i].DlastChapter)
 		} else {
@@ -125,8 +154,6 @@ func Task(proxy ProxyStruct, manga []DbMangaEntry, wbKey string) {
 		}
 	}
 	log.Printf("finished task for proxy :%v", proxy.ip)
-	Core.AssertErrorToNil("Failed to close Page", page.Close())
-	Core.AssertErrorToNil("Failed to close Browser", browser.Close())
-	Core.AssertErrorToNil("Failed to close Playwright", PlaywrightInstance.Stop())
+	errch <- nil
 
 }

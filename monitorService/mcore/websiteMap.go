@@ -14,6 +14,17 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 			log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", manga.DchapterLink, err)
 
 		}
+
+		//removing add iframes
+		err := page.FrameLocator(`iframe[name="aswift_3]`).FrameLocator(`iframe[name="ad_iframe"]`).GetByLabel("Close ad").Click()
+		if err != nil {
+			log.Println("No ad iframe found")
+		}
+		err = page.Locator("svg").Click()
+		if err != nil {
+			log.Println("No svg found")
+		}
+
 		// Get the element with the class "ch-next-btn disabled"
 		element, err := page.QuerySelector(".ch-next-btn.disabled")
 		if err != nil {
@@ -26,7 +37,9 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 			return false
 		} else {
 			// Get the button with the class "ch-next-btn"
-			button, err := page.QuerySelector(".ch-next-btn")
+			button := page.Locator("#manga-reading-nav-head").GetByRole("link", playwright.LocatorGetByRoleOptions{
+				Name: "\uF287 Next",
+			})
 			if err != nil {
 				log.Panicf("Failed to select button: %v", err)
 			}
