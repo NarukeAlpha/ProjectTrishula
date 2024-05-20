@@ -1,12 +1,43 @@
 package mcore
 
 import (
-	"fmt"
-	"github.com/joho/godotenv"
+	"encoding/json"
 	"log"
 	"os"
 	"testing"
 )
+
+type SetUp struct {
+	Completed bool `json:"completed"`
+}
+
+type Discord struct {
+	GuildID  string `json:"guildID"`
+	BotToken string `json:"botToken"`
+	RemCmd   bool   `json:"remcmd"`
+}
+
+type DbKey struct {
+	Url        string `json:"url"`
+	User       string `json:"user"`
+	Password   string `json:"password"`
+	Database   string `json:"database"`
+	Collection string `json:"collection"`
+}
+
+type Monitor struct {
+	Webhook string `json:"webhook"`
+}
+
+type Data struct {
+	SetUp   SetUp   `json:"setUp"`
+	Discord Discord `json:"discord"`
+	DbKey   DbKey   `json:"dbKey"`
+	Monitor Monitor `json:"monitor"`
+}
+
+var data Data
+var datajsonenv = "data.dev.json"
 
 func TestWebhookSend(t *testing.T) {
 	var manga = DbMangaEntry{
@@ -17,14 +48,24 @@ func TestWebhookSend(t *testing.T) {
 		DchapterLink: "https://www.google.com",
 		Didentifier:  "test",
 	}
-	err := godotenv.Load("./.env")
-	if err != nil {
-		log.Fatal("failed to load .env file")
+	_, err := os.Stat(datajsonenv)
+	if os.IsNotExist(err) {
+		_, err = os.Create(datajsonenv)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
-	wbKey := fmt.Sprintf(os.Getenv("webKey"))
+
+	file, err := os.Open(datajsonenv)
+	if err != nil {
+		log.Panicf("Error opening data.json: %v", err)
+
+	}
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&data)
 
 	t.Run(t.Name(), func(t *testing.T) {
-		WebhookSend(manga, wbKey)
+		WebhookSend(manga, data.Monitor.Webhook)
 	})
 
 	//type args struct {

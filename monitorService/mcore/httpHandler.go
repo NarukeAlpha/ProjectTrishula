@@ -9,7 +9,7 @@ import (
 )
 
 func MangaSync(c chan []DbMangaEntry, wg *sync.WaitGroup) {
-	r, err := http.Get("http://localhost:8080/MangaList")
+	r, err := http.Get("http://localhost:8080/Manga/get-list")
 	if err != nil {
 		panic(err)
 	}
@@ -19,7 +19,6 @@ func MangaSync(c chan []DbMangaEntry, wg *sync.WaitGroup) {
 		panic(err)
 	}
 	c <- MangaList
-	wg.Done()
 	err = r.Body.Close()
 	if err != nil {
 		log.Panic(err)
@@ -32,7 +31,7 @@ func MangaUpdate(manga DbMangaEntry) {
 	if err != nil {
 		panic(err)
 	}
-	r, err2 := http.NewRequest(http.MethodPut, "http://localhost:8080/MangaList", bytes.NewBuffer(mangaJson))
+	r, err2 := http.NewRequest(http.MethodPost, "http://localhost:8080/Manga/update-chapter", bytes.NewBuffer(mangaJson))
 	if err2 != nil {
 		panic(err2)
 	}

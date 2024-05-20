@@ -17,12 +17,12 @@ import (
 )
 
 type MangaEntry struct {
-	Did          int    `json:"did"`
-	Dmanga       string `json:"dmanga"`
-	DlastChapter int    `json:"dlastChapter"`
-	Dmonitoring  bool   `json:"dmonitoring"`
-	DchapterLink string `json:"dchapterLink"`
-	Didentifier  string `json:"didentifier"`
+	Did          int    `bson:"did"`
+	Dmanga       string `bson:"dmanga"`
+	DlastChapter int    `bson:"dlastChapter"`
+	Dmonitoring  bool   `bson:"dmonitoring"`
+	DchapterLink string `bson:"dchapterLink"`
+	Didentifier  string `bson:"didentifier"`
 }
 
 // Bot parameters

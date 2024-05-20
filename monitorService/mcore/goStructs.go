@@ -1,6 +1,10 @@
 package mcore
 
-import "log"
+import (
+	"log"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
 
 var IphoneUserAgentList = []string{
 	"iPhone 6", "iPhone 6 plus",
@@ -16,20 +20,14 @@ var IphoneUserAgentList = []string{
 }
 
 type DbMangaEntry struct {
-	Did          int    `json:"did"`
-	Dmanga       string `json:"dmanga"`
-	DlastChapter int    `json:"dlastChapter"`
-	Dmonitoring  bool   `json:"dmonitoring"`
-	DchapterLink string `json:"dchapterLink"`
-	Didentifier  string `json:"didentifier"`
+	Did          primitive.ObjectID `json:"_id"`
+	Dmanga       string             `json:"manga"`
+	DlastChapter int                `json:"lastchapter"`
+	Dmonitoring  bool               `json:"monitoring"`
+	DchapterLink string             `json:"chapterlink"`
+	Didentifier  string             `json:"identifier"`
 }
 
-type DbChapterEntry struct {
-	Did          int    `json:"did"`
-	Dchapter     int    `json:"dchapter"`
-	DChapterLink string `json:"dChapterlink"`
-	Dreleased    bool   `json:"dreleased"`
-}
 type ProxyStruct struct {
 	ip  string
 	usr string

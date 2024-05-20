@@ -4,11 +4,20 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements">
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="database connects now succesfully, need to verify collection is coming back and being sorted as intended">
+      <change afterPath="$PROJECT_DIR$/.idea/aws.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/ServerTest.http" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dbService/database.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/database.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/discordService/discord.go" beforeDir="false" afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/httpHandler.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/httpHandler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/monitor.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -20,6 +29,7 @@
       <list>
         <option value="package.json" />
         <option value="Go File" />
+        <option value="HTTP Request" />
       </list>
     </option>
   </component>
@@ -75,9 +85,15 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "ASKED_ADD_EXTERNAL_FILES": "true",
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "DefaultGoTemplateProperty": "Go File",
     "Go Build.go build ProjectTrishula main.go.executor": "Debug",
+    "Go Build.webhook_test.executor": "Debug",
+    "Go Test.webhookManager_test.go.executor": "Debug",
+    "HTTP Request.All in ServerTest.executor": "Run",
+    "HTTP Request.ServerTest | #1.executor": "Run",
+    "HTTP Request.ServerTest | #2.executor": "Run",
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.go.formatter.settings.were.checked": "true",
@@ -113,7 +129,7 @@
       <recent name="C:\Users\bagaa\IdeaProjects\ProjectTrishula" />
     </key>
   </component>
-  <component name="RunManager">
+  <component name="RunManager" selected="Go Build.go build ProjectTrishula main.go">
     <configuration name="go build ProjectTrishula main.go" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
       <module name="ProjectTrishula" />
       <working_directory value="$PROJECT_DIR$" />
@@ -123,6 +139,31 @@
       <filePath value="$PROJECT_DIR$/../ProjectTrishula|$PROJECT_DIR$/main.go|$PROJECT_DIR$/main.go" />
       <method v="2" />
     </configuration>
+    <configuration name="webhook_test" type="GoApplicationRunConfiguration" factoryName="Go Application">
+      <module name="ProjectTrishula" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="FILE" />
+      <package value="ProjectTrishula" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$/monitorService/mcore/webhookManager.go" />
+      <method v="2" />
+    </configuration>
+    <configuration name="All in ServerTest" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" path="$PROJECT_DIR$/ServerTest.http">
+      <method v="2" />
+    </configuration>
+    <configuration name="ServerTest | #1" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$PROJECT_DIR$/ServerTest.http" requestIdentifier="#1" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <configuration name="ServerTest | #2" type="HttpClient.HttpRequestRunConfigurationType" factoryName="HTTP Request" temporary="true" nameIsGenerated="true" path="$PROJECT_DIR$/ServerTest.http" index="2" requestIdentifier="#2" runType="Run single request">
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="HTTP Request.ServerTest | #2" />
+        <item itemvalue="HTTP Request.ServerTest | #1" />
+        <item itemvalue="HTTP Request.All in ServerTest" />
+      </list>
+    </recent_temporary>
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
@@ -152,7 +193,11 @@
       <workItem from="1715356496651" duration="249000" />
       <workItem from="1715357090814" duration="422000" />
       <workItem from="1715398776880" duration="2805000" />
-      <workItem from="1715403389961" duration="33441000" />
+      <workItem from="1715403389961" duration="39727000" />
+      <workItem from="1716085063118" duration="30000" />
+      <workItem from="1716085109530" duration="1375000" />
+      <workItem from="1716087476022" duration="19056000" />
+      <workItem from="1716141064856" duration="17257000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -221,7 +266,15 @@
       <option name="project" value="LOCAL" />
       <updated>1715752954162</updated>
     </task>
-    <option name="localTasksCounter" value="10" />
+    <task id="LOCAL-00010" summary="database connects now succesfully, need to verify collection is coming back and being sorted as intended">
+      <option name="closed" value="true" />
+      <created>1715836368667</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1715836368667</updated>
+    </task>
+    <option name="localTasksCounter" value="11" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -247,7 +300,8 @@
     <MESSAGE value="started work on monitor task, re did website map for asurascans, its also the only supported website for now." />
     <MESSAGE value="edited .gitignore" />
     <MESSAGE value="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements" />
-    <option name="LAST_COMMIT_MESSAGE" value="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements" />
+    <MESSAGE value="database connects now succesfully, need to verify collection is coming back and being sorted as intended" />
+    <option name="LAST_COMMIT_MESSAGE" value="database connects now succesfully, need to verify collection is coming back and being sorted as intended" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
@@ -256,14 +310,9 @@
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" type="DlvLineBreakpoint">
-          <url>file://$PROJECT_DIR$/discordService/discord.go</url>
-          <line>227</line>
-          <option name="timeStamp" value="2" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" type="DlvLineBreakpoint">
-          <url>file://$PROJECT_DIR$/main.go</url>
-          <line>148</line>
-          <option name="timeStamp" value="8" />
+          <url>file://$PROJECT_DIR$/monitorService/mcore/task.go</url>
+          <line>155</line>
+          <option name="timeStamp" value="19" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>

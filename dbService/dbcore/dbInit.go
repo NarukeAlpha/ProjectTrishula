@@ -10,6 +10,15 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+type DbMangaEntryBson struct {
+	Did          primitive.ObjectID `bson:"_id"`
+	Dmanga       string             `bson:"manga"`
+	DlastChapter int                `bson:"lastchapter"`
+	Dmonitoring  bool               `bson:"monitoring"`
+	DchapterLink string             `bson:"chapterlink"`
+	Didentifier  string             `bson:"identifier"`
+}
+
 type DbMangaEntry struct {
 	Did          primitive.ObjectID `json:"_id"`
 	Dmanga       string             `json:"manga"`
@@ -19,7 +28,7 @@ type DbMangaEntry struct {
 	Didentifier  string             `json:"identifier"`
 }
 
-func SqlInit(key string, database string, collctn string) ([]DbMangaEntry, mongo.Collection) {
+func SqlInit(key string, database string, collctn string) ([]DbMangaEntry, mongo.Collection, map[primitive.ObjectID]int) {
 
 	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
 	log.Println("set ServerAPIOptions")
@@ -33,12 +42,12 @@ func SqlInit(key string, database string, collctn string) ([]DbMangaEntry, mongo
 	log.Println("Connected to MongoDB")
 	collection := client.Database(database).Collection(collctn)
 	log.Println("Pulled collection from MongoDB")
-	var mangaEntry = readingMangaTable(*collection)
+	var mangaEntry, indexMap = readingMangaTable(*collection)
 	log.Println("sqlInit complete")
-	return mangaEntry, *collection
+	return mangaEntry, *collection, indexMap
 }
 
-func readingMangaTable(db mongo.Collection) []DbMangaEntry {
+func readingMangaTable(db mongo.Collection) ([]DbMangaEntry, map[primitive.ObjectID]int) {
 
 	var mangaL []DbMangaEntry
 	cursor, err := db.Find(context.Background(), bson.M{})
@@ -52,104 +61,71 @@ func readingMangaTable(db mongo.Collection) []DbMangaEntry {
 		}
 	}(cursor, context.Background())
 
+	indexMap := make(map[primitive.ObjectID]int)
 	for cursor.Next(context.Background()) {
-		var entry DbMangaEntry
-		err := cursor.Decode(&entry)
+		var entryBson DbMangaEntryBson
+		err := cursor.Decode(&entryBson)
 		if err != nil {
 			log.Printf("Couldn't decode document: %v", err)
 		}
-		mangaL = append(mangaL, entry)
+		var entryJson DbMangaEntry = DbMangaEntry{entryBson.Did, entryBson.Dmanga, entryBson.DlastChapter, entryBson.Dmonitoring,
+			entryBson.DchapterLink, entryBson.Didentifier}
+
+		mangaL = append(mangaL, entryJson)
+		indexMap[entryJson.Did] = len(mangaL) - 1
 	}
 	if err := cursor.Err(); err != nil {
 		log.Fatal("Error iterating cursor: ", err.Error())
 	}
-	return mangaL
+
+	return mangaL, indexMap
 
 }
 
-func updateOffMangaListTable(collection mongo.Collection, entry DbMangaEntry) {
-	filter := bson.M{"did": entry.Did}
-	update := bson.M{"$set": bson.M{"dlastChapter": entry.DlastChapter, "dmonitoring": false}}
-	_, err := collection.UpdateOne(context.Background(), filter, update)
-	if err != nil {
-		log.Fatalf("Failed to update manga list row: %v", err)
-	}
-}
+//func updateOffMangaListTable(collection mongo.Collection, entryJson DbMangaEntry) {
 
-func addChapterToTable(collection mongo.Collection, entry DbMangaEntry) {
-	filter := bson.M{"_id": entry.Did}
-	update := bson.M{"$set": bson.M{"dlastChapter": entry.DlastChapter, "dchapterLink": entry.DchapterLink}}
+/*
+	this funciton needs implementing, its to turn off monitoring for a manga in the db
+*/
+
+//filter := bson.M{"did": entry.Did}
+//update := bson.M{"$set": bson.M{"dlastChapter": entry.DlastChapter, "dmonitoring": false}}
+//_, err := collection.UpdateOne(context.Background(), filter, update)
+//if err != nil {
+//	log.Fatalf("Failed to update manga list row: %v", err)
+//}
+//}
+
+func addChapterToTable(collection mongo.Collection, entryJson DbMangaEntry) {
+
+	var entryBson DbMangaEntryBson = DbMangaEntryBson{entryJson.Did, entryJson.Dmanga, entryJson.DlastChapter,
+		entryJson.Dmonitoring, entryJson.DchapterLink, entryJson.Didentifier}
+
+	filter := bson.M{"_id": entryBson.Did}
+	update := bson.M{"$set": bson.M{"lastChapter": entryBson.DlastChapter, "chapterLink": entryBson.DchapterLink}}
 	_, err := collection.UpdateOne(context.Background(), filter, update)
 	if err != nil {
 		log.Fatalf("Failed to update latest chapter in Manga Table: %v", err)
 	}
-	log.Printf("Updated latest chapter in Manga Table for %s %d", entry.Dmanga, entry.DlastChapter)
+	log.Printf("Updated latest chapter in Manga Table for %s %d", entryBson.Dmanga, entryBson.DlastChapter)
 }
 
-func addNewMangaToTable(collection mongo.Collection, entry DbMangaEntry) {
-	_, err := collection.InsertOne(context.Background(), entry)
+func addNewMangaToTable(collection mongo.Collection, entryJson DbMangaEntry) {
+	var entryBson DbMangaEntryBson = DbMangaEntryBson{entryJson.Did, entryJson.Dmanga, entryJson.DlastChapter,
+		entryJson.Dmonitoring, entryJson.DchapterLink, entryJson.Didentifier}
+
+	_, err := collection.InsertOne(context.Background(), entryBson)
 	if err != nil {
 		log.Fatalf("Failed to insert new manga in DB: %v", err)
 	}
-	log.Printf("Added new manga to DB: %s", entry.Dmanga)
+	log.Printf("Added new manga to DB: %s", entryBson.Dmanga)
 }
 
-func getSliceIndex(s []DbMangaEntry, id primitive.ObjectID) int {
-	for i, v := range s {
-		if v.Did == id {
-			return i
-		}
-	}
-	return -1
-}
-
-//func updateOffMangaListTable(db sql.DB, entry DbMangaEntry) {
-//
-//	var boolean int = 0
-//	/*
-//		turning off monitoring when manga is completed
-//	*/
-//	var query = fmt.Sprintf("UPDATE MasterTable SET LastChapter = %d, Monitoring = %v WHERE ID = %d", entry.DlastChapter, boolean, entry.Did)
-//	_, err := db.ExecContext(context.Background(), query)
-//	if err != nil {
-//		log.Fatalf("failed to update manga list row:", err.Error())
-//
-//	}
-//}
-//func addChapterToTable(db sql.DB, entry DbMangaEntry) {
-//	var query = fmt.Sprintf("UPDATE MasterTable SET LastChapter = %v, ChapterLink ='%v' WHERE ID = %v", entry.DlastChapter, entry.DchapterLink, entry.Did)
-//	_, err := db.ExecContext(context.Background(), query)
-//	if err != nil {
-//		log.Fatalf("failed to update latest chapter in Manga Table:", err.Error())
-//
-//	}
-//	log.Printf("Updated latest chapter in Manga Table for %s %d", entry.Dmanga, entry.DlastChapter)
-//
-//}
-//
-//func addNewMangaToTable(db sql.DB, entry DbMangaEntry) {
-//	var boolean int = 1
-//	qGetLastId := fmt.Sprintf("SELECT TOP 1 ID FROM MasterTable ORDER BY ID DESC")
-//	lastId, err := db.QueryContext(context.Background(), qGetLastId)
-//	if err != nil {
-//		log.Fatalf("failed to get last ID from Manga Table:", err.Error())
-//	}
-//
-//	var lastIdInt int
-//	for lastId.Next() {
-//		err := lastId.Scan(&lastIdInt)
-//		if err != nil {
-//			log.Fatalf("failed to scan last ID from Manga Table:", err.Error())
+//func getSliceIndex(s []DbMangaEntry, id primitive.ObjectID) int {
+//	for i, v := range s {
+//		if v.Did == id {
+//			return i
 //		}
 //	}
-//	lastId.Close()
-//	var newID = lastIdInt + 1
-//
-//	var query = fmt.Sprintf("INSERT INTO MasterTable (ID, Manga, LastChapter, Monitoring, ChapterLink, Identifier) VALUES (%d,'%s', %d, %d, '%s', '%s')", newID, entry.Dmanga, entry.DlastChapter, boolean, entry.DchapterLink, entry.Didentifier)
-//	_, err = db.ExecContext(context.Background(), query)
-//	if err != nil {
-//		log.Fatalf("failed to insert new manga in DB:", err.Error())
-//
-//	}
-//	log.Printf("Added new manga to DB: %s", entry.Dmanga)
+//	return -1
 //}

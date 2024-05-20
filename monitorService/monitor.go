@@ -18,11 +18,7 @@ func Main(wbKey string) {
 	mChannel := make(chan []mcore.DbMangaEntry)
 	pChannel := make(chan []mcore.ProxyStruct)
 	//opening log file and creating a multiwriter to write to both stdout and file
-	file, err := os.Open("QuerySelector.log")
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = file.Close()
+
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -33,7 +29,7 @@ func Main(wbKey string) {
 	go mcore.MangaSync(mChannel, &wg2)
 	go mcore.ProxyLoad(pChannel, &wg2)
 
-	wg2.Wait()
+	//wg2.Wait()
 
 	//receiving from each channel and closing them
 	mL := <-mChannel
