@@ -22,9 +22,9 @@ type DbMangaEntryBson struct {
 type DbMangaEntry struct {
 	Did          primitive.ObjectID `json:"_id"`
 	Dmanga       string             `json:"manga"`
-	DlastChapter int                `json:"lastchapter"`
+	DlastChapter int                `json:"lastChapter"`
 	Dmonitoring  bool               `json:"monitoring"`
-	DchapterLink string             `json:"chapterlink"`
+	DchapterLink string             `json:"chapterLink"`
 	Didentifier  string             `json:"identifier"`
 }
 
@@ -118,7 +118,7 @@ func addNewMangaToTable(collection mongo.Collection, entryJson DbMangaEntry) {
 	if err != nil {
 		log.Fatalf("Failed to insert new manga in DB: %v", err)
 	}
-	log.Printf("Added new manga to DB: %s", entryBson.Dmanga)
+	log.Printf("Added new manga to DB: %s", entryJson.Dmanga)
 }
 
 //func getSliceIndex(s []DbMangaEntry, id primitive.ObjectID) int {

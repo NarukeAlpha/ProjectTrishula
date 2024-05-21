@@ -1,7 +1,9 @@
 package mcore
 
 import (
+	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/playwright-community/playwright-go"
@@ -10,6 +12,11 @@ import (
 var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page) bool{
 
 	"asurascans": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page) bool {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Recovered from panic: %v", err)
+			}
+		}()
 		if _, err := page.Goto(manga.DchapterLink); err != nil {
 			log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", manga.DchapterLink, err)
 
@@ -30,7 +37,6 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 		if err != nil {
 			log.Panicf("Failed to select element: %v", err)
 		}
-
 		// Check if the element is present
 		if element != nil {
 			log.Printf("Next chapter is not available")
@@ -40,11 +46,13 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 			button := page.Locator("#manga-reading-nav-head").GetByRole("link", playwright.LocatorGetByRoleOptions{
 				Name: "\uF287 Next",
 			})
+			buttoncount, err := button.Count()
 			if err != nil {
-				log.Panicf("Failed to select button: %v", err)
+				log.Panicf("Failed to count buttons: %v", err)
 			}
+
 			// Click the button
-			if button != nil {
+			if buttoncount > 0 {
 				err = button.Click()
 				if err != nil {
 					log.Panicf("Failed to click button: %v", err)
@@ -65,6 +73,66 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 				log.Println("Button is not present")
 			}
 		}
+		return false
+
+	},
+	"hivescans": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page) bool {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Recovered from panic: %v", err)
+			}
+		}()
+		if _, err := page.Goto(manga.DchapterLink); err != nil {
+			if errors.Is(err, playwright.ErrTimeout) {
+				pageLoaded, err2 := page.InnerText("Body")
+				if err2 != nil {
+					log.Panicf("Failed to get inner text : %v", err2)
+				}
+				if !strings.Contains(pageLoaded, "Leave a Reply") {
+					log.Println("Page did not load within the 30 seconds time out period, returning false")
+					return false
+				}
+			} else {
+				log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", manga.DchapterLink, err)
+			}
+		}
+
+		// Get the element with the class "ch-next-btn disabled"
+		element, err := page.QuerySelector(".ch-next-btn.disabled")
+		if err != nil {
+			log.Panicf("Failed to select element: %v", err)
+		}
+		// Check if the element is present
+		if element != nil {
+			log.Printf("Next chapter is not available")
+			return false
+		}
+		// Check if the element is present
+		button := page.GetByRole("link", playwright.PageGetByRoleOptions{Name: "Next \uF105"})
+		buttoncount, err := button.Count()
+		if err != nil {
+			log.Panicf("Failed to count buttons: %v", err)
+		}
+		if buttoncount > 0 {
+			err = button.First().Click()
+			if err != nil {
+				log.Panicf("Failed to click button: %v", err)
+			}
+			time.Sleep(1500)
+			if page.URL() != manga.DchapterLink {
+				title, err := page.Title()
+				if err != nil {
+					log.Panicf("Couldn't get page title: %v \n err: %v", manga.DchapterLink, err)
+
+				}
+				if !titleHas404(title) {
+					return true
+				}
+
+			}
+
+		}
+
 		return false
 
 	},
