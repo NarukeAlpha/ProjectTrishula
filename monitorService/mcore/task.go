@@ -25,13 +25,13 @@ func TaskInit(mL []DbMangaEntry, pL []ProxyStruct, wbKey string) {
 				//if the task panics at any point it will be caught here and the task will be restarted
 				continue
 			} else {
-				time.Sleep(2 * time.Minute)
+				time.Sleep(20 * time.Second)
 			}
 		}
 		var wg sync.WaitGroup
 		wg.Add(1)
 		mChannel := make(chan []DbMangaEntry)
-		MangaSync(mChannel, &wg)
+		go MangaSync(mChannel, &wg)
 		mL = <-mChannel
 		close(mChannel)
 		log.Printf("Manga list Synced")
@@ -55,9 +55,9 @@ func PlaywrightInit(proxy ProxyStruct, pw *playwright.Playwright) (playwright.Br
 		DeviceScaleFactor: playwright.Float(device.DeviceScaleFactor),
 		IsMobile:          playwright.Bool(device.IsMobile),
 		HasTouch:          playwright.Bool(device.HasTouch),
-		Headless:          playwright.Bool(false),
-		ColorScheme:       playwright.ColorSchemeDark,
-		Proxy:             &pwProxyStrct,
+		//Headless:          playwright.Bool(false),
+		ColorScheme: playwright.ColorSchemeDark,
+		Proxy:       &pwProxyStrct,
 		IgnoreDefaultArgs: []string{
 			"--enable-automation",
 		},

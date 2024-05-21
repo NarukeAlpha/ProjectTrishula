@@ -14,15 +14,16 @@ import (
 	"sync"
 
 	"github.com/bwmarrin/discordgo"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type MangaEntry struct {
-	Did          int    `bson:"did"`
-	Dmanga       string `bson:"dmanga"`
-	DlastChapter int    `bson:"dlastChapter"`
-	Dmonitoring  bool   `bson:"dmonitoring"`
-	DchapterLink string `bson:"dchapterLink"`
-	Didentifier  string `bson:"didentifier"`
+	Did          primitive.ObjectID `json:"_id"`
+	Dmanga       string             `json:"manga"`
+	DlastChapter int                `json:"lastChapter"`
+	Dmonitoring  bool               `json:"monitoring"`
+	DchapterLink string             `json:"chapterLink"`
+	Didentifier  string             `json:"identifier"`
 }
 
 // Bot parameters
@@ -112,13 +113,14 @@ var (
 			//}
 			//guild, err := s.Guild(i.GuildID)
 			intconv := int(margs[1].(int64))
+			identifier := identifierRegex(margs[0].(string))
 			var entry MangaEntry = MangaEntry{
-				Did:          0,
+				Did:          primitive.NewObjectID(),
 				Dmanga:       margs[2].(string),
 				DlastChapter: intconv,
 				Dmonitoring:  true,
 				DchapterLink: margs[0].(string),
-				Didentifier:  identifierRegex(margs[3].(string)),
+				Didentifier:  identifier,
 			}
 			MangaUpdate(entry)
 
@@ -161,6 +163,8 @@ func Main(discordConnection struct {
 	BotToken = discordConnection.BotToken
 	RemoveCommands = discordConnection.RemCmd
 
+	log.Println("Starting bot...")
+
 	var err error
 	s, err = discordgo.New("Bot " + BotToken)
 	if err != nil {
@@ -189,6 +193,7 @@ func Main(discordConnection struct {
 		}
 		registeredCommands[i] = cmd
 	}
+	log.Println("Commands added, App is live")
 
 	defer func(s *discordgo.Session) {
 		err := s.Close()
@@ -226,12 +231,12 @@ func Main(discordConnection struct {
 }
 
 func MangaUpdate(manga MangaEntry) {
-	log.Println("Manga being sent to SQL server : %v", manga)
+	log.Println("Manga being sent to DB server : %v", manga)
 	mangaJson, err := json.Marshal(manga)
 	if err != nil {
 		log.Println(err)
 	}
-	r, err := http.NewRequest("POST", "http://localhost:8080/MangaList", bytes.NewBuffer(mangaJson))
+	r, err := http.NewRequest("POST", "http://localhost:8080/Manga/add-manga", bytes.NewBuffer(mangaJson))
 	if err != nil {
 
 		log.Println(err)
