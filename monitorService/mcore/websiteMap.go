@@ -21,6 +21,7 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 			log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", manga.DchapterLink, err)
 
 		}
+		log.Println("Loading webpage")
 
 		//removing add iframes
 		err := page.FrameLocator(`iframe[name="aswift_3]`).FrameLocator(`iframe[name="ad_iframe"]`).GetByLabel("Close ad").Click()
@@ -83,6 +84,7 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 			}
 		}()
 		if _, err := page.Goto(manga.DchapterLink); err != nil {
+			log.Println("loading webpage")
 			if errors.Is(err, playwright.ErrTimeout) {
 				pageLoaded, err2 := page.InnerText("Body")
 				if err2 != nil {
@@ -135,5 +137,79 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 
 		return false
 
+	},
+	"toongod": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page) bool {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Recovered from panic: %v", err)
+			}
+		}()
+		if _, err := page.Goto(manga.DchapterLink); err != nil {
+			log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", manga.DchapterLink, err)
+
+		}
+		log.Println("Loaded webpage, waiting 5 seconds before checking for cloudflare")
+		time.Sleep(9 * time.Second)
+
+		if pageHastext(page, "unblock challenges.cloudflare.com") {
+			log.Println("Cloudflare detected, tapping screen to bypass")
+			viewport := page.ViewportSize()
+			x := viewport.Width/2 + 24
+			y := viewport.Height/2 + 37
+			err := page.Touchscreen().Tap(x, y)
+			if err != nil {
+				log.Panicf("Failed to tap: %v", err)
+			}
+			time.Sleep(1374)
+			err = page.Click("body", playwright.PageClickOptions{
+				Button: playwright.MouseButtonRight,
+			})
+			if err != nil {
+				log.Panicf("Failed to click: %v", err)
+			}
+			err = page.Keyboard().Press("Tab")
+			if err != nil {
+				log.Panicf("Failed to press tab: %v", err)
+			}
+			err = page.Keyboard().Press("Enter")
+			if err != nil {
+				log.Panicf("Failed to press enter: %v", err)
+
+			}
+		}
+
+		time.Sleep(2344)
+
+		button := page.Locator("#manga-reading-nav-head").GetByRole("link", playwright.LocatorGetByRoleOptions{
+			Name: "\uF287 Next",
+		})
+		buttoncount, err := button.Count()
+		if err != nil {
+			log.Panicf("Failed to count buttons: %v", err)
+		}
+
+		// Click the button
+		if buttoncount > 0 {
+			err = button.Click()
+			if err != nil {
+				log.Panicf("Failed to click button: %v", err)
+			}
+			time.Sleep(1500)
+			if page.URL() != manga.DchapterLink {
+				title, err := page.Title()
+				if err != nil {
+					log.Panicf("Couldn't get page title: %v \n err: %v", manga.DchapterLink, err)
+
+				}
+				if !titleHas404(title) {
+					return true
+				}
+
+			}
+		} else {
+			log.Println("Button is not present")
+		}
+
+		return false
 	},
 }

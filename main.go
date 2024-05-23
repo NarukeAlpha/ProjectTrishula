@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"ProjectTrishula/dbService"
 	"ProjectTrishula/discordService"
 	"ProjectTrishula/monitorService"
+	"github.com/gorilla/mux"
 )
 
 type SetUp struct {
@@ -20,9 +22,10 @@ type SetUp struct {
 }
 
 type Discord struct {
-	GuildID  string `json:"guildID"`
-	BotToken string `json:"botToken"`
-	RemCmd   bool   `json:"remcmd"`
+	GuildID   string `json:"guildID"`
+	BotToken  string `json:"botToken"`
+	RemCmd    bool   `json:"remcmd"`
+	ChannelId string `json:"channelId"`
 }
 
 type DbKey struct {
@@ -33,15 +36,10 @@ type DbKey struct {
 	Collection string `json:"collection"`
 }
 
-type Monitor struct {
-	Webhook string `json:"webhook"`
-}
-
 type Data struct {
 	SetUp   SetUp   `json:"setUp"`
 	Discord Discord `json:"discord"`
 	DbKey   DbKey   `json:"dbKey"`
-	Monitor Monitor `json:"monitor"`
 }
 
 var data Data
@@ -94,8 +92,6 @@ func init() {
 		fmt.Print("Enter DbKey Collection: ")
 		fmt.Scanln(&data.DbKey.Collection)
 
-		fmt.Print("Enter Monitor Webhook: ")
-		fmt.Scanln(&data.Monitor.Webhook)
 		data.SetUp.Completed = true
 
 		file, err = os.OpenFile(datajsonenv, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
@@ -140,24 +136,59 @@ func main() {
 	wg.Add(2)
 	go dbService.Main(data.DbKey, &wg)
 	var discordservicevar struct {
-		GuildID  string `json:"guildID"`
-		BotToken string `json:"botToken"`
-		RemCmd   bool   `json:"remCmd"`
+		GuildID   string `json:"guildID"`
+		BotToken  string `json:"botToken"`
+		RemCmd    bool   `json:"remCmd"`
+		ChannelId string `json:"channelId"`
 	}
 	discordservicevar.GuildID = data.Discord.GuildID
 	discordservicevar.BotToken = data.Discord.BotToken
 	discordservicevar.RemCmd = data.Discord.RemCmd
+	discordservicevar.ChannelId = data.Discord.ChannelId
 
 	go discordService.Main(discordservicevar, &wg)
 	wg.Wait()
 
 	log.Println("starting monitor service")
-	go monitorService.Main(data.Monitor.Webhook)
+	go monitorService.Main()
 	log.Println("All services started")
+	go dataAPI()
+	log.Println("Data API started")
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
 	log.Println("Press Ctrl+C to exit")
 	<-stop
+
+}
+
+func dataAPI() {
+
+	rt := mux.NewRouter()
+	rt.HandleFunc("/data/set", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("Data api hit to change channel ID")
+		decoder := json.NewDecoder(r.Body)
+		err := decoder.Decode(&data.Discord.ChannelId)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		file, err := os.OpenFile(datajsonenv, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		encoder := json.NewEncoder(file)
+		if err = encoder.Encode(data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "Data set", http.StatusOK)
+	}).Methods("POST")
+
+	err := http.ListenAndServe("localhost:8079", rt)
+	if err != nil {
+		log.Panicf("Error starting server: %v", err)
+	}
 
 }

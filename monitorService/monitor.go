@@ -10,7 +10,7 @@ import (
 	"github.com/playwright-community/playwright-go"
 )
 
-func Main(wbKey string) {
+func Main() {
 	err := playwright.Install()
 
 	//making the channels for the go routines to communicate and reduce execution time before monitor starts
@@ -39,7 +39,7 @@ func Main(wbKey string) {
 
 	log.Printf("Starting monitor")
 	//initializing the monitor
-	mcore.TaskInit(mL, pL, wbKey)
+	mcore.TaskInit(mL, pL)
 
 	//for {
 	//	//infinite loop to keep the program running

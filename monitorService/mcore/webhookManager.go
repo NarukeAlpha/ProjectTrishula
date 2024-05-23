@@ -3,7 +3,6 @@ package mcore
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 )
@@ -20,50 +19,20 @@ type Field struct {
 	Value string `json:"value"`
 }
 
-func WebhookSend(manga DbMangaEntry, wbKey string) {
-
-	var title = "New " + manga.Dmanga + " Chapter Released"
-	var description = "Find it here! : " + manga.DchapterLink
-
-	payloadData := struct {
-		Content   interface{} `json:"content"`
-		Embeds    []Embed     `json:"embeds"`
-		Username  string      `json:"username"`
-		AvatarURL string      `json:"avatar_url"`
-	}{
-		Content: nil,
-		Embeds: []Embed{
-			{
-				Title: title,
-				Color: 5814783,
-				Fields: []Field{
-					{
-						Name:  "LINK BELOW",
-						Value: description,
-					},
-				},
-			},
-		},
-		Username:  "Monitor",
-		AvatarURL: "https://i.imgur.com/gTtPuMp.png",
-	}
-
-	payload, err := json.Marshal(payloadData)
+func WebhookSend(manga DbMangaEntry) {
+	mangaJson, err := json.Marshal(manga)
 	if err != nil {
-		log.Fatal("Encoding json failed")
+		panic(err)
 	}
-
-	req, err := http.NewRequest("POST", wbKey, bytes.NewBuffer(payload))
+	req2, err := http.NewRequest("POST", "http://localhost:8081/discord/channel-message", bytes.NewBuffer(mangaJson))
 	if err != nil {
-		fmt.Printf("couldn't create webhook")
+		log.Fatal("Couldn't create webhook")
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	req2.Header.Set("Content-Type", "application/json")
+	client2 := &http.Client{}
+	resp2, err := client2.Do(req2)
 	if err != nil {
-		fmt.Println("Coudln't send request")
+		log.Printf("Couldn't send request")
 	}
-
-	defer resp.Body.Close()
+	defer resp2.Body.Close()
 }

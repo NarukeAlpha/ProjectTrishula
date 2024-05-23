@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/playwright-community/playwright-go"
 )
 
 func ProxyLoad(c chan []ProxyStruct, wg *sync.WaitGroup) {
@@ -100,6 +102,17 @@ func ChapterRegex(chapterString string, chapterNumber int) bool {
 	re := regexp.MustCompile(pattern)
 	match := re.FindString(chapterString)
 	if match != "" {
+		return true
+	}
+	return false
+}
+
+func pageHastext(page playwright.Page, text string) bool {
+	pageLoaded, err := page.InnerText("Body")
+	if err != nil {
+		log.Panicf("Failed to get inner text : %v", err)
+	}
+	if strings.Contains(pageLoaded, text) {
 		return true
 	}
 	return false
