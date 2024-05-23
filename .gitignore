@@ -25,3 +25,4 @@
 /.idea/httpRequests/2024-05-19T191642.200.txt
 /.idea/httpRequests/http-client.cookies
 /.idea/httpRequests/http-requests-log.http
+!/data.json

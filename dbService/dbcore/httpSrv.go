@@ -32,8 +32,6 @@ func InitHttpServerMux(mL []DbMangaEntry, collection mongo.Collection, indexMap 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		//mL = append(mL, mangaEntry)
-		//var index int = getSliceIndex(mL, mangaEntry.Did)
 		var index int = indexMap[mangaEntry.Did]
 		mL[index].DlastChapter = mangaEntry.DlastChapter
 		mL[index].DchapterLink = mangaEntry.DchapterLink

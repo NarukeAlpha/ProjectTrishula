@@ -4,12 +4,23 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Finished DB and Monitor rebuild&#10;&#10;Discord integration to be tested an expanded">
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources/e90f87e8-6e5f-48ac-bc26-5780123ed882.xml" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Core/funcs.go" beforeDir="false" afterPath="$PROJECT_DIR$/Core/funcs.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/discordService/discord.go" beforeDir="false" afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/monitorService/mcore/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/taskHandler.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/taskHandler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/webhookManager.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/webhookManager.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/monitor.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -80,7 +91,7 @@
     "ASKED_ADD_EXTERNAL_FILES": "true",
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "DefaultGoTemplateProperty": "Go File",
-    "Go Build.go build ProjectTrishula main.go.executor": "Debug",
+    "Go Build.go build ProjectTrishula main.go.executor": "Run",
     "Go Build.webhook_test.executor": "Debug",
     "Go Test.webhookManager_test.go.executor": "Debug",
     "HTTP Request.All in ServerTest.executor": "Run",
@@ -97,7 +108,7 @@
     "go.import.settings.migrated": "true",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "C:/Users/bagaa/IdeaProjects/ProjectTrishula/main.go",
+    "last_opened_file_path": "C:/Users/User/IdeaProjects/ProjectTrishula",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -106,7 +117,7 @@
     "project.structure.last.edited": "Problems",
     "project.structure.proportion": "0.0",
     "project.structure.side.proportion": "0.2",
-    "settings.editor.selected.configurable": "com.github.copilot.settings.ApplicationConfigurable",
+    "settings.editor.selected.configurable": "editor.preferences.completion",
     "vue.rearranger.settings.migration": "true"
   },
   "keyToStringList": {
@@ -119,6 +130,9 @@
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\bagaa\IdeaProjects\ProjectTrishula" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\User\IdeaProjects\ProjectTrishula" />
     </key>
   </component>
   <component name="RunManager" selected="Go Build.go build ProjectTrishula main.go">
@@ -160,8 +174,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-jdk-9f38398b9061-18abd8497189-intellij.indexing.shared.core-IU-241.14494.240" />
-        <option value="bundled-js-predefined-1d06a55b98c1-74d2a5396914-JavaScript-IU-241.14494.240" />
+        <option value="bundled-jdk-9f38398b9061-39b83d9b5494-intellij.indexing.shared.core-IU-241.15989.150" />
+        <option value="bundled-js-predefined-1d06a55b98c1-91d5c284f522-JavaScript-IU-241.15989.150" />
       </set>
     </attachedChunks>
   </component>
@@ -189,7 +203,15 @@
       <workItem from="1716085063118" duration="30000" />
       <workItem from="1716085109530" duration="1375000" />
       <workItem from="1716087476022" duration="19056000" />
-      <workItem from="1716141064856" duration="35931000" />
+      <workItem from="1716141064856" duration="40176000" />
+      <workItem from="1716332756461" duration="33000" />
+      <workItem from="1716332806469" duration="420000" />
+      <workItem from="1716333248910" duration="296000" />
+      <workItem from="1716333568944" duration="4433000" />
+      <workItem from="1716352207106" duration="10000" />
+      <workItem from="1716352331503" duration="15000" />
+      <workItem from="1716355080941" duration="477000" />
+      <workItem from="1716355582887" duration="18967000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -274,7 +296,15 @@
       <option name="project" value="LOCAL" />
       <updated>1716172968782</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted">
+      <option name="closed" value="true" />
+      <created>1716270304798</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1716270304798</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -302,7 +332,8 @@
     <MESSAGE value="Middle of rework, transitioning from mysql to mongo db, cleaning all 3 modules.  Monitor module is stable, database module is still being transitioned, discord module needs improvements" />
     <MESSAGE value="database connects now succesfully, need to verify collection is coming back and being sorted as intended" />
     <MESSAGE value="Finished DB and Monitor rebuild&#10;&#10;Discord integration to be tested an expanded" />
-    <option name="LAST_COMMIT_MESSAGE" value="Finished DB and Monitor rebuild&#10;&#10;Discord integration to be tested an expanded" />
+    <MESSAGE value="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted" />
+    <option name="LAST_COMMIT_MESSAGE" value="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
@@ -312,13 +343,8 @@
       <breakpoints>
         <line-breakpoint enabled="true" type="DlvLineBreakpoint">
           <url>file://$PROJECT_DIR$/discordService/discord.go</url>
-          <line>232</line>
-          <option name="timeStamp" value="27" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" type="DlvLineBreakpoint">
-          <url>file://$PROJECT_DIR$/monitorService/mcore/websiteMap.go</url>
-          <line>110</line>
-          <option name="timeStamp" value="32" />
+          <line>273</line>
+          <option name="timeStamp" value="14" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>

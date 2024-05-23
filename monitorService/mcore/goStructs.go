@@ -22,9 +22,9 @@ var IphoneUserAgentList = []string{
 type DbMangaEntry struct {
 	Did          primitive.ObjectID `json:"_id"`
 	Dmanga       string             `json:"manga"`
-	DlastChapter int                `json:"lastchapter"`
+	DlastChapter int                `json:"lastChapter"`
 	Dmonitoring  bool               `json:"monitoring"`
-	DchapterLink string             `json:"chapterlink"`
+	DchapterLink string             `json:"chapterLink"`
 	Didentifier  string             `json:"identifier"`
 }
 

@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"testing"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type SetUp struct {
@@ -39,9 +41,11 @@ type Data struct {
 var data Data
 var datajsonenv = "data.dev.json"
 
+var oid primitive.ObjectID = primitive.NewObjectID()
+
 func TestWebhookSend(t *testing.T) {
 	var manga = DbMangaEntry{
-		Did:          1,
+		Did:          oid,
 		Dmanga:       "Test",
 		DlastChapter: 1,
 		Dmonitoring:  true,
