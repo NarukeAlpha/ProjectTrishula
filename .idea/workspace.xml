@@ -4,14 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted">
-      <change afterPath="$PROJECT_DIR$/.github/workflows/build-docs.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/discordService/discord.go" beforeDir="false" afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" beforeDir="false" />
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Fixed linked issues + started writeside doc">
       <change beforePath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -205,7 +198,7 @@
       <workItem from="1716352331503" duration="15000" />
       <workItem from="1716355080941" duration="477000" />
       <workItem from="1716355582887" duration="18967000" />
-      <workItem from="1716842641461" duration="583000" />
+      <workItem from="1716842641461" duration="646000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -298,7 +291,15 @@
       <option name="project" value="LOCAL" />
       <updated>1716270304798</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="Fixed linked issues + started writeside doc">
+      <option name="closed" value="true" />
+      <created>1716843270236</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1716843270236</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -327,7 +328,8 @@
     <MESSAGE value="database connects now succesfully, need to verify collection is coming back and being sorted as intended" />
     <MESSAGE value="Finished DB and Monitor rebuild&#10;&#10;Discord integration to be tested an expanded" />
     <MESSAGE value="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted" />
-    <option name="LAST_COMMIT_MESSAGE" value="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted" />
+    <MESSAGE value="Fixed linked issues + started writeside doc" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fixed linked issues + started writeside doc" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
