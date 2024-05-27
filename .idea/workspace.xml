@@ -5,22 +5,14 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.github/workflows/build-docs.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/e90f87e8-6e5f-48ac-bc26-5780123ed882.xml" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Core/funcs.go" beforeDir="false" afterPath="$PROJECT_DIR$/Core/funcs.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/dbInit.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" beforeDir="false" afterPath="$PROJECT_DIR$/dbService/dbcore/httpSrv.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/discordService/discord.go" beforeDir="false" afterPath="$PROJECT_DIR$/discordService/discord.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/goStructs.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/monitorService/mcore/task.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/task.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/taskHandler.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/taskHandler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/webhookManager.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/webhookManager.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/monitorService/mcore/webhookManager_test.go" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/mcore/websiteMap.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/monitorService/monitor.go" beforeDir="false" afterPath="$PROJECT_DIR$/monitorService/monitor.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -33,6 +25,7 @@
         <option value="package.json" />
         <option value="Go File" />
         <option value="HTTP Request" />
+        <option value="workflow" />
       </list>
     </option>
   </component>
@@ -47,7 +40,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="master" />
+        <entry key="$PROJECT_DIR$" value="Re-write" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -58,12 +51,12 @@
     &quot;assignee&quot;: &quot;NarukeAlpha&quot;
   }
 }</component>
-  <component name="GithubPullRequestsUISettings">{
-  &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;https://github.com/NarukeAlpha/ProjectTrishula.git&quot;,
-    &quot;accountId&quot;: &quot;37c18f5c-2106-47e3-99b7-7610e7dfbbc3&quot;
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/NarukeAlpha/ProjectTrishula.git",
+    "accountId": "14d6e424-2d6f-4389-96fe-fd572016017a"
   }
-}</component>
+}]]></component>
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$PROJECT_DIR$/data.dev.json" root0="SKIP_HIGHLIGHTING" />
   </component>
@@ -104,7 +97,7 @@
     "RunOnceActivity.go.modules.automatic.dependencies.download": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "WebServerToolWindowFactoryState": "false",
-    "git-widget-placeholder": "Re-write",
+    "git-widget-placeholder": "Release-1",
     "go.import.settings.migrated": "true",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
@@ -174,8 +167,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-jdk-9f38398b9061-39b83d9b5494-intellij.indexing.shared.core-IU-241.15989.150" />
-        <option value="bundled-js-predefined-1d06a55b98c1-91d5c284f522-JavaScript-IU-241.15989.150" />
+        <option value="bundled-jdk-9f38398b9061-39b83d9b5494-intellij.indexing.shared.core-IU-241.17011.79" />
+        <option value="bundled-js-predefined-1d06a55b98c1-0b3e54e931b4-JavaScript-IU-241.17011.79" />
       </set>
     </attachedChunks>
   </component>
@@ -212,6 +205,7 @@
       <workItem from="1716352331503" duration="15000" />
       <workItem from="1716355080941" duration="477000" />
       <workItem from="1716355582887" duration="18967000" />
+      <workItem from="1716842641461" duration="583000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -343,7 +337,7 @@
       <breakpoints>
         <line-breakpoint enabled="true" type="DlvLineBreakpoint">
           <url>file://$PROJECT_DIR$/discordService/discord.go</url>
-          <line>273</line>
+          <line>276</line>
           <option name="timeStamp" value="14" />
         </line-breakpoint>
       </breakpoints>

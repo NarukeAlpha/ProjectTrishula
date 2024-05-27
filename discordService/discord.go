@@ -214,6 +214,9 @@ var (
 )
 
 func identifierRegex(identifier string) string {
+	if !strings.HasPrefix(identifier, "https://") && !strings.HasPrefix(identifier, "http://") {
+		identifier = "https://www." + identifier
+	}
 	u, err := url.Parse(identifier)
 	if err != nil {
 		log.Panicf("Invalid URL: %v", err)
