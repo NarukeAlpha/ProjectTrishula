@@ -71,8 +71,11 @@ func readingMangaTable(db mongo.Collection) ([]DbMangaEntry, map[primitive.Objec
 		var entryJson DbMangaEntry = DbMangaEntry{entryBson.Did, entryBson.Dmanga, entryBson.DlastChapter, entryBson.Dmonitoring,
 			entryBson.DchapterLink, entryBson.Didentifier}
 
-		mangaL = append(mangaL, entryJson)
-		indexMap[entryJson.Did] = len(mangaL) - 1
+		if entryJson.Dmonitoring {
+			mangaL = append(mangaL, entryJson)
+			indexMap[entryJson.Did] = len(mangaL) - 1
+		}
+
 	}
 	if err := cursor.Err(); err != nil {
 		log.Fatal("Error iterating cursor: ", err.Error())

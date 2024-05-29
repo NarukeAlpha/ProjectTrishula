@@ -212,4 +212,68 @@ var theMap = map[string]func(manga DbMangaEntry, browser playwright.BrowserConte
 
 		return false
 	},
+	"asuracomic": func(manga DbMangaEntry, browser playwright.BrowserContext, page playwright.Page) bool {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Recovered from panic: %v", err)
+			}
+		}()
+		if _, err := page.Goto(manga.DchapterLink); err != nil {
+			log.Println("loading webpage")
+			if errors.Is(err, playwright.ErrTimeout) {
+				pageLoaded, err2 := page.InnerText("Body")
+				if err2 != nil {
+					log.Panicf("Failed to get inner text : %v", err2)
+				}
+				if !strings.Contains(pageLoaded, "Comment") {
+					log.Println("Page did not load within the 30 seconds time out period, returning false")
+					return false
+				}
+			} else {
+				log.Panicf("Couldn't hit webpage chapter specific link: %v \n err: %v", manga.DchapterLink, err)
+			}
+		}
+		element, err := page.QuerySelector(".ch-next-btn.disabled")
+		if err != nil {
+			log.Panicf("Failed to select element: %v", err)
+		}
+		// Check if the element is present
+		if element != nil {
+			log.Printf("Next chapter is not available")
+			return false
+		} else {
+			// Get the button with the class "ch-next-btn"
+			//button := page.Locator("#manga-reading-nav-head").GetByRole("link", playwright.LocatorGetByRoleOptions{
+			//	Name: "Next \uF105",
+			//})
+			button := page.GetByRole("link", playwright.PageGetByRoleOptions{Name: "Next \uF105"})
+			buttoncount, err := button.Count()
+			if err != nil {
+				log.Panicf("Failed to count buttons: %v", err)
+			}
+
+			// Click the button
+			if buttoncount > 0 {
+				err = button.First().Click()
+				if err != nil {
+					log.Panicf("Failed to click button: %v", err)
+				}
+				time.Sleep(1500)
+				if page.URL() != manga.DchapterLink {
+					title, err := page.Title()
+					if err != nil {
+						log.Panicf("Couldn't get page title: %v \n err: %v", manga.DchapterLink, err)
+
+					}
+					if !titleHas404(title) {
+						return true
+					}
+
+				}
+			} else {
+				log.Println("Button is not present")
+			}
+		}
+		return false
+	},
 }

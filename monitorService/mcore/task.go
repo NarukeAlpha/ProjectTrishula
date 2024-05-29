@@ -152,12 +152,10 @@ func Task(proxy ProxyStruct, manga []DbMangaEntry, errch chan error) {
 			log.Printf("PAGE IS LIVE for %v, updated chapter to %v", manga[i].Dmanga, manga[i].DlastChapter)
 		} else {
 			log.Printf("Page not live for %v, will keep monitoring", manga[i].Dmanga)
-			page.Goto("https://www.google.com")
 			continue
 		}
-		page.Goto("https://www.google.com")
+
 	}
-	page.Goto("https://www.google.com")
 	log.Printf("finished task for proxy :%v", proxy.ip)
 	errch <- nil
 
