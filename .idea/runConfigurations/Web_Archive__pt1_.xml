@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Web Archive (pt1)" type="StardustRunConfiguration" factoryName="save-as-zip">
+    <option name="folderPath" value="$PROJECT_DIR$" />
+    <option name="instanceId" value="pt1" />
+    <option name="instanceName" value="ProjectTrishula" />
+    <method v="2" />
+  </configuration>
+</component>

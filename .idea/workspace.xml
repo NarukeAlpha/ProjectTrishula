@@ -4,10 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="adding writerside documetns">
-      <change beforePath="$PROJECT_DIR$/.github/workflows/build-docs.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build-docs.yml" afterDir="false" />
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="added macos build and re build exe">
+      <change afterPath="$PROJECT_DIR$/Writerside/topics/SetUp.topic" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.exe" beforeDir="false" afterPath="$PROJECT_DIR$/main.exe" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/pt1.tree" beforeDir="false" afterPath="$PROJECT_DIR$/Writerside/pt1.tree" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -120,49 +120,49 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ASKED_ADD_EXTERNAL_FILES&quot;: &quot;true&quot;,
-    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;DefaultGoTemplateProperty&quot;: &quot;Go File&quot;,
-    &quot;Go Build.go build ProjectTrishula main.go.executor&quot;: &quot;Run&quot;,
-    &quot;Go Build.webhook_test.executor&quot;: &quot;Debug&quot;,
-    &quot;Go Test.webhookManager_test.go.executor&quot;: &quot;Debug&quot;,
-    &quot;HTTP Request.All in ServerTest.executor&quot;: &quot;Run&quot;,
-    &quot;HTTP Request.ServerTest | #1.executor&quot;: &quot;Run&quot;,
-    &quot;HTTP Request.ServerTest | #2.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.formatter.settings.were.checked&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.migrated.go.modules.settings&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.modules.automatic.dependencies.download&quot;: &quot;true&quot;,
-    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;WebServerToolWindowFactoryState&quot;: &quot;false&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;go.import.settings.migrated&quot;: &quot;true&quot;,
-    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/User/IdeaProjects/ProjectTrishula&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;project.structure.last.edited&quot;: &quot;Problems&quot;,
-    &quot;project.structure.proportion&quot;: &quot;0.0&quot;,
-    &quot;project.structure.side.proportion&quot;: &quot;0.2&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;editor.preferences.completion&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;,
-    &quot;writerside.last.selected.productProjectTrishula&quot;: &quot;pt1&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_ADD_EXTERNAL_FILES": "true",
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "DefaultGoTemplateProperty": "Go File",
+    "Go Build.go build ProjectTrishula main.go.executor": "Run",
+    "Go Build.webhook_test.executor": "Debug",
+    "Go Test.webhookManager_test.go.executor": "Debug",
+    "HTTP Request.All in ServerTest.executor": "Run",
+    "HTTP Request.ServerTest | #1.executor": "Run",
+    "HTTP Request.ServerTest | #2.executor": "Run",
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.go.migrated.go.modules.settings": "true",
+    "RunOnceActivity.go.modules.automatic.dependencies.download": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "WebServerToolWindowFactoryState": "false",
+    "Writerside.Web Archive (pt1).executor": "Run",
+    "git-widget-placeholder": "master",
+    "go.import.settings.migrated": "true",
+    "ignore.virus.scanning.warn.message": "true",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/User/IdeaProjects/ProjectTrishula",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "project.structure.last.edited": "Problems",
+    "project.structure.proportion": "0.0",
+    "project.structure.side.proportion": "0.2",
+    "settings.editor.selected.configurable": "editor.preferences.completion",
+    "vue.rearranger.settings.migration": "true",
+    "writerside.last.selected.productProjectTrishula": "pt1"
   },
-  &quot;keyToStringList&quot;: {
-    &quot;DatabaseDriversLRU&quot;: [
-      &quot;sqlserver&quot;,
-      &quot;mongo&quot;
-    ],
-    &quot;stardust.markdown.MarkdownSplitEditorSuppressor:keyList&quot;: []
+  "keyToStringList": {
+    "DatabaseDriversLRU": [
+      "sqlserver",
+      "mongo"
+    ]
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\bagaa\IdeaProjects\ProjectTrishula" />
@@ -171,7 +171,7 @@
       <recent name="C:\Users\User\IdeaProjects\ProjectTrishula" />
     </key>
   </component>
-  <component name="RunManager" selected="Go Build.go build ProjectTrishula main.go">
+  <component name="RunManager" selected="Writerside.Web Archive (pt1)">
     <configuration name="go build ProjectTrishula main.go" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
       <module name="ProjectTrishula" />
       <working_directory value="$PROJECT_DIR$" />
@@ -248,7 +248,7 @@
       <workItem from="1716352331503" duration="15000" />
       <workItem from="1716355080941" duration="477000" />
       <workItem from="1716355582887" duration="18967000" />
-      <workItem from="1717028691501" duration="1935000" />
+      <workItem from="1717028691501" duration="2908000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -349,7 +349,15 @@
       <option name="project" value="LOCAL" />
       <updated>1716871445629</updated>
     </task>
-    <option name="localTasksCounter" value="14" />
+    <task id="LOCAL-00014" summary="added macos build and re build exe">
+      <option name="closed" value="true" />
+      <created>1717038852666</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1717038852666</updated>
+    </task>
+    <option name="localTasksCounter" value="15" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -379,7 +387,8 @@
     <MESSAGE value="Finished DB and Monitor rebuild&#10;&#10;Discord integration to be tested an expanded" />
     <MESSAGE value="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted" />
     <MESSAGE value="adding writerside documetns" />
-    <option name="LAST_COMMIT_MESSAGE" value="adding writerside documetns" />
+    <MESSAGE value="added macos build and re build exe" />
+    <option name="LAST_COMMIT_MESSAGE" value="added macos build and re build exe" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>

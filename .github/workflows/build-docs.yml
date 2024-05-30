@@ -7,7 +7,7 @@ on:
 
 env:
   INSTANCE: 'ProjectTrishula/pt1'
-  ARTIFACT: 'webHelpHI2-all.zip'
+  ARTIFACT: 'webHelpPT12-all.zip'
   DOCKER_VERSION: '241.15989'
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
         uses: JetBrains/writerside-github-action@v4
         with:
           instance: ProjectTrishula/pt1
-          artifact: webHelppt12-all.zip
+          artifact: webHelpPT12-all.zip
           docker-version: 241.15989
 
       - name: Save artifact with build results
@@ -31,5 +31,5 @@ jobs:
         with:
           name: docs
           path: |
-            artifacts/webHelppt12-all.zip
+            artifacts/webHelpPT12-all.zip
           retention-days: 7
