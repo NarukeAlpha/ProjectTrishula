@@ -22,6 +22,16 @@ jobs:
       - name: List directory contents
         run: ls -R
 
+      - name: Build docs using Writerside Docker builder
+        run: |
+          echo "Building documentation with Writerside Docker builder..."
+          docker run --rm -v $(pwd):/workspace \
+            -e INSTANCE=${{ env.INSTANCE }} \
+            -e ARTIFACT=${{ env.ARTIFACT }} \
+            -e DOCKER_VERSION=${{ env.DOCKER_VERSION }} \
+            jetbrains/writerside:${{ env.DOCKER_VERSION }} \
+            /workspace/${{ env.INSTANCE }} /workspace/${{ env.ARTIFACT }}
+
 
       - name: Build docs using Writerside Docker builder
         uses: JetBrains/writerside-github-action@v4
