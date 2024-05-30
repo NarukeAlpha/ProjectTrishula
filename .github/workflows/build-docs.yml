@@ -19,6 +19,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: List directory contents
+        run: ls -R
+
+
       - name: Build docs using Writerside Docker builder
         uses: JetBrains/writerside-github-action@v4
         with:
