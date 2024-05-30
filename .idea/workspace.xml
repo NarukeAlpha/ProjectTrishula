@@ -4,10 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="added macos build and re build exe">
-      <change afterPath="$PROJECT_DIR$/Writerside/topics/SetUp.topic" afterDir="false" />
+    <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="working on writerside">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/build-docs.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build-docs.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Writerside/pt1.tree" beforeDir="false" afterPath="$PROJECT_DIR$/Writerside/pt1.tree" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -110,6 +109,9 @@
     <option name="mySelectedFileTypes">
       <set />
     </option>
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 3
@@ -248,7 +250,7 @@
       <workItem from="1716352331503" duration="15000" />
       <workItem from="1716355080941" duration="477000" />
       <workItem from="1716355582887" duration="18967000" />
-      <workItem from="1717028691501" duration="2908000" />
+      <workItem from="1717028691501" duration="4083000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -357,7 +359,15 @@
       <option name="project" value="LOCAL" />
       <updated>1717038852666</updated>
     </task>
-    <option name="localTasksCounter" value="15" />
+    <task id="LOCAL-00015" summary="working on writerside">
+      <option name="closed" value="true" />
+      <created>1717039883458</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1717039883458</updated>
+    </task>
+    <option name="localTasksCounter" value="16" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -388,7 +398,8 @@
     <MESSAGE value="Finished discord integration&#10;&#10;asurascans and hivescans supported.  requires testing before rewrite is compelted" />
     <MESSAGE value="adding writerside documetns" />
     <MESSAGE value="added macos build and re build exe" />
-    <option name="LAST_COMMIT_MESSAGE" value="added macos build and re build exe" />
+    <MESSAGE value="working on writerside" />
+    <option name="LAST_COMMIT_MESSAGE" value="working on writerside" />
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
