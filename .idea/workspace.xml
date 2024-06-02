@@ -5,8 +5,21 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="52469ac4-73b2-4de2-aa5e-11b37342cfa2" name="Changes" comment="working on writerside">
-      <change beforePath="$PROJECT_DIR$/.github/workflows/build-docs.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build-docs.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/c.list" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/cfg/buildprofiles.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/images/completion_procedure.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/images/completion_procedure_dark.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/images/convert_table_to_xml.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/images/convert_table_to_xml_dark.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/images/new_topic_options.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/images/new_topic_options_dark.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/pt1.tree" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/topics/SetUp.topic" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/topics/starter-topic.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/v.list" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Writerside/writerside.cfg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/webHelpPT12-all.zip" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -250,7 +263,7 @@
       <workItem from="1716352331503" duration="15000" />
       <workItem from="1716355080941" duration="477000" />
       <workItem from="1716355582887" duration="18967000" />
-      <workItem from="1717028691501" duration="8664000" />
+      <workItem from="1717028691501" duration="13913000" />
     </task>
     <task id="LOCAL-00001" summary="Joined all 3 separate projects into one working file.">
       <created>1686622578398</created>
@@ -391,7 +404,15 @@
       <option name="project" value="LOCAL" />
       <updated>1717043326307</updated>
     </task>
-    <option name="localTasksCounter" value="19" />
+    <task id="LOCAL-00019" summary="working on writerside">
+      <option name="closed" value="true" />
+      <created>1717047024535</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1717047024535</updated>
+    </task>
+    <option name="localTasksCounter" value="20" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
