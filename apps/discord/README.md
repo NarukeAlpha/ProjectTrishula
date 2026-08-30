@@ -2,6 +2,8 @@
 
 This Railway service holds the Discord bot token and the live Gateway connection. It stores guild, channel, message, lease, and outbox state in Convex. It sends agent work to the private Pi service.
 
+Pi agent calls use short, authenticated job requests. The gateway submits a stage, polls its job status, and retries transient poll failures. A minute-scale Sol run does not depend on one long-lived HTTP response.
+
 The service never sends the Discord token or Pi Codex OAuth data to the browser or Convex. Convex records fixed activity events for the web control page, but it does not copy message text, model prompts, credentials, or hidden reasoning into that feed.
 
 ## Required Railway variables

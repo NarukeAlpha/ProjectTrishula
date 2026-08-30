@@ -24,6 +24,7 @@ import {
   type ConvexLoopClient,
   type PiLoopClient,
 } from "../src/orchestrator/channel-loop.js";
+import { PiAgentOperationError } from "../src/pi/client.js";
 
 const channel: ChannelReference = { guildId: "10", channelId: "20" };
 const firstMessage: AgentMessage = {
@@ -222,7 +223,7 @@ describe("ChannelLoopOrchestrator", () => {
     expect(pi.calls).toEqual(["triage", "acknowledge", "research", "reply"]);
     expect(convex.queued[0]).toMatchObject({
       targetChannelId: "20",
-      idempotencyKey: "run-1:ack",
+      idempotencyKey: "ack:20:1",
       replyKind: "acknowledgement",
       finalizesLoop: false,
       recheckRequested: false,
@@ -333,7 +334,50 @@ describe("ChannelLoopOrchestrator", () => {
     await vi.waitFor(() => expect(convex.completeCalls).toHaveLength(1));
     expect(convex.completeCalls[0]).toMatchObject({
       outcome: "error",
-      options: { error: "Agent unavailable." },
+      options: { error: "Discord agent loop failed.", retryable: true },
+    });
+  });
+
+  it("records only the safe Pi failure code in Convex", async () => {
+    const convex = new FakeConvex();
+    const pi = new FakePi();
+    pi.research = async () => {
+      throw new PiAgentOperationError(
+        "research",
+        "provider_network",
+        true,
+        502,
+      );
+    };
+    orchestrator(convex, pi).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.completeCalls).toHaveLength(1));
+    expect(convex.completeCalls[0]).toMatchObject({
+      outcome: "error",
+      options: { error: "Pi research failed: provider_network.", retryable: true },
+    });
+  });
+
+  it("stops automatic recovery for a nonretryable Pi failure", async () => {
+    const convex = new FakeConvex();
+    const pi = new FakePi();
+    pi.research = async () => {
+      throw new PiAgentOperationError(
+        "research",
+        "agent_result_invalid",
+        false,
+        200,
+      );
+    };
+    orchestrator(convex, pi).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.completeCalls).toHaveLength(1));
+    expect(convex.completeCalls[0]).toMatchObject({
+      outcome: "error",
+      options: {
+        error: "Pi research failed: agent_result_invalid.",
+        retryable: false,
+      },
     });
   });
 });

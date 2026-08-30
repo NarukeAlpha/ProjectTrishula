@@ -19,6 +19,7 @@ import type {
   TriageRequest,
   TriageResponse,
 } from "../contracts.js";
+import { PiAgentOperationError } from "../pi/client.js";
 import { logger } from "../runtime/logger.js";
 
 export interface ChannelLoopDependencies {
@@ -47,7 +48,7 @@ export interface ConvexLoopClient {
   completeLoop(
     identity: RunIdentity,
     outcome: "completed" | "error",
-    options?: { recheckRequested?: boolean; error?: string },
+    options?: { recheckRequested?: boolean; error?: string; retryable?: boolean },
     signal?: AbortSignal,
   ): Promise<CompleteLoopResult>;
   enqueueReply(input: EnqueueReplyInput, signal?: AbortSignal): Promise<void>;
@@ -235,7 +236,7 @@ export class ChannelLoopOrchestrator {
           const acknowledgementReply: EnqueueReplyInput = {
             ...identity,
             targetChannelId: claim.replyChannelId,
-            idempotencyKey: `${claim.runId}:ack`,
+            idempotencyKey: `ack:${claim.channelId}:${claim.windowEnd}`,
             replyKind: "acknowledgement",
             content: acknowledgement.acknowledgement,
             recheckRequested: false,
@@ -264,6 +265,8 @@ export class ChannelLoopOrchestrator {
             loopId: claim.runId,
             code: error instanceof ConvexDiscordOperationError
               ? error.code
+              : error instanceof PiAgentOperationError
+                ? error.code
               : error instanceof Error
                 ? error.name
                 : "unknown_error",
@@ -367,12 +370,19 @@ export class ChannelLoopOrchestrator {
       return false;
     } catch (error) {
       const message =
-        error instanceof Error
-          ? error.message.slice(0, 1_000)
+        error instanceof PiAgentOperationError
+          ? `Pi ${error.profile} failed: ${error.code}.`
+          : error instanceof ConvexDiscordOperationError
+            ? `Convex Discord ${error.operation} failed: ${error.code}.`
           : "Discord agent loop failed.";
       try {
         await this.dependencies.convex.completeLoop(identity, "error", {
           error: message,
+          retryable: error instanceof PiAgentOperationError
+            ? error.retryable
+            : error instanceof ConvexDiscordOperationError
+              ? error.status === 408 || error.status === 429 || error.status >= 500
+              : true,
         });
       } catch {
         logger.error("Could not record the Discord loop failure.", {
@@ -385,7 +395,13 @@ export class ChannelLoopOrchestrator {
         channelId: channel.channelId,
         guildId: channel.guildId,
         loopId: claim.runId,
-        code: error instanceof Error ? error.name : "unknown_error",
+        code: error instanceof PiAgentOperationError
+          ? error.code
+          : error instanceof ConvexDiscordOperationError
+            ? error.code
+            : error instanceof Error
+              ? error.name
+              : "unknown_error",
       });
       return false;
     } finally {

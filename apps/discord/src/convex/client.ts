@@ -237,6 +237,7 @@ export interface CompleteLoopResult {
 export interface CompleteLoopOptions {
   recheckRequested?: boolean;
   error?: string;
+  retryable?: boolean;
 }
 
 export interface EnqueueReplyInput extends RunIdentity {
