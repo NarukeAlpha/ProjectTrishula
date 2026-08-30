@@ -4,6 +4,7 @@ set -eu
 PUBLIC_ENVIRONMENT="${PUBLIC_ENVIRONMENT:-staging}"
 PUBLIC_APPLICATION_NAME="${PUBLIC_APPLICATION_NAME:-Project Trishula}"
 PUBLIC_APPLICATION_VERSION="${PUBLIC_APPLICATION_VERSION:-unknown}"
+PUBLIC_DISCORD_APPLICATION_ID="${PUBLIC_DISCORD_APPLICATION_ID:-}"
 PUBLIC_DEMO_MODE="${PUBLIC_DEMO_MODE:-false}"
 PUBLIC_CONVEX_URL="${PUBLIC_CONVEX_URL:-}"
 PUBLIC_WORKOS_CLIENT_ID="${PUBLIC_WORKOS_CLIENT_ID:-}"
@@ -21,11 +22,21 @@ if [ "$PUBLIC_DEMO_MODE" = "false" ]; then
   : "${PUBLIC_WORKOS_REDIRECT_URI:?PUBLIC_WORKOS_REDIRECT_URI is required when demo mode is disabled}"
 fi
 
-for value in "$PUBLIC_ENVIRONMENT" "$PUBLIC_APPLICATION_NAME" "$PUBLIC_APPLICATION_VERSION" "$PUBLIC_DEMO_MODE" "$PUBLIC_CONVEX_URL" "$PUBLIC_WORKOS_CLIENT_ID" "$PUBLIC_WORKOS_REDIRECT_URI" "$PUBLIC_WORKOS_API_HOSTNAME"; do
+for value in "$PUBLIC_ENVIRONMENT" "$PUBLIC_APPLICATION_NAME" "$PUBLIC_APPLICATION_VERSION" "$PUBLIC_DISCORD_APPLICATION_ID" "$PUBLIC_DEMO_MODE" "$PUBLIC_CONVEX_URL" "$PUBLIC_WORKOS_CLIENT_ID" "$PUBLIC_WORKOS_REDIRECT_URI" "$PUBLIC_WORKOS_API_HOSTNAME"; do
   case "$value" in
     *[![:print:]]*) echo "Public runtime variables must contain printable characters only." >&2; exit 1 ;;
   esac
 done
+if [ -n "$PUBLIC_DISCORD_APPLICATION_ID" ]; then
+  case "$PUBLIC_DISCORD_APPLICATION_ID" in
+    *[!0-9]*) echo "PUBLIC_DISCORD_APPLICATION_ID must contain only digits." >&2; exit 1 ;;
+  esac
+  application_id_length="${#PUBLIC_DISCORD_APPLICATION_ID}"
+  if [ "$application_id_length" -lt 17 ] || [ "$application_id_length" -gt 20 ]; then
+    echo "PUBLIC_DISCORD_APPLICATION_ID must be a Discord snowflake." >&2
+    exit 1
+  fi
+fi
 if [ "$PUBLIC_DEMO_MODE" = "false" ]; then
   case "$PUBLIC_CONVEX_URL" in
     https://*) ;;
@@ -60,6 +71,9 @@ umask 022
   printf '  environment: "%s",\n' "$(json_escape "$PUBLIC_ENVIRONMENT")"
   printf '  applicationName: "%s",\n' "$(json_escape "$PUBLIC_APPLICATION_NAME")"
   printf '  applicationVersion: "%s",\n' "$(json_escape "$PUBLIC_APPLICATION_VERSION")"
+  if [ -n "$PUBLIC_DISCORD_APPLICATION_ID" ]; then
+    printf '  discordApplicationId: "%s",\n' "$(json_escape "$PUBLIC_DISCORD_APPLICATION_ID")"
+  fi
   printf '  demoMode: %s' "$PUBLIC_DEMO_MODE"
   if [ "$PUBLIC_DEMO_MODE" = "false" ]; then
     printf ',\n'

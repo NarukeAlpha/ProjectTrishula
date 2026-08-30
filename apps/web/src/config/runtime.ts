@@ -4,6 +4,7 @@ interface RuntimeConfigBase {
   environment: Environment;
   applicationName: string;
   applicationVersion: string;
+  discordApplicationId?: string;
 }
 
 export interface DemoRuntimeConfig extends RuntimeConfigBase {
@@ -24,6 +25,7 @@ export interface RuntimeConfigSource {
   environment?: string | null;
   applicationName?: string | null;
   applicationVersion?: string | null;
+  discordApplicationId?: string | null;
   demoMode?: boolean | string | null;
   convexUrl?: string | null;
   workosClientId?: string | null;
@@ -70,6 +72,21 @@ function parseEnvironment(value: string): Environment {
   }
 }
 
+function parseDiscordApplicationId(
+  value: string | null | undefined,
+): string | undefined {
+  if (value === undefined || value === null || value.trim() === "") {
+    return undefined;
+  }
+  const applicationId = value.trim();
+  if (!/^\d{17,20}$/.test(applicationId)) {
+    throw new Error(
+      "Public runtime configuration field discordApplicationId must be a Discord snowflake.",
+    );
+  }
+  return applicationId;
+}
+
 export function parseRuntimeConfig(
   value: RuntimeConfigSource | null | undefined,
 ): PublicRuntimeConfig {
@@ -79,7 +96,7 @@ export function parseRuntimeConfig(
   const environment = parseEnvironment(
     requireText(value.environment, "environment"),
   );
-  const base = {
+  const base: RuntimeConfigBase = {
     environment,
     applicationName: requireText(value.applicationName, "applicationName"),
     applicationVersion: requireText(
@@ -87,6 +104,12 @@ export function parseRuntimeConfig(
       "applicationVersion",
     ),
   };
+  const discordApplicationId = parseDiscordApplicationId(
+    value.discordApplicationId,
+  );
+  if (discordApplicationId !== undefined) {
+    base.discordApplicationId = discordApplicationId;
+  }
   if (value.demoMode === true) {
     return { ...base, demoMode: true };
   }

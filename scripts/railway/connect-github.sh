@@ -124,7 +124,8 @@ railway variable set \
   --environment "$ENVIRONMENT" \
   --service "$web_id" \
   --skip-deploys \
-  'PUBLIC_APPLICATION_NAME=Project Trishula' >/dev/null
+  'PUBLIC_APPLICATION_NAME=Project Trishula' \
+  'PUBLIC_DISCORD_APPLICATION_ID=1114379702015111228' >/dev/null
 
 for id in "$backend_id" "$functions_id" "$discord_id" "$pi_id" "$web_id"; do
   railway redeploy \

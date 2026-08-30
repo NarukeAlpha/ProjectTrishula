@@ -17,6 +17,8 @@ Optional timing controls are documented in `src/config.ts`.
 
 Enable the `MESSAGE CONTENT INTENT` on the Bot page in the Discord Developer Portal. Invite the bot with View Channels, Send Messages, and Read Message History permissions. The service also requests the Guilds and Guild Messages gateway intents.
 
+The Gateway, bot REST calls, and callback-free bot install flow use the bot token. They do not use the Discord OAuth client secret. Add a client secret only if a future server-side feature exchanges Discord OAuth authorization codes. The application public key is needed only for a future HTTP Interactions endpoint; this service receives events through the Gateway.
+
 ## Checks
 
 ```sh

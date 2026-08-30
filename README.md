@@ -56,6 +56,12 @@ Discord gateway:
 - `CONVEX_SITE_URL`
 - `PI_SERVICE_URL=http://pi.railway.internal:8080`
 
+Web:
+
+- `PUBLIC_DISCORD_APPLICATION_ID=1114379702015111228` (public install-link identifier)
+
+The Gateway does not use the Discord OAuth client secret. Add `DISCORD_CLIENT_SECRET` only if a later server-side feature exchanges Discord OAuth codes. The application public key is only for an HTTP Interactions endpoint, which this service does not use.
+
 Pi:
 
 - `SERVICE_SHARED_SECRET`

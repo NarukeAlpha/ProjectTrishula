@@ -171,7 +171,9 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
                   </main>
                 }
               >
-                <DiscordControlPage />
+                <DiscordControlPage
+                  applicationId={config.discordApplicationId}
+                />
               </Suspense>
             }
           />

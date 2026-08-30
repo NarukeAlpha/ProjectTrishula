@@ -5,6 +5,7 @@ const valid = {
   environment: "staging",
   applicationName: "Project Trishula",
   applicationVersion: "test",
+  discordApplicationId: "1114379702015111228",
   demoMode: false,
   convexUrl: "https://convex.example.com",
   workosClientId: "client_01ABCDEF",
@@ -17,6 +18,7 @@ describe("parseRuntimeConfig", () => {
       environment: "staging",
       demoMode: false,
       convexUrl: "https://convex.example.com",
+      discordApplicationId: "1114379702015111228",
     });
   });
 
@@ -55,5 +57,14 @@ describe("parseRuntimeConfig", () => {
         workosApiHostname: "https://api.workos.com/path",
       }),
     ).toThrow("hostname");
+  });
+
+  it("rejects a malformed Discord application identifier", () => {
+    expect(() =>
+      parseRuntimeConfig({
+        ...valid,
+        discordApplicationId: "not-a-snowflake",
+      }),
+    ).toThrow("Discord snowflake");
   });
 });

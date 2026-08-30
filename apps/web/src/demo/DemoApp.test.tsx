@@ -60,8 +60,6 @@ describe("Project Trishula demo mode", () => {
     expect(
       screen.getByRole("heading", { name: "Channel control" }),
     ).toBeVisible();
-    expect(
-      screen.getByText("Add the Discord credentials in Railway."),
-    ).toBeVisible();
+    expect(screen.getByText("Add the bot token in Railway.")).toBeVisible();
   });
 });

@@ -1869,6 +1869,40 @@ summary:focus-visible {
   color: #ffc4c9;
 }
 
+.discord-gateway-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.discord-action-link {
+  display: inline-flex;
+  min-height: 40px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  color: #fff;
+  background: #5865f2;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 760;
+  text-decoration: none;
+}
+
+.discord-action-link:hover {
+  background: #6873f4;
+}
+
+.discord-gateway-actions p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .discord-page-error {
   margin-bottom: 12px;
   padding: 12px 14px;
@@ -1878,15 +1912,76 @@ summary:focus-visible {
   font-size: 11px;
 }
 
-.discord-guild-list {
-  display: grid;
-  gap: 30px;
+.discord-server-settings {
   margin-top: 30px;
+}
+
+.discord-server-picker {
+  display: flex;
+  gap: 14px;
+  align-items: end;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding: 14px;
+}
+
+.discord-server-picker label {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 7px;
+}
+
+.discord-server-picker label > span {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.discord-server-picker select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 34px 9px 11px;
+  color: var(--ink);
+  background: var(--surface-strong);
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.discord-server-picker p {
+  flex: 0 0 auto;
+  margin: 0 0 12px;
+  color: var(--faint);
+  font-size: 9px;
 }
 
 .discord-guild-heading {
   gap: 11px;
   margin: 0 2px 12px;
+}
+
+@media (max-width: 520px) {
+  .discord-gateway-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .discord-action-link {
+    width: 100%;
+  }
+
+  .discord-server-picker {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .discord-server-picker p {
+    margin: 0;
+  }
 }
 
 .discord-guild-mark {

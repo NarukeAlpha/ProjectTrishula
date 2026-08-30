@@ -22,7 +22,7 @@ Each usable channel can have any of these roles:
 
 Convex owns the assignments. The page explains missing Message Content intent, channel visibility, message-history access, and send permission. It also shows messages waiting while a loop is already running.
 
-Discord credentials belong only on the Railway Discord service. Do not add them to this web service or to a public runtime variable.
+The Discord application ID is public and can be exposed as `PUBLIC_DISCORD_APPLICATION_ID` to create the server-install link. The bot token belongs only on the Railway Discord service. The current Gateway integration does not use a Discord client secret or interactions public key.
 
 ## Local demo
 
@@ -51,15 +51,16 @@ Production requires these public variables:
 
 Optional variables:
 
-| Variable                     | Default            | Purpose                      |
-| ---------------------------- | ------------------ | ---------------------------- |
-| `PUBLIC_ENVIRONMENT`         | `staging`          | Deployment label             |
-| `PUBLIC_APPLICATION_NAME`    | `Project Trishula` | Browser title                |
-| `PUBLIC_APPLICATION_VERSION` | `unknown`          | Deployment correlation value |
-| `PUBLIC_WORKOS_API_HOSTNAME` | `api.workos.com`   | Custom AuthKit hostname      |
-| `PORT`                       | `8080`             | Nginx listener from Railway  |
+| Variable                        | Default            | Purpose                            |
+| ------------------------------- | ------------------ | ---------------------------------- |
+| `PUBLIC_ENVIRONMENT`            | `staging`          | Deployment label                   |
+| `PUBLIC_APPLICATION_NAME`       | `Project Trishula` | Browser title                      |
+| `PUBLIC_APPLICATION_VERSION`    | `unknown`          | Deployment correlation value       |
+| `PUBLIC_DISCORD_APPLICATION_ID` | unset              | Public Discord server-install link |
+| `PUBLIC_WORKOS_API_HOSTNAME`    | `api.workos.com`   | Custom AuthKit hostname            |
+| `PORT`                          | `8080`             | Nginx listener from Railway        |
 
-All values above are public. Never add a WorkOS API key, Convex administrative key, Pi URL, service secret, Discord bot token, model credential, or brokerage credential.
+All values above are public. Never add a WorkOS API key, Convex administrative key, Pi URL, service secret, Discord bot token, Discord client secret, model credential, or brokerage credential.
 
 ## Public Convex contract
 

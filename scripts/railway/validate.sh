@@ -138,6 +138,11 @@ grep -Fq 'DISCORD_BOT_TOKEN: preserve()' "$iac" || {
   exit 1
 }
 
+grep -Fq 'PUBLIC_DISCORD_APPLICATION_ID: preserve()' "$iac" || {
+  printf 'Railway IaC must preserve the public Discord application identifier.\n' >&2
+  exit 1
+}
+
 grep -Fq 'npm ci --include=dev' "$REPO_ROOT/infra/railway/convex-functions/Dockerfile" || {
   printf 'The Convex function deployer must install TypeScript for deploy-time typechecking.\n' >&2
   exit 1

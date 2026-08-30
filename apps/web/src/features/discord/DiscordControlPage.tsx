@@ -10,6 +10,7 @@ import type {
   DiscordLoopStatus,
 } from "../../convex/types";
 import { formatAge } from "../../shared/formatting/values";
+import { discordInstallUrl } from "./discordInstall";
 
 const channelRoles: ReadonlyArray<{
   role: DiscordChannelRole;
@@ -110,7 +111,13 @@ function PermissionStatus({
   );
 }
 
-function GatewayCard({ model }: { model: DiscordControlPlaneReadModel }) {
+function GatewayCard({
+  applicationId,
+  model,
+}: {
+  applicationId?: string;
+  model: DiscordControlPlaneReadModel;
+}) {
   const { gateway } = model;
   return (
     <section
@@ -139,10 +146,10 @@ function GatewayCard({ model }: { model: DiscordControlPlaneReadModel }) {
       )}
       {gateway.status === "not_configured" && (
         <div className="discord-callout" role="status">
-          <strong>Add the Discord credentials in Railway.</strong>
+          <strong>Add the bot token in Railway.</strong>
           <p>
-            Configure the bot token and application details on the Discord
-            service. Secrets never enter this browser or Convex.
+            Set DISCORD_BOT_TOKEN only on the Discord service. The token never
+            enters this browser or Convex.
           </p>
         </div>
       )}
@@ -168,6 +175,22 @@ function GatewayCard({ model }: { model: DiscordControlPlaneReadModel }) {
         <p className="discord-inline-error" role="alert">
           {gateway.error}
         </p>
+      )}
+      {applicationId && (
+        <div className="discord-gateway-actions">
+          <a
+            className="discord-action-link"
+            href={discordInstallUrl(applicationId)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Add to Discord
+          </a>
+          <p>
+            Requests only View Channels, Send Messages, and Read Message
+            History.
+          </p>
+        </div>
       )}
     </section>
   );
@@ -335,9 +358,11 @@ function GuildCard({
 }
 
 export function DiscordControlView({
+  applicationId,
   model,
   onSetChannelRoles,
 }: {
+  applicationId?: string;
   model: DiscordControlPlaneReadModel;
   onSetChannelRoles: (
     guildId: string,
@@ -347,6 +372,10 @@ export function DiscordControlView({
 }) {
   const [busyChannel, setBusyChannel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedGuildId, setSelectedGuildId] = useState<string | null>(null);
+  const selectedGuild =
+    model.guilds.find((guild) => guild.guildId === selectedGuildId) ??
+    model.guilds[0];
 
   async function setRoles(
     guildId: string,
@@ -381,7 +410,7 @@ export function DiscordControlView({
           {error}
         </div>
       )}
-      <GatewayCard model={model} />
+      <GatewayCard applicationId={applicationId} model={model} />
       {model.guilds.length === 0 ? (
         <section
           className="discord-empty surface"
@@ -394,22 +423,52 @@ export function DiscordControlView({
           </p>
         </section>
       ) : (
-        <div className="discord-guild-list">
-          {model.guilds.map((guild) => (
+        <section
+          className="discord-server-settings"
+          aria-labelledby="server-settings-title"
+        >
+          <div className="discord-server-picker surface">
+            <label htmlFor="discord-server">
+              <span>Server</span>
+              <select
+                id="discord-server"
+                value={selectedGuild?.guildId}
+                onChange={(event) => setSelectedGuildId(event.target.value)}
+              >
+                {model.guilds.map((guild) => (
+                  <option key={guild.guildId} value={guild.guildId}>
+                    {guild.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p>
+              {model.guilds.length} installed server
+              {model.guilds.length === 1 ? "" : "s"}
+            </p>
+          </div>
+          <h2 className="sr-only" id="server-settings-title">
+            Per-server channel settings
+          </h2>
+          {selectedGuild && (
             <GuildCard
-              key={guild.guildId}
-              guild={guild}
+              key={selectedGuild.guildId}
+              guild={selectedGuild}
               busyChannel={busyChannel}
               onSetRoles={setRoles}
             />
-          ))}
-        </div>
+          )}
+        </section>
       )}
     </main>
   );
 }
 
-export function DiscordControlPage() {
+export function DiscordControlPage({
+  applicationId,
+}: {
+  applicationId?: string;
+}) {
   const model = useQuery(publicApi.discord.getControlPlane, {});
   const setChannelRoles = useMutation(publicApi.discord.setChannelRoles);
 
@@ -426,6 +485,7 @@ export function DiscordControlPage() {
 
   return (
     <DiscordControlView
+      applicationId={applicationId}
       model={model}
       onSetChannelRoles={(guildId, channelId, roles) =>
         setChannelRoles({ guildId, channelId, roles }).then(() => undefined)

@@ -8,6 +8,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DiscordControlPlaneReadModel } from "../../convex/types";
 import { DiscordControlView } from "./DiscordControlPage";
+import { discordInstallUrl } from "./discordInstall";
 
 function controlPlane(
   overrides: Partial<DiscordControlPlaneReadModel> = {},
@@ -53,6 +54,24 @@ function controlPlane(
 afterEach(cleanup);
 
 describe("Discord control surface", () => {
+  it("builds a callback-free guild install link with minimum permissions", () => {
+    expect(discordInstallUrl("1114379702015111228")).toBe(
+      "https://discord.com/oauth2/authorize?client_id=1114379702015111228&integration_type=0&scope=bot&permissions=68608",
+    );
+
+    render(
+      <DiscordControlView
+        applicationId="1114379702015111228"
+        model={controlPlane()}
+        onSetChannelRoles={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Add to Discord" }),
+    ).toHaveAttribute("href", discordInstallUrl("1114379702015111228"));
+  });
+
   it("saves a stable set of channel roles", async () => {
     const onSetChannelRoles = vi.fn().mockResolvedValue(undefined);
     render(
@@ -72,6 +91,65 @@ describe("Discord control surface", () => {
     await waitFor(() =>
       expect(onSetChannelRoles).toHaveBeenCalledWith("guild_1", "channel_1", [
         "conversation_monitor",
+        "reply_target",
+      ]),
+    );
+  });
+
+  it("selects and updates one server at a time", async () => {
+    const onSetChannelRoles = vi.fn().mockResolvedValue(undefined);
+    const first = controlPlane().guilds[0];
+    if (!first) throw new Error("The test server is missing.");
+    const model = controlPlane({
+      guilds: [
+        first,
+        {
+          guildId: "guild_2",
+          name: "Options Desk",
+          permissions: {
+            viewChannels: true,
+            sendMessages: true,
+            readMessageHistory: true,
+            messageContent: true,
+          },
+          channels: [
+            {
+              channelId: "channel_2",
+              name: "market-chat",
+              type: "text",
+              canView: true,
+              canSend: true,
+              canReadHistory: true,
+              roles: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    render(
+      <DiscordControlView
+        model={model}
+        onSetChannelRoles={onSetChannelRoles}
+      />,
+    );
+
+    expect(screen.getByText("2 installed servers")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Market Desk" })).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Server"), {
+      target: { value: "guild_2" },
+    });
+
+    expect(screen.getByRole("heading", { name: "Options Desk" })).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Market Desk" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /reply target/i }));
+
+    await waitFor(() =>
+      expect(onSetChannelRoles).toHaveBeenCalledWith("guild_2", "channel_2", [
         "reply_target",
       ]),
     );
@@ -136,9 +214,7 @@ describe("Discord control surface", () => {
       "phone-first",
     );
     expect(container.querySelector("table")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Add the Discord credentials in Railway."),
-    ).toBeVisible();
+    expect(screen.getByText("Add the bot token in Railway.")).toBeVisible();
     expect(screen.getByText("No Discord servers available.")).toBeVisible();
   });
 

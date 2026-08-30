@@ -90,6 +90,7 @@ export default defineRailway(() => {
       PUBLIC_APPLICATION_VERSION: preserve(),
       PUBLIC_CONVEX_URL: preserve(),
       PUBLIC_DEMO_MODE: preserve(),
+      PUBLIC_DISCORD_APPLICATION_ID: preserve(),
       PUBLIC_ENVIRONMENT: preserve(),
       PUBLIC_WORKOS_CLIENT_ID: preserve(),
       PUBLIC_WORKOS_REDIRECT_URI: preserve(),

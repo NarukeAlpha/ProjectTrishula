@@ -212,6 +212,7 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
             path="/discord"
             element={
               <DiscordControlView
+                applicationId={config.discordApplicationId}
                 model={demoDiscord}
                 onSetChannelRoles={() => Promise.resolve()}
               />
