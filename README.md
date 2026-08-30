@@ -7,8 +7,8 @@ The current POC does research and writes concise Discord replies. It does not pl
 ## Services
 
 - `apps/web`: WorkOS-protected Chat and Discord channel settings.
-- `apps/convex`: chat data, Discord channel assignments, durable loop leases, message windows, runs, and outbox state.
-- `apps/pi`: existing chat execution plus isolated Luna triage, Sol research, and Luna reply sessions. Discord stages use `xhigh` reasoning on the priority service tier.
+- `apps/convex`: chat data, Discord channel assignments, durable loop leases, message windows, runs, outbox state, and a safe activity feed.
+- `apps/pi`: existing chat execution plus isolated Luna triage, Luna acknowledgment, Sol research, and Luna reply sessions. Discord stages use `xhigh` reasoning on the priority service tier.
 - `apps/discord`: Discord Gateway connection, restart reconciliation, loop coordination, and outbox delivery.
 - `infra/railway/convex-backend`: self-hosted Convex backend.
 - `infra/railway/convex-dashboard`: self-hosted Convex dashboard.
@@ -25,10 +25,13 @@ Ignored dependencies and build output remain in the local archive. Git tracks th
 1. The gateway stores each human message in Convex once.
 2. Convex grants one fenced lease for that channel and returns an ordered window of at most ten new messages.
 3. Luna decides whether the conversation needs a response and research.
-4. Sol performs research with limited public web and market-data tools when needed.
-5. The reply-stage Luna receives the research and the newest ten messages, then writes a reply of at most 1,200 characters.
-6. Convex queues the reply. The gateway sends it with Discord mentions disabled and acknowledges the Discord message ID.
-7. Convex schedules ordered catch-up windows for any messages that arrived during the run. It caps autonomous rechecks to prevent bot loops.
+4. If Luna accepts the question, the loop enters a visible acknowledgment stage. A second Luna call writes one short acknowledgment. Convex queues it immediately, and the gateway gives it delivery priority.
+5. Sol performs research with limited public web and market-data tools when needed.
+6. The reply-stage Luna receives the research and the newest ten messages, then writes a reply of at most 1,200 characters.
+7. Convex queues each outbound message with an explicit purpose. The gateway sends it with Discord mentions disabled and records the Discord message ID.
+8. Convex schedules ordered catch-up windows for messages that arrived during the run. It caps autonomous rechecks to prevent bot loops.
+
+The Discord page shows a live activity feed for the selected server. It stores only fixed event types, channel IDs, run IDs, stages, timestamps, and outbound message purposes. It does not store message text, model prompts, model output, source URLs, credentials, or hidden reasoning in the feed.
 
 ## Local checks
 

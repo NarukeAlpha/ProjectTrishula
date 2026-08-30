@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { publicApi } from "../../convex/functions";
 import type {
+  DiscordActivityReadModel,
   DiscordChannelReadModel,
   DiscordChannelRole,
   DiscordControlPlaneReadModel,
@@ -48,11 +49,33 @@ const gatewayLabels = {
 const loopLabels = {
   idle: "Ready",
   triaging: "Reviewing chat",
+  acknowledging: "Writing acknowledgment",
   researching: "Researching",
   drafting: "Writing reply",
   catching_up: "Catching up",
   error: "Loop error",
 } satisfies Record<DiscordLoopStatus, string>;
+
+function activityLabel(event: DiscordActivityReadModel): string {
+  if (event.eventType === "message_received") return "Message received";
+  if (event.eventType === "loop_started") return "Reviewing chat";
+  if (event.eventType === "loop_completed") return "Loop complete";
+  if (event.eventType === "loop_failed") return "Loop failed";
+  if (event.eventType === "stage_changed") {
+    return event.stage === undefined ? "Loop updated" : loopLabels[event.stage];
+  }
+  const subject =
+    event.replyKind === "acknowledgement"
+      ? "Acknowledgment"
+      : event.replyKind === "research_log"
+        ? "Research note"
+        : event.replyKind === "final"
+          ? "Reply"
+          : "Message";
+  if (event.eventType === "reply_queued") return `${subject} queued`;
+  if (event.eventType === "reply_sent") return `${subject} sent`;
+  return `${subject} failed`;
+}
 
 function roleIsAvailable(
   role: DiscordChannelRole,
@@ -357,6 +380,59 @@ function GuildCard({
   );
 }
 
+function ActivityFeed({
+  guild,
+  events,
+}: {
+  guild: DiscordGuildReadModel;
+  events: DiscordActivityReadModel[];
+}) {
+  return (
+    <section
+      className="discord-activity surface"
+      aria-labelledby="activity-title"
+    >
+      <div className="discord-section-heading">
+        <div>
+          <p className="section-kicker">Live</p>
+          <h2 id="activity-title">Agent activity</h2>
+        </div>
+        <span className="discord-live-indicator">
+          <span aria-hidden="true" />
+          Updating
+        </span>
+      </div>
+      {events.length === 0 ? (
+        <p className="discord-activity-empty">
+          No activity yet. New monitored messages will appear here.
+        </p>
+      ) : (
+        <ol className="discord-activity-list" aria-live="polite">
+          {events.map((event) => {
+            const channel = guild.channels.find(
+              (candidate) => candidate.channelId === event.channelId,
+            );
+            return (
+              <li key={event.eventId} data-event={event.eventType}>
+                <span className="discord-activity-dot" aria-hidden="true" />
+                <div>
+                  <strong>{activityLabel(event)}</strong>
+                  <span>
+                    {channel ? `#${channel.name}` : "Discord channel"}
+                  </span>
+                </div>
+                <time dateTime={new Date(event.createdAt).toISOString()}>
+                  {formatAge(event.createdAt)}
+                </time>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 export function DiscordControlView({
   applicationId,
   model,
@@ -376,6 +452,11 @@ export function DiscordControlView({
   const selectedGuild =
     model.guilds.find((guild) => guild.guildId === selectedGuildId) ??
     model.guilds[0];
+  const selectedActivity = selectedGuild
+    ? (model.activity ?? []).filter(
+        (event) => event.guildId === selectedGuild.guildId,
+      )
+    : [];
 
   async function setRoles(
     guildId: string,
@@ -451,12 +532,15 @@ export function DiscordControlView({
             Per-server channel settings
           </h2>
           {selectedGuild && (
-            <GuildCard
-              key={selectedGuild.guildId}
-              guild={selectedGuild}
-              busyChannel={busyChannel}
-              onSetRoles={setRoles}
-            />
+            <>
+              <GuildCard
+                key={selectedGuild.guildId}
+                guild={selectedGuild}
+                busyChannel={busyChannel}
+                onSetRoles={setRoles}
+              />
+              <ActivityFeed guild={selectedGuild} events={selectedActivity} />
+            </>
           )}
         </section>
       )}

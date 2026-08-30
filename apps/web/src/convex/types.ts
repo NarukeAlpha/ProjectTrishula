@@ -275,10 +275,34 @@ export type DiscordChannelRole =
 export type DiscordLoopStatus =
   | "idle"
   | "triaging"
+  | "acknowledging"
   | "researching"
   | "drafting"
   | "catching_up"
   | "error";
+
+export type DiscordReplyKind = "acknowledgement" | "research_log" | "final";
+
+export type DiscordActivityEventType =
+  | "message_received"
+  | "loop_started"
+  | "stage_changed"
+  | "reply_queued"
+  | "reply_sent"
+  | "reply_failed"
+  | "loop_completed"
+  | "loop_failed";
+
+export interface DiscordActivityReadModel {
+  eventId: string;
+  guildId: string;
+  channelId: string;
+  runId?: string;
+  eventType: DiscordActivityEventType;
+  stage?: DiscordLoopStatus;
+  replyKind?: DiscordReplyKind;
+  createdAt: number;
+}
 
 export interface DiscordGatewayReadModel {
   status: DiscordGatewayStatus;
@@ -323,6 +347,7 @@ export interface DiscordGuildReadModel {
 
 export interface DiscordControlPlaneReadModel {
   gateway: DiscordGatewayReadModel;
+  activity?: DiscordActivityReadModel[];
   guilds: DiscordGuildReadModel[];
 }
 

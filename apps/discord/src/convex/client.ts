@@ -13,6 +13,7 @@ import {
   type DiscoveredGuild,
   type LoopStage,
   type OutboxItem,
+  type ReplyKind,
   type RunnableChannel,
   type StoredMessage,
 } from "../contracts.js";
@@ -138,6 +139,7 @@ const outboxItemSchema = z
     channelId: snowflakeSchema,
     runId: stableIdSchema,
     generation: z.number().int().positive(),
+    replyKind: z.enum(["acknowledgement", "research_log", "final"]).optional(),
     status: z.enum(["pending", "sent"]),
     content: z.string().trim().min(1).max(2_000),
     replyToMessageId: snowflakeSchema.optional(),
@@ -235,6 +237,7 @@ export interface CompleteLoopOptions {
 export interface EnqueueReplyInput extends RunIdentity {
   targetChannelId: string;
   idempotencyKey: string;
+  replyKind: ReplyKind;
   content: string;
   replyToMessageId?: string | undefined;
   recheckRequested: boolean;
@@ -378,9 +381,16 @@ export class ConvexDiscordClient {
     return this.heartbeat({ status: "online" }, { ...run, stage }, signal);
   }
 
+  async renewRunLease(
+    run: RunIdentity,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    return this.heartbeat({ status: "online" }, run, signal);
+  }
+
   private async heartbeat(
     gateway: GatewayHeartbeat,
-    run?: RunIdentity & { stage: LoopStage },
+    run?: RunIdentity & { stage?: LoopStage },
     signal?: AbortSignal,
   ): Promise<boolean> {
     const result = await this.request(
@@ -461,6 +471,7 @@ export class ConvexDiscordClient {
         runId: input.runId,
         generation: input.generation,
         idempotencyKey: input.idempotencyKey,
+        replyKind: input.replyKind,
         content: input.content,
         replyToMessageId: input.replyToMessageId,
         recheckRequested: input.recheckRequested,

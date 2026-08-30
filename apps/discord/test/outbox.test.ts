@@ -6,7 +6,7 @@ import type {
   CompleteLoopResult,
   RunIdentity,
 } from "../src/convex/client.js";
-import type { LoopStage, OutboxItem } from "../src/contracts.js";
+import type { OutboxItem } from "../src/contracts.js";
 import {
   discordNonce,
   messageOptions,
@@ -23,6 +23,7 @@ function outbox(overrides: Partial<OutboxItem> = {}): OutboxItem {
     channelId: "20",
     runId: "run-1",
     generation: 1,
+    replyKind: "final",
     status: "pending",
     content: "A concise reply.",
     recheckRequested: false,
@@ -44,10 +45,7 @@ class FakeConvex implements ConvexOutboxClient {
     options: CompleteLoopOptions | undefined;
   }> = [];
 
-  async heartbeatRun(
-    _identity: RunIdentity,
-    _stage: LoopStage,
-  ): Promise<boolean> {
+  async renewRunLease(_identity: RunIdentity): Promise<boolean> {
     return true;
   }
 
@@ -153,6 +151,46 @@ describe("OutboxDispatcher", () => {
     expect(client.channels.fetch).not.toHaveBeenCalled();
     expect(channel.send).not.toHaveBeenCalled();
     expect(convex.acknowledgements).toHaveLength(0);
+    expect(convex.completions).toHaveLength(1);
+  });
+
+  it("delivers the acknowledgement before a final reply", async () => {
+    const send = vi.fn()
+      .mockResolvedValueOnce({ id: "998" })
+      .mockResolvedValueOnce({ id: "999" });
+    const channel = {
+      isSendable: () => true,
+      isDMBased: () => false,
+      guildId: "10",
+      send,
+    };
+    const convex = new FakeConvex();
+    const dispatcher = new OutboxDispatcher({
+      client: fakeClient(channel),
+      convex,
+      schedule: vi.fn(),
+    });
+
+    await dispatcher.dispatch([
+      outbox({
+        outboxId: "run-1:reply",
+        replyKind: "final",
+        content: "Final answer.",
+        createdAt: 1,
+      }),
+      outbox({
+        outboxId: "run-1:ack",
+        replyKind: "acknowledgement",
+        content: "I picked this up and will check the market move.",
+        finalizesLoop: false,
+        createdAt: 2,
+      }),
+    ]);
+
+    expect(send.mock.calls.map(([options]) => options.content)).toEqual([
+      "I picked this up and will check the market move.",
+      "Final answer.",
+    ]);
     expect(convex.completions).toHaveLength(1);
   });
 });

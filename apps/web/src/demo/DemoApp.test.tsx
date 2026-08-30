@@ -48,7 +48,7 @@ describe("Project Trishula demo mode", () => {
     expect(screen.getByText(/does not use live market data/i)).toBeVisible();
   });
 
-  it("opens the Discord section and explains missing Railway credentials", () => {
+  it("opens the Discord section with sample server activity", () => {
     render(
       <MemoryRouter initialEntries={["/ask"]}>
         <DemoApp config={config} />
@@ -60,6 +60,10 @@ describe("Project Trishula demo mode", () => {
     expect(
       screen.getByRole("heading", { name: "Channel control" }),
     ).toBeVisible();
-    expect(screen.getByText("Add the bot token in Railway.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Stardust" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Agent activity" }),
+    ).toBeVisible();
+    expect(screen.getByText("Acknowledgment sent")).toBeVisible();
   });
 });

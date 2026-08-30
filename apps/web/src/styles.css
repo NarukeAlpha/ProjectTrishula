@@ -1964,6 +1964,93 @@ summary:focus-visible {
   margin: 0 2px 12px;
 }
 
+.discord-activity {
+  margin-top: 24px;
+  padding: 18px;
+}
+
+.discord-live-indicator {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  color: #baf5d9;
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.discord-live-indicator > span,
+.discord-activity-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.discord-live-indicator > span {
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.discord-activity-empty {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.discord-activity-list {
+  display: grid;
+  gap: 0;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.discord-activity-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 48px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.discord-activity-list li:first-child {
+  border-top: 0;
+}
+
+.discord-activity-list li[data-event="loop_failed"] .discord-activity-dot,
+.discord-activity-list li[data-event="reply_failed"] .discord-activity-dot {
+  background: var(--danger);
+}
+
+.discord-activity-list li > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.discord-activity-list strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discord-activity-list li > div > span,
+.discord-activity-list time {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.discord-activity-list time {
+  white-space: nowrap;
+}
+
 @media (max-width: 520px) {
   .discord-gateway-actions {
     align-items: stretch;
@@ -1981,6 +2068,14 @@ summary:focus-visible {
 
   .discord-server-picker p {
     margin: 0;
+  }
+
+  .discord-activity-list li {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .discord-activity-list time {
+    grid-column: 2;
   }
 }
 

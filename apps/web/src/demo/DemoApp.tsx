@@ -14,8 +14,65 @@ import {
 import { Welcome } from "../features/threads/Welcome";
 
 const demoDiscord: DiscordControlPlaneReadModel = {
-  gateway: { status: "not_configured" },
-  guilds: [],
+  gateway: {
+    status: "online",
+    botUserName: "Trishula",
+    lastHeartbeatAt: Date.now(),
+  },
+  activity: [
+    {
+      eventId: "demo-run:researching",
+      guildId: "demo-stardust",
+      channelId: "demo-testing-bot",
+      runId: "demo-run",
+      eventType: "stage_changed",
+      stage: "researching",
+      createdAt: Date.now() - 4_000,
+    },
+    {
+      eventId: "demo-run:ack:sent",
+      guildId: "demo-stardust",
+      channelId: "demo-testing-bot",
+      runId: "demo-run",
+      eventType: "reply_sent",
+      replyKind: "acknowledgement",
+      createdAt: Date.now() - 7_000,
+    },
+    {
+      eventId: "demo-message:received",
+      guildId: "demo-stardust",
+      channelId: "demo-testing-bot",
+      eventType: "message_received",
+      createdAt: Date.now() - 10_000,
+    },
+  ],
+  guilds: [
+    {
+      guildId: "demo-stardust",
+      name: "Stardust",
+      permissions: {
+        viewChannels: true,
+        sendMessages: true,
+        readMessageHistory: true,
+        messageContent: true,
+      },
+      channels: [
+        {
+          channelId: "demo-testing-bot",
+          name: "testing-bot",
+          type: "text",
+          canView: true,
+          canSend: true,
+          canReadHistory: true,
+          roles: ["conversation_monitor", "reply_target"],
+          loop: {
+            status: "researching",
+            pendingMessageCount: 0,
+          },
+        },
+      ],
+    },
+  ],
 };
 
 function DemoHeader({ onReset }: { onReset: () => void }) {

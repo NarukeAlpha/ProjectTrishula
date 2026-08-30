@@ -1,4 +1,5 @@
 interface LogFields {
+  [key: string]: string | number | boolean | undefined;
   channelId?: string;
   code?: string;
   guildId?: string;

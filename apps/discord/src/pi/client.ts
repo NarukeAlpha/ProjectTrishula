@@ -1,12 +1,16 @@
 import type { DiscordGatewayConfig } from "../config.js";
 import type { ZodType } from "zod";
 import {
+  acknowledgeRequestSchema,
+  acknowledgeResponseSchema,
   replyRequestSchema,
   replyResponseSchema,
   researchRequestSchema,
   researchResponseSchema,
   triageRequestSchema,
   triageResponseSchema,
+  type AcknowledgeRequest,
+  type AcknowledgeResponse,
   type ReplyRequest,
   type ReplyResponse,
   type ResearchRequest,
@@ -15,7 +19,11 @@ import {
   type TriageResponse,
 } from "../contracts.js";
 
-type AgentRequest = TriageRequest | ResearchRequest | ReplyRequest;
+type AgentRequest =
+  | TriageRequest
+  | AcknowledgeRequest
+  | ResearchRequest
+  | ReplyRequest;
 
 export class PiAgentClient {
   private readonly endpoint: string;
@@ -42,6 +50,17 @@ export class PiAgentClient {
     return this.request(
       researchRequestSchema.parse(input),
       researchResponseSchema,
+      signal,
+    );
+  }
+
+  async acknowledge(
+    input: AcknowledgeRequest,
+    signal?: AbortSignal,
+  ): Promise<AcknowledgeResponse> {
+    return this.request(
+      acknowledgeRequestSchema.parse(input),
+      acknowledgeResponseSchema,
       signal,
     );
   }

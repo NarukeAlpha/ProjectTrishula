@@ -53,6 +53,14 @@ export const triageRequestSchema = commonAgentRequestSchema
   })
   .strict();
 
+export const acknowledgeRequestSchema = commonAgentRequestSchema
+  .extend({
+    profile: z.literal("acknowledge"),
+    question: z.string().trim().min(1).max(1_000),
+    reason: z.string().trim().min(1).max(500),
+  })
+  .strict();
+
 export const triageResponseSchema = z
   .object({
     profile: z.literal("triage"),
@@ -147,8 +155,17 @@ export const replyResponseSchema = z
     }
   });
 
+export const acknowledgeResponseSchema = z
+  .object({
+    profile: z.literal("acknowledge"),
+    acknowledgement: z.string().trim().min(1).max(320),
+  })
+  .strict();
+
 export type TriageRequest = z.infer<typeof triageRequestSchema>;
 export type TriageResponse = z.infer<typeof triageResponseSchema>;
+export type AcknowledgeRequest = z.infer<typeof acknowledgeRequestSchema>;
+export type AcknowledgeResponse = z.infer<typeof acknowledgeResponseSchema>;
 export type ResearchRequest = z.infer<typeof researchRequestSchema>;
 export type ResearchResponse = z.infer<typeof researchResponseSchema>;
 export type ReplyRequest = z.infer<typeof replyRequestSchema>;
@@ -254,12 +271,15 @@ export interface RunnableChannel extends ChannelReference {
   updatedAt: number;
 }
 
+export type ReplyKind = "acknowledgement" | "research_log" | "final";
+
 export interface OutboxItem extends ChannelReference {
   outboxId: string;
   sourceGuildId: string;
   sourceChannelId: string;
   runId: string;
   generation: number;
+  replyKind?: ReplyKind | undefined;
   status: "pending" | "sent";
   content: string;
   replyToMessageId?: string | undefined;
@@ -271,4 +291,9 @@ export interface OutboxItem extends ChannelReference {
   createdAt: number;
 }
 
-export type LoopStage = "triaging" | "researching" | "drafting" | "catching_up";
+export type LoopStage =
+  | "triaging"
+  | "acknowledging"
+  | "researching"
+  | "drafting"
+  | "catching_up";

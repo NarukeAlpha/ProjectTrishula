@@ -19,6 +19,7 @@ function controlPlane(
       botUserName: "Trishula#2048",
       lastHeartbeatAt: Date.now(),
     },
+    activity: [],
     guilds: [
       {
         guildId: "guild_1",
@@ -155,6 +156,69 @@ describe("Discord control surface", () => {
     );
   });
 
+  it("shows safe live activity for the selected server", () => {
+    const first = controlPlane().guilds[0];
+    if (!first) throw new Error("The test server is missing.");
+    const model = controlPlane({
+      activity: [
+        {
+          eventId: "run_1:ack:sent",
+          guildId: "guild_1",
+          channelId: "channel_1",
+          runId: "run_1",
+          eventType: "reply_sent",
+          replyKind: "acknowledgement",
+          createdAt: Date.now(),
+        },
+        {
+          eventId: "run_2:researching",
+          guildId: "guild_2",
+          channelId: "channel_2",
+          runId: "run_2",
+          eventType: "stage_changed",
+          stage: "drafting",
+          createdAt: Date.now(),
+        },
+      ],
+      guilds: [
+        first,
+        {
+          guildId: "guild_2",
+          name: "Options Desk",
+          permissions: {
+            viewChannels: true,
+            sendMessages: true,
+            readMessageHistory: true,
+            messageContent: true,
+          },
+          channels: [
+            {
+              channelId: "channel_2",
+              name: "options-chat",
+              type: "text",
+              canView: true,
+              canSend: true,
+              canReadHistory: true,
+              roles: ["conversation_monitor"],
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<DiscordControlView model={model} onSetChannelRoles={vi.fn()} />);
+
+    expect(screen.getByText("Acknowledgment sent")).toBeVisible();
+    expect(screen.queryByText("Writing reply")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Server"), {
+      target: { value: "guild_2" },
+    });
+
+    expect(screen.getByText("Writing reply")).toBeVisible();
+    expect(screen.queryByText("Acknowledgment sent")).not.toBeInTheDocument();
+  });
+
   it("shows a disconnected gateway and blocks roles without permissions", () => {
     const model = controlPlane({
       gateway: { status: "offline" },
@@ -204,7 +268,11 @@ describe("Discord control surface", () => {
     });
     const { container } = render(
       <DiscordControlView
-        model={{ gateway: { status: "not_configured" }, guilds: [] }}
+        model={{
+          gateway: { status: "not_configured" },
+          activity: [],
+          guilds: [],
+        }}
         onSetChannelRoles={vi.fn()}
       />,
     );

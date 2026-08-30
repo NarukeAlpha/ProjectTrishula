@@ -6,6 +6,8 @@ import type {
   RunIdentity,
 } from "../src/convex/client.js";
 import type {
+  AcknowledgeRequest,
+  AcknowledgeResponse,
   AgentMessage,
   ChannelReference,
   ClaimLoopResponse,
@@ -66,6 +68,7 @@ function claimed(
 
 class FakeConvex implements ConvexLoopClient {
   claimCalls = 0;
+  claimMode: "messages" | "recheck" = "messages";
   completeCalls: Array<{
     identity: RunIdentity;
     outcome: "completed" | "error";
@@ -78,7 +81,9 @@ class FakeConvex implements ConvexLoopClient {
     channelReference: ChannelReference,
   ): Promise<ClaimLoopResponse> {
     this.claimCalls += 1;
-    return claimed(channelReference, this.claimCalls);
+    const claim = claimed(channelReference, this.claimCalls);
+    if (claim.claimed) claim.mode = this.claimMode;
+    return claim;
   }
 
   async heartbeatRun(
@@ -117,10 +122,13 @@ class FakeConvex implements ConvexLoopClient {
 }
 
 class FakePi implements PiLoopClient {
+  acknowledgeInput: AcknowledgeRequest | null = null;
   replyInput: ReplyRequest | null = null;
+  calls: Array<"triage" | "acknowledge" | "research" | "reply"> = [];
   shouldRespond = true;
 
   async triage(_input: TriageRequest): Promise<TriageResponse> {
+    this.calls.push("triage");
     return this.shouldRespond
       ? {
           profile: "triage",
@@ -140,7 +148,17 @@ class FakePi implements PiLoopClient {
         };
   }
 
+  async acknowledge(input: AcknowledgeRequest): Promise<AcknowledgeResponse> {
+    this.calls.push("acknowledge");
+    this.acknowledgeInput = input;
+    return {
+      profile: "acknowledge",
+      acknowledgement: "On it, checking now.",
+    };
+  }
+
   async research(_input: ResearchRequest): Promise<ResearchResponse> {
+    this.calls.push("research");
     return {
       profile: "research",
       summary: "The sector moved after an earnings release.",
@@ -165,6 +183,7 @@ class FakePi implements PiLoopClient {
   }
 
   async reply(input: ReplyRequest): Promise<ReplyResponse> {
+    this.calls.push("reply");
     this.replyInput = input;
     return {
       profile: "reply",
@@ -186,30 +205,82 @@ function orchestrator(convex: FakeConvex, pi: FakePi): ChannelLoopOrchestrator {
 }
 
 describe("ChannelLoopOrchestrator", () => {
-  it("uses the newest context and queues research before the final reply", async () => {
+  it("queues acknowledgement, research log, and final reply", async () => {
     const convex = new FakeConvex();
     const pi = new FakePi();
     orchestrator(convex, pi).schedule(channel);
 
-    await vi.waitFor(() => expect(convex.queued).toHaveLength(2));
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(3));
+    expect(pi.acknowledgeInput?.profile).toBe("acknowledge");
+    expect(pi.acknowledgeInput?.question).toBe(
+      "What changed in semiconductors today?",
+    );
+    expect(pi.acknowledgeInput?.reason).toBe(
+      "The channel asked an open market question.",
+    );
     expect(pi.replyInput?.messages).toEqual([newestMessage]);
+    expect(pi.calls).toEqual(["triage", "acknowledge", "research", "reply"]);
+    expect(convex.queued[0]).toMatchObject({
+      targetChannelId: "20",
+      idempotencyKey: "run-1:ack",
+      replyKind: "acknowledgement",
+      finalizesLoop: false,
+      recheckRequested: false,
+      replyToMessageId: "100",
+      content: "On it, checking now.",
+    });
+    expect(convex.queued[1]).toMatchObject({
+      targetChannelId: "30",
+      idempotencyKey: "run-1:research",
+      replyKind: "research_log",
+      finalizesLoop: false,
+      recheckRequested: false,
+    });
+    expect(convex.queued[2]).toMatchObject({
+      targetChannelId: "20",
+      idempotencyKey: "run-1:reply",
+      replyKind: "final",
+      finalizesLoop: true,
+      recheckRequested: true,
+      replyToMessageId: "101",
+    });
     expect(convex.heartbeatStages).toEqual([
       "triaging",
+      "acknowledging",
       "researching",
       "catching_up",
       "drafting",
     ]);
-    expect(convex.queued[0]).toMatchObject({
-      targetChannelId: "30",
-      finalizesLoop: false,
-      recheckRequested: false,
-    });
-    expect(convex.queued[1]).toMatchObject({
-      targetChannelId: "20",
-      replyToMessageId: "101",
-      finalizesLoop: true,
-      recheckRequested: true,
-    });
+    expect(convex.completeCalls).toHaveLength(0);
+  });
+
+  it("does not acknowledge an autonomous recheck", async () => {
+    const convex = new FakeConvex();
+    convex.claimMode = "recheck";
+    const pi = new FakePi();
+    orchestrator(convex, pi).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(2));
+    expect(pi.calls).toEqual(["triage", "research", "reply"]);
+    expect(convex.queued.map((reply) => reply.replyKind)).toEqual([
+      "research_log",
+      "final",
+    ]);
+  });
+
+  it("continues the useful reply if acknowledgement generation fails", async () => {
+    const convex = new FakeConvex();
+    const pi = new FakePi();
+    pi.acknowledge = async () => {
+      throw new Error("Acknowledgement unavailable.");
+    };
+    orchestrator(convex, pi).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(2));
+    expect(convex.queued.map((reply) => reply.replyKind)).toEqual([
+      "research_log",
+      "final",
+    ]);
     expect(convex.completeCalls).toHaveLength(0);
   });
 
@@ -247,7 +318,7 @@ describe("ChannelLoopOrchestrator", () => {
     expect(convex.claimCalls).toBe(1);
     release();
 
-    await vi.waitFor(() => expect(convex.queued).toHaveLength(2));
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(3));
     expect(convex.claimCalls).toBe(1);
   });
 

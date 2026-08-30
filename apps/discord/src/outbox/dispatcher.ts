@@ -6,13 +6,12 @@ import {
   type CompleteLoopResult,
   type RunIdentity,
 } from "../convex/client.js";
-import type { ChannelReference, LoopStage, OutboxItem } from "../contracts.js";
+import type { ChannelReference, OutboxItem } from "../contracts.js";
 import { logger } from "../runtime/logger.js";
 
 export interface ConvexOutboxClient {
-  heartbeatRun(
+  renewRunLease(
     identity: RunIdentity,
-    stage: LoopStage,
     signal?: AbortSignal,
   ): Promise<boolean>;
   acknowledgeReply(
@@ -69,8 +68,12 @@ function runIdentity(item: OutboxItem): RunIdentity {
 }
 
 function priority(item: OutboxItem): number {
-  if (item.status === "sent") return 2;
-  return item.finalizesLoop ? 1 : 0;
+  if (item.status === "sent") return 3;
+  const replyKind = item.replyKind
+    ?? (item.finalizesLoop ? "final" : "research_log");
+  if (replyKind === "acknowledgement") return 0;
+  if (replyKind === "research_log") return 1;
+  return 2;
 }
 
 export class OutboxDispatcher {
@@ -102,10 +105,7 @@ export class OutboxDispatcher {
     }
 
     const identity = runIdentity(item);
-    const active = await this.dependencies.convex.heartbeatRun(
-      identity,
-      "drafting",
-    );
+    const active = await this.dependencies.convex.renewRunLease(identity);
     if (!active) return;
     let sentMessageId: string;
     try {
@@ -151,6 +151,7 @@ export class OutboxDispatcher {
     logger.info("Discord reply delivered.", {
       channelId: item.channelId,
       outboxId: item.outboxId,
+      replyKind: item.replyKind,
     });
     if (item.finalizesLoop) await this.finalize(item);
   }
@@ -173,6 +174,7 @@ export class OutboxDispatcher {
       logger.error("Discord outbox failure could not be recorded.", {
         channelId: item.channelId,
         outboxId: item.outboxId,
+        replyKind: item.replyKind,
         code: "outbox_failure_ack_failed",
       });
     }
