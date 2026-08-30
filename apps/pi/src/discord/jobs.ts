@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import type { Logger } from "../runtime/logger.js";
-import { normalizeExecutionError } from "../runtime/provider-errors.js";
+import { normalizeExecutionError, type ExecutionErrorCode } from "../runtime/provider-errors.js";
 import type { DiscordAgentRequest, DiscordAgentResponse } from "./contracts.js";
+import {
+  DiscordAgentOutputError,
+  type DiscordAgentOutputErrorCode,
+} from "./errors.js";
 import type { DiscordAgentRunner } from "./runner.js";
 
 const DEFAULT_MAX_JOBS = 256;
@@ -10,7 +14,7 @@ const DEFAULT_MAX_RUN_MS = 9 * 60 * 1_000;
 const DEFAULT_TERMINAL_TTL_MS = 15 * 60 * 1_000;
 const MAX_CLEANUP_INTERVAL_MS = 60_000;
 
-type DiscordAgentJobErrorCode = ReturnType<typeof normalizeExecutionError>["code"];
+type DiscordAgentJobErrorCode = ExecutionErrorCode | DiscordAgentOutputErrorCode;
 
 export type DiscordAgentJobStatus =
   | { jobId: string; status: "running" }
@@ -205,9 +209,11 @@ export class DiscordAgentJobRegistry {
       });
     } catch (error) {
       if (this.jobs.get(record.jobId) !== record || record.status !== "running") return;
-      const normalized = normalizeExecutionError(
-        error instanceof Error ? error : new Error("Discord agent job failed."),
-      );
+      const normalized = error instanceof DiscordAgentOutputError
+        ? { code: error.code, retryable: error.retryable }
+        : normalizeExecutionError(
+          error instanceof Error ? error : new Error("Discord agent job failed."),
+        );
       record.status = "failed";
       record.code = normalized.code;
       record.retryable = normalized.retryable;

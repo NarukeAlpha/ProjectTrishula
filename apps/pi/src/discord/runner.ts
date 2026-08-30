@@ -6,12 +6,12 @@ import {
   SettingsManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import type { JsonValue, StopReason } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { z } from "zod";
 import type { ExecutorReadiness } from "../execution/executor.js";
 import type { CodexRuntime } from "../pi/codex-runtime.js";
 import {
-  discordAgentResponseSchema,
   discordAcknowledgeResponseSchema,
   discordReplyResponseSchema,
   discordResearchResponseSchema,
@@ -24,6 +24,10 @@ import {
   type DiscordResearchResponse,
   type DiscordTriageRequest,
 } from "./contracts.js";
+import {
+  DiscordAgentOutputError,
+  type DiscordAgentOutputErrorCode,
+} from "./errors.js";
 import { getPublicMarketData, readPublicPage, searchPublicWeb } from "./public-web.js";
 
 const IN_MEMORY_RUNTIME_CWD = "/tmp";
@@ -104,6 +108,16 @@ Return only one JSON object with this exact shape:
 {"profile":"reply","reply":string,"recheck":boolean,"recheckReason":string|null}
 Do not add markdown or commentary outside the JSON.`;
 
+const outputRepairReasons = {
+  invalid_json: "The previous response was not valid JSON.",
+  invalid_response_schema: "The previous response did not match the required response shape.",
+  unverified_source_url: "The previous response cited a source URL that was not verified.",
+} satisfies Readonly<Record<DiscordAgentOutputErrorCode, string>>;
+
+function outputRepairPrompt(code: DiscordAgentOutputErrorCode): string {
+  return `${outputRepairReasons[code]} Return one corrected JSON object that matches the required response shape. Do not add markdown or commentary. Do not call tools. For research, use only exact HTTPS URLs already present in prior tool results. Omit unsupported claims or list them as uncertainty.`;
+}
+
 function conversationPayload(request: DiscordAgentRequest) {
   return {
     requestId: request.requestId,
@@ -141,30 +155,62 @@ function promptForReply(request: DiscordReplyRequest): string {
   })}`;
 }
 
-function assistantText(session: AgentSession): string {
+export interface DiscordAssistantOutput {
+  stopReason: StopReason;
+  errorMessage?: string;
+  text: string;
+}
+
+export function completedDiscordAssistantText(
+  output: DiscordAssistantOutput,
+  abortReason?: Error,
+): string {
+  if (output.stopReason === "error") {
+    throw new Error(output.errorMessage ?? "The Discord agent provider failed.");
+  }
+  if (output.stopReason === "aborted") {
+    if (abortReason instanceof Error) throw abortReason;
+    throw new Error("The Discord agent run was aborted.");
+  }
+  if (output.stopReason !== "stop" && output.stopReason !== "length") {
+    throw new Error("The Discord agent did not complete its response.");
+  }
+  return output.text;
+}
+
+function assistantText(session: AgentSession, signal?: AbortSignal): string {
   const assistant = [...session.messages].reverse().find((message) => message.role === "assistant");
-  if (!assistant || assistant.role !== "assistant") return "";
-  return assistant.content
+  if (!assistant || assistant.role !== "assistant") {
+    throw new Error("The Discord agent did not produce a response.");
+  }
+  const text = assistant.content
     .filter((content): content is Extract<typeof content, { type: "text" }> => content.type === "text")
     .map((content) => content.text)
     .join("")
     .trim();
+  const output: DiscordAssistantOutput = {
+    stopReason: assistant.stopReason,
+    text,
+  };
+  if (assistant.errorMessage !== undefined) output.errorMessage = assistant.errorMessage;
+  return completedDiscordAssistantText(
+    output,
+    signal?.reason instanceof Error ? signal.reason : undefined,
+  );
 }
 
-const jsonObjectSchema = z.record(z.string(), z.json());
-type JsonObject = z.infer<typeof jsonObjectSchema>;
-
-function parseJsonObject(value: string): JsonObject {
-  return jsonObjectSchema.parse(JSON.parse(value));
+function parseJson(value: string): JsonValue {
+  // SAFETY: JSON.parse returns only JSON-compatible values when it succeeds.
+  return JSON.parse(value) as JsonValue;
 }
 
-function jsonObjectFromText(text: string): JsonObject {
+function jsonValueFromText(text: string): JsonValue {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   try {
-    return parseJsonObject(trimmed);
+    return parseJson(trimmed);
   } catch {
     const start = trimmed.indexOf("{");
-    if (start < 0) throw new Error("The Discord agent did not return JSON.");
+    if (start < 0) throw new DiscordAgentOutputError("invalid_json");
     let depth = 0;
     let inString = false;
     let escaped = false;
@@ -180,19 +226,30 @@ function jsonObjectFromText(text: string): JsonObject {
       else if (character === "{") depth += 1;
       else if (character === "}") {
         depth -= 1;
-        if (depth === 0) return parseJsonObject(trimmed.slice(start, index + 1));
+        if (depth === 0) {
+          try {
+            return parseJson(trimmed.slice(start, index + 1));
+          } catch {
+            throw new DiscordAgentOutputError("invalid_json");
+          }
+        }
       }
     }
-    throw new Error("The Discord agent returned incomplete JSON.");
+    throw new DiscordAgentOutputError("invalid_json");
   }
 }
 
 export function parseDiscordAgentOutput(profile: DiscordAgentRequest["profile"], text: string): DiscordAgentResponse {
-  const value = jsonObjectFromText(text);
-  if (profile === "triage") return discordTriageResponseSchema.parse(value);
-  if (profile === "research") return discordResearchResponseSchema.parse(value);
-  if (profile === "acknowledge") return discordAcknowledgeResponseSchema.parse(value);
-  return discordReplyResponseSchema.parse(value);
+  const value = jsonValueFromText(text);
+  const parsed = profile === "triage"
+    ? discordTriageResponseSchema.safeParse(value)
+    : profile === "research"
+      ? discordResearchResponseSchema.safeParse(value)
+      : profile === "acknowledge"
+        ? discordAcknowledgeResponseSchema.safeParse(value)
+        : discordReplyResponseSchema.safeParse(value);
+  if (!parsed.success) throw new DiscordAgentOutputError("invalid_response_schema");
+  return parsed.data;
 }
 
 function researchTools(evidenceUrls: Set<string>) {
@@ -252,7 +309,7 @@ function verifyResearchUrls(result: DiscordResearchResponse, evidenceUrls: Reado
     ...result.findings.flatMap((finding) => finding.sourceUrls),
   ]);
   for (const url of cited) {
-    if (!evidenceUrls.has(url)) throw new Error(`The research agent returned an unverified source URL: ${url}`);
+    if (!evidenceUrls.has(url)) throw new DiscordAgentOutputError("unverified_source_url");
   }
 }
 
@@ -263,6 +320,42 @@ export function normalizeReplyForLoopDepth(
   return loopDepth >= 2 && result.recheck
     ? discordReplyResponseSchema.parse({ ...result, recheck: false, recheckReason: null })
     : result;
+}
+
+type DiscordAgentGenerationAttempt = "initial" | "repair";
+
+function validateDiscordAgentOutput(
+  request: DiscordAgentRequest,
+  text: string,
+  evidenceUrls: ReadonlySet<string>,
+): DiscordAgentResponse {
+  let result = parseDiscordAgentOutput(request.profile, text);
+  if (result.profile === "research") verifyResearchUrls(result, evidenceUrls);
+  if (result.profile === "reply" && request.profile === "reply" && request.loopDepth >= 2 && result.recheck) {
+    result = normalizeReplyForLoopDepth(result, request.loopDepth);
+  }
+  return result;
+}
+
+export async function generateDiscordAgentOutput(
+  request: DiscordAgentRequest,
+  evidenceUrls: ReadonlySet<string>,
+  generate: (
+    attempt: DiscordAgentGenerationAttempt,
+    failureCode?: DiscordAgentOutputErrorCode,
+  ) => Promise<string>,
+): Promise<DiscordAgentResponse> {
+  const firstText = await generate("initial");
+  let failureCode: DiscordAgentOutputErrorCode;
+  try {
+    return validateDiscordAgentOutput(request, firstText, evidenceUrls);
+  } catch (error) {
+    if (!(error instanceof DiscordAgentOutputError)) throw error;
+    failureCode = error.code;
+  }
+
+  const repairedText = await generate("repair", failureCode);
+  return validateDiscordAgentOutput(request, repairedText, evidenceUrls);
 }
 
 class PiDiscordAgentRunner implements DiscordAgentRunner {
@@ -364,13 +457,15 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
             : request.profile === "acknowledge"
               ? promptForAcknowledge(request)
               : promptForReply(request);
-      await session.prompt(prompt, { expandPromptTemplates: false });
-      let result = parseDiscordAgentOutput(request.profile, assistantText(session));
-      if (result.profile === "research") verifyResearchUrls(result, evidenceUrls);
-      if (result.profile === "reply" && request.profile === "reply" && request.loopDepth >= 2 && result.recheck) {
-        result = normalizeReplyForLoopDepth(result, request.loopDepth);
-      }
-      return discordAgentResponseSchema.parse(result);
+      return await generateDiscordAgentOutput(request, evidenceUrls, async (attempt, failureCode) => {
+        if (attempt === "repair") session.setActiveToolsByName([]);
+        await session.prompt(attempt === "initial"
+          ? prompt
+          : outputRepairPrompt(failureCode ?? "invalid_response_schema"), {
+          expandPromptTemplates: false,
+        });
+        return assistantText(session, signal);
+      });
     } finally {
       signal?.removeEventListener("abort", abort);
       if (session.isStreaming) await session.abort();

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { createApp, type AppRunRegistry } from "../src/app.js";
+import { DiscordAgentOutputError } from "../src/discord/errors.js";
 import { DiscordAgentJobRegistry } from "../src/discord/jobs.js";
 import type { DiscordAgentRunner } from "../src/discord/runner.js";
 import { silentLogger, TestExecutor } from "./helpers.js";
@@ -205,6 +206,39 @@ describe("Discord agent HTTP endpoint", () => {
         retryable: true,
       });
       expect(JSON.stringify(failed.body)).not.toContain("PRIVATE_PROVIDER_OUTPUT");
+    });
+  });
+
+  it("returns a bounded non-retryable output failure from the job API", async () => {
+    const discordAgents = agents();
+    vi.mocked(discordAgents.run).mockRejectedValue(
+      new DiscordAgentOutputError("invalid_response_schema"),
+    );
+    const app = appWithJobs(discordAgents);
+    const body = {
+      requestId: "triage_job_output_failure",
+      profile: "triage" as const,
+      channel: discordChannel,
+      messages: discordMessages,
+    };
+    await request(app)
+      .post("/discord/agents/jobs")
+      .set("authorization", `Bearer ${discordSecret}`)
+      .send(body);
+
+    await vi.waitFor(async () => {
+      const failed = await request(app)
+        .get(`/discord/agents/jobs/${body.requestId}`)
+        .set("authorization", `Bearer ${discordSecret}`);
+      expect(failed.body).toEqual({
+        jobId: body.requestId,
+        status: "failed",
+        code: "invalid_response_schema",
+        retryable: false,
+      });
+      const serialized = JSON.stringify(failed.body);
+      expect(serialized).not.toContain("Zod");
+      expect(serialized).not.toContain("https://");
     });
   });
 

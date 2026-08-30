@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiscordAgentRequest, DiscordAgentResponse } from "../src/discord/contracts.js";
+import { DiscordAgentOutputError } from "../src/discord/errors.js";
 import { DiscordAgentJobRegistry } from "../src/discord/jobs.js";
-import type { DiscordAgentRunner } from "../src/discord/runner.js";
+import { completedDiscordAssistantText, type DiscordAgentRunner } from "../src/discord/runner.js";
 import type { LogDetails, Logger } from "../src/runtime/logger.js";
 import { discordChannel, discordMessages } from "./discord-contracts.test.js";
 import { silentLogger } from "./helpers.js";
@@ -111,9 +112,12 @@ describe("Discord agent job registry", () => {
     const entries: { event: string; details?: LogDetails }[] = [];
     const logger = capturingLogger(entries);
     const discordAgents = runner(async () => {
-      const error = new Error("socket hang up while handling PRIVATE_PROMPT");
-      error.stack = "PRIVATE_STACK";
-      throw error;
+      completedDiscordAssistantText({
+        stopReason: "error",
+        errorMessage: "socket hang up while handling PRIVATE_PROMPT at https://private.example.invalid",
+        text: "PRIVATE_ASSISTANT_TEXT",
+      });
+      return triageResponse;
     });
     const registry = new DiscordAgentJobRegistry({ runner: discordAgents, logger });
     try {
@@ -128,6 +132,35 @@ describe("Discord agent job registry", () => {
       });
       expect(JSON.stringify(entries)).not.toContain("PRIVATE_PROMPT");
       expect(JSON.stringify(entries)).not.toContain("PRIVATE_STACK");
+      expect(JSON.stringify(entries)).not.toContain("PRIVATE_ASSISTANT_TEXT");
+      expect(JSON.stringify(entries)).not.toContain("https://");
+    } finally {
+      await registry.dispose();
+    }
+  });
+
+  it("preserves a terminal output code as non-retryable", async () => {
+    const entries: { event: string; details?: LogDetails }[] = [];
+    const discordAgents = runner(async () => {
+      throw new DiscordAgentOutputError("unverified_source_url");
+    });
+    const registry = new DiscordAgentJobRegistry({
+      runner: discordAgents,
+      logger: capturingLogger(entries),
+    });
+    try {
+      registry.submit(triageRequest);
+      await vi.waitFor(() => {
+        expect(registry.get(triageRequest.requestId)).toEqual({
+          jobId: triageRequest.requestId,
+          status: "failed",
+          code: "unverified_source_url",
+          retryable: false,
+        });
+      });
+      const serialized = JSON.stringify(entries);
+      expect(serialized).not.toContain("https://");
+      expect(serialized).not.toContain("DiscordAgentOutputError");
     } finally {
       await registry.dispose();
     }
