@@ -22,6 +22,8 @@ import {
   discordDuplicateMessageMatches,
   discordMessageIngestDecision,
   discordRecheckDecision,
+  discordReplyKindMatchesFlags,
+  discordReplyTargetAllowsKind,
   discordTrailingContextStart,
   normalizeDiscordChannelRoles,
   pendingDiscordMessageCount,
@@ -37,6 +39,7 @@ import {
 import {
   discordChannelRoleValidator,
   discordChannelTypeValidator,
+  discordReplyKindValidator,
 } from "./schema.js";
 
 const serviceId = v.string();
@@ -75,10 +78,13 @@ const discordMessageValidator = v.object({
 });
 const loopStageValidator = v.union(
   v.literal("triaging"),
+  v.literal("acknowledging"),
   v.literal("researching"),
   v.literal("drafting"),
   v.literal("catching_up"),
 );
+const DISCORD_ACTIVITY_HISTORY_PER_GUILD = 20;
+const DISCORD_ACTIVITY_RETENTION_LIMIT = 500;
 
 type DiscordReader = { db: Pick<QueryCtx["db"], "query"> };
 type DiscordWriter = Pick<MutationCtx, "db">;
@@ -94,6 +100,10 @@ type DiscordGatewayUpdate = Pick<
 type DiscordGuildRecord = Omit<Doc<"discordGuilds">, "_id" | "_creationTime">;
 type DiscordMessageRecord = Omit<Doc<"discordMessages">, "_id" | "_creationTime">;
 type DiscordOutboxRecord = Omit<Doc<"discordOutbox">, "_id" | "_creationTime">;
+type DiscordActivityRecord = Omit<
+  Doc<"discordActivityEvents">,
+  "_id" | "_creationTime" | "ownerId" | "createdAt"
+>;
 
 interface RunnableOutboxReply {
   reply: Doc<"discordOutbox">;
@@ -106,6 +116,17 @@ interface DiscordGatewayView {
   lastHeartbeatAt: number;
   botUserName?: string;
   error?: string;
+}
+
+interface DiscordActivityView {
+  eventId: string;
+  guildId: string;
+  channelId: string;
+  runId?: string;
+  eventType: Doc<"discordActivityEvents">["eventType"];
+  stage?: Doc<"discordActivityEvents">["stage"];
+  replyKind?: Doc<"discordActivityEvents">["replyKind"];
+  createdAt: number;
 }
 
 interface MonitoredChannelCursor {
@@ -180,6 +201,34 @@ function requireReplyContent(value: string): string {
   const normalized = value.trim();
   if (!normalized || normalized.length > 2_000) throw new Error("Discord reply content is invalid.");
   return normalized;
+}
+
+async function recordActivity(
+  ctx: DiscordWriter,
+  ownerId: string,
+  event: DiscordActivityRecord,
+  now: number,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("discordActivityEvents")
+    .withIndex("by_owner_event", (index) => index
+      .eq("ownerId", ownerId)
+      .eq("eventId", event.eventId))
+    .unique();
+  if (existing) return;
+  await ctx.db.insert("discordActivityEvents", {
+    ownerId,
+    ...event,
+    createdAt: now,
+  });
+  const retained = await ctx.db
+    .query("discordActivityEvents")
+    .withIndex("by_owner_createdAt", (index) => index.eq("ownerId", ownerId))
+    .order("desc")
+    .take(DISCORD_ACTIVITY_RETENTION_LIMIT + 25);
+  for (const stale of retained.slice(DISCORD_ACTIVITY_RETENTION_LIMIT)) {
+    await ctx.db.delete(stale._id);
+  }
 }
 
 async function discordChannel(
@@ -343,6 +392,20 @@ function publicGateway(
   return result;
 }
 
+function publicActivity(event: Doc<"discordActivityEvents">): DiscordActivityView {
+  const result: DiscordActivityView = {
+    eventId: event.eventId,
+    guildId: event.guildId,
+    channelId: event.channelId,
+    eventType: event.eventType,
+    createdAt: event.createdAt,
+  };
+  if (event.runId !== undefined) result.runId = event.runId;
+  if (event.stage !== undefined) result.stage = event.stage;
+  if (event.replyKind !== undefined) result.replyKind = event.replyKind;
+  return result;
+}
+
 export const getControlPlane = query({
   args: {},
   handler: async (ctx) => {
@@ -358,9 +421,19 @@ export const getControlPlane = query({
         .eq("ownerId", actor.id)
         .eq("available", true))
       .collect();
+    const activity = (await Promise.all(guilds.map((guild) => ctx.db
+      .query("discordActivityEvents")
+      .withIndex("by_owner_guild_createdAt", (index) => index
+        .eq("ownerId", actor.id)
+        .eq("guildId", guild.guildId))
+      .order("desc")
+      .take(DISCORD_ACTIVITY_HISTORY_PER_GUILD))))
+      .flat()
+      .sort((left, right) => right.createdAt - left.createdAt);
 
     return {
       gateway: publicGateway(gateway, now),
+      activity: activity.map(publicActivity),
       guilds: await Promise.all(guilds.map(async (guild) => {
         const channels = await ctx.db
           .query("discordChannels")
@@ -708,6 +781,14 @@ export const ingestMessage = internalMutation({
       lastError: !args.isBot && !running ? undefined : state.lastError,
       updatedAt: now,
     });
+    if (!args.isBot) {
+      await recordActivity(ctx, ownerId, {
+        eventId: `message:${messageId}:received`,
+        guildId,
+        channelId,
+        eventType: "message_received",
+      }, now);
+    }
     return {
       accepted: true as const,
       duplicate: false,
@@ -866,6 +947,14 @@ export const claimLoop = internalMutation({
       lastError: undefined,
       updatedAt: now,
     });
+    await recordActivity(ctx, ownerId, {
+      eventId: `${runId}:started`,
+      guildId,
+      channelId,
+      runId,
+      eventType: "loop_started",
+      stage: "triaging",
+    }, now);
     return {
       claimed: true as const,
       idempotent: false,
@@ -921,7 +1010,7 @@ export const heartbeat = internalMutation({
       channelId: serviceId,
       runId: serviceId,
       generation: v.number(),
-      stage: loopStageValidator,
+      stage: v.optional(loopStageValidator),
     })),
   },
   handler: async (ctx, args) => {
@@ -956,16 +1045,32 @@ export const heartbeat = internalMutation({
       .unique();
     if (!run) return { gatewayAccepted: true, loopAccepted: false as const, reason: "run_not_found" as const };
     const leaseExpiresAt = now + DISCORD_LOOP_LEASE_MS;
-    await ctx.db.patch(state._id, {
-      status: args.run.stage,
-      leaseExpiresAt,
-      updatedAt: now,
-    });
-    await ctx.db.patch(run._id, {
-      status: args.run.stage,
-      leaseExpiresAt,
-      updatedAt: now,
-    });
+    const nextStatus = args.run.stage;
+    if (nextStatus === undefined) {
+      await ctx.db.patch(state._id, { leaseExpiresAt, updatedAt: now });
+      await ctx.db.patch(run._id, { leaseExpiresAt, updatedAt: now });
+    } else {
+      await ctx.db.patch(state._id, {
+        status: nextStatus,
+        leaseExpiresAt,
+        updatedAt: now,
+      });
+      await ctx.db.patch(run._id, {
+        status: nextStatus,
+        leaseExpiresAt,
+        updatedAt: now,
+      });
+    }
+    if (nextStatus !== undefined && run.status !== nextStatus) {
+      await recordActivity(ctx, ownerId, {
+        eventId: `${runId}:stage:${nextStatus}`,
+        guildId: state.guildId,
+        channelId,
+        runId,
+        eventType: "stage_changed",
+        stage: nextStatus,
+      }, now);
+    }
     return { gatewayAccepted: true, loopAccepted: true as const, leaseExpiresAt };
   },
 });
@@ -1031,6 +1136,13 @@ export const completeLoop = internalMutation({
         updatedAt: now,
       });
       await invalidateRunOutbox(ctx, ownerId, runId, error, now);
+      await recordActivity(ctx, ownerId, {
+        eventId: `${runId}:failed`,
+        guildId: state.guildId,
+        channelId,
+        runId,
+        eventType: "loop_failed",
+      }, now);
       return {
         accepted: true as const,
         status: "error" as const,
@@ -1085,6 +1197,13 @@ export const completeLoop = internalMutation({
         await ctx.db.patch(reply._id, { status: "finalized", updatedAt: now });
       }
     }
+    await recordActivity(ctx, ownerId, {
+      eventId: `${runId}:completed`,
+      guildId: state.guildId,
+      channelId,
+      runId,
+      eventType: "loop_completed",
+    }, now);
     return {
       accepted: true as const,
       status: nextState,
@@ -1107,6 +1226,7 @@ export const enqueueReply = internalMutation({
     runId: serviceId,
     generation: v.number(),
     idempotencyKey: serviceId,
+    replyKind: v.optional(discordReplyKindValidator),
     content: v.string(),
     replyToMessageId: v.optional(serviceId),
     recheckRequested: v.boolean(),
@@ -1119,6 +1239,8 @@ export const enqueueReply = internalMutation({
     const channelId = requireDiscordId(args.channelId, "channelId");
     const runId = requireDiscordId(args.runId, "runId");
     const idempotencyKey = requireDiscordId(args.idempotencyKey, "idempotencyKey");
+    const replyKind = args.replyKind
+      ?? (args.finalizesLoop ? "final" as const : "research_log" as const);
     const content = requireReplyContent(args.content);
     const sourceState = await discordChannelState(ctx, ownerId, sourceChannelId);
     if (!sourceState || !isCurrentDiscordGeneration(sourceState, runId, args.generation)) {
@@ -1134,12 +1256,17 @@ export const enqueueReply = internalMutation({
     if (!target?.available || !target.canSend) {
       return { accepted: false as const, reason: "invalid_reply_target" as const };
     }
-    const validTargetRole = args.finalizesLoop
-      ? hasRole(target, "reply_target") || channelId === sourceChannelId
-      : hasRole(target, "research_log");
+    const validTargetRole = discordReplyTargetAllowsKind(
+      replyKind,
+      sourceChannelId,
+      target,
+    );
     if (!validTargetRole) return { accepted: false as const, reason: "invalid_reply_target" as const };
-    if (!args.finalizesLoop && args.recheckRequested) {
-      return { accepted: false as const, reason: "research_log_cannot_recheck" as const };
+    if ((replyKind === "final") !== args.finalizesLoop) {
+      return { accepted: false as const, reason: "invalid_reply_kind" as const };
+    }
+    if (!discordReplyKindMatchesFlags(replyKind, args.finalizesLoop, args.recheckRequested)) {
+      return { accepted: false as const, reason: "non_final_reply_cannot_recheck" as const };
     }
     const existing = await ctx.db
       .query("discordOutbox")
@@ -1148,11 +1275,14 @@ export const enqueueReply = internalMutation({
         .eq("idempotencyKey", idempotencyKey))
       .unique();
     if (existing) {
+      const existingReplyKind = existing.replyKind
+        ?? (existing.finalizesLoop ? "final" : "research_log");
       const same = existing.sourceChannelId === sourceChannelId
         && existing.guildId === guildId
         && existing.channelId === channelId
         && existing.runId === runId
         && existing.generation === args.generation
+        && existingReplyKind === replyKind
         && existing.content === content
         && existing.recheckRequested === args.recheckRequested
         && existing.finalizesLoop === args.finalizesLoop
@@ -1186,6 +1316,7 @@ export const enqueueReply = internalMutation({
       idempotencyKey,
       runId,
       generation: args.generation,
+      replyKind,
       content,
       recheckRequested: args.recheckRequested,
       finalizesLoop: args.finalizesLoop,
@@ -1196,6 +1327,14 @@ export const enqueueReply = internalMutation({
     };
     if (args.replyToMessageId !== undefined) outboxRecord.replyToMessageId = args.replyToMessageId;
     await ctx.db.insert("discordOutbox", outboxRecord);
+    await recordActivity(ctx, ownerId, {
+      eventId: `${outboxId}:queued`,
+      guildId,
+      channelId: sourceChannelId,
+      runId,
+      eventType: "reply_queued",
+      replyKind,
+    }, now);
     return {
       accepted: true as const,
       duplicate: false,
@@ -1311,6 +1450,15 @@ export const acknowledgeReply = internalMutation({
         updatedAt: now,
       });
       await ingestAcknowledgedBotReply(ctx, outbox, discordMessageId, now);
+      await recordActivity(ctx, ownerId, {
+        eventId: `${outbox.outboxId}:sent`,
+        guildId: outbox.sourceGuildId,
+        channelId: outbox.sourceChannelId,
+        runId: outbox.runId,
+        eventType: "reply_sent",
+        replyKind: outbox.replyKind
+          ?? (outbox.finalizesLoop ? "final" : "research_log"),
+      }, now);
       return { accepted: true as const, duplicate: false, status: "sent" as const };
     }
 
@@ -1336,6 +1484,15 @@ export const acknowledgeReply = internalMutation({
       deliveryLeaseExpiresAt: undefined,
       updatedAt: now,
     });
+    await recordActivity(ctx, ownerId, {
+      eventId: `${outbox.outboxId}:failed:${attempts}`,
+      guildId: outbox.sourceGuildId,
+      channelId: outbox.sourceChannelId,
+      runId: outbox.runId,
+      eventType: "reply_failed",
+      replyKind: outbox.replyKind
+        ?? (outbox.finalizesLoop ? "final" : "research_log"),
+    }, now);
     return { accepted: true as const, duplicate: false, status, attempts };
   },
 });

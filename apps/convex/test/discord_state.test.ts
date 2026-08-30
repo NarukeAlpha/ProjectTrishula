@@ -8,6 +8,8 @@ import {
   discordDuplicateMessageMatches,
   discordMessageIngestDecision,
   discordRecheckDecision,
+  discordReplyKindMatchesFlags,
+  discordReplyTargetAllowsKind,
   discordTrailingContextStart,
   hasPendingDiscordReply,
   hasSentDiscordFinalizer,
@@ -219,5 +221,31 @@ describe("Discord durable loop state", () => {
     expect(resolveDiscordChannelRouting("source", [
       { channelId: "source", canSend: true, roles: ["conversation_monitor"] },
     ])).toEqual({ replyChannelId: "source" });
+  });
+
+  it("routes acknowledgements to the reply channel and research notes to the log", () => {
+    const source = {
+      channelId: "source",
+      canSend: true,
+      roles: ["conversation_monitor"] as const,
+    };
+    const replyTarget = {
+      channelId: "replies",
+      canSend: true,
+      roles: ["reply_target"] as const,
+    };
+    const researchLog = {
+      channelId: "research",
+      canSend: true,
+      roles: ["research_log"] as const,
+    };
+
+    expect(discordReplyTargetAllowsKind("acknowledgement", "source", source)).toBe(true);
+    expect(discordReplyTargetAllowsKind("acknowledgement", "source", replyTarget)).toBe(true);
+    expect(discordReplyTargetAllowsKind("acknowledgement", "source", researchLog)).toBe(false);
+    expect(discordReplyTargetAllowsKind("research_log", "source", researchLog)).toBe(true);
+    expect(discordReplyKindMatchesFlags("final", true, true)).toBe(true);
+    expect(discordReplyKindMatchesFlags("acknowledgement", false, false)).toBe(true);
+    expect(discordReplyKindMatchesFlags("acknowledgement", false, true)).toBe(false);
   });
 });

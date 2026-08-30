@@ -13,6 +13,7 @@ export const DISCORD_CHANNEL_ROLES = [
 
 export type DiscordChannelRole = (typeof DISCORD_CHANNEL_ROLES)[number];
 export type DiscordLoopMode = "messages" | "recheck";
+export type DiscordReplyKind = "acknowledgement" | "research_log" | "final";
 
 export interface DiscordMessageContext {
   messageId: string;
@@ -73,6 +74,25 @@ export interface DiscordRoutingChannel {
   channelId: string;
   canSend: boolean;
   roles: readonly DiscordChannelRole[];
+}
+
+export function discordReplyTargetAllowsKind(
+  replyKind: DiscordReplyKind,
+  sourceChannelId: string,
+  target: DiscordRoutingChannel,
+): boolean {
+  if (!target.canSend) return false;
+  if (replyKind === "research_log") return target.roles.includes("research_log");
+  return target.channelId === sourceChannelId || target.roles.includes("reply_target");
+}
+
+export function discordReplyKindMatchesFlags(
+  replyKind: DiscordReplyKind,
+  finalizesLoop: boolean,
+  recheckRequested: boolean,
+): boolean {
+  return (replyKind === "final") === finalizesLoop
+    && (replyKind === "final" || !recheckRequested);
 }
 
 export interface DiscordChannelRouting {

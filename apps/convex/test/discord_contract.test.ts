@@ -34,4 +34,49 @@ describe("Discord gateway HTTP contract", () => {
       discordMessageId: "123",
     }).success).toBe(false);
   });
+
+  it("accepts an explicit acknowledgement reply kind", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "enqueueReply",
+      actorId: "user_01HWORKOSALLOWED",
+      sourceChannelId: "123",
+      guildId: "456",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      idempotencyKey: "run_1:ack",
+      replyKind: "acknowledgement",
+      content: "I picked this up and will check the market move.",
+      recheckRequested: false,
+      finalizesLoop: false,
+    }).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "enqueueReply",
+      actorId: "user_01HWORKOSALLOWED",
+      sourceChannelId: "123",
+      guildId: "456",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      idempotencyKey: "run_1:ack",
+      replyKind: "status_update",
+      content: "Working on it.",
+      recheckRequested: false,
+      finalizesLoop: false,
+    }).success).toBe(false);
+  });
+
+  it("allows an outbox worker to renew a lease without changing the stage", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "heartbeat",
+      actorId: "user_01HWORKOSALLOWED",
+      instanceId: "discord_1",
+      status: "online",
+      run: {
+        channelId: "123",
+        runId: "run_1",
+        generation: 1,
+      },
+    }).success).toBe(true);
+  });
 });

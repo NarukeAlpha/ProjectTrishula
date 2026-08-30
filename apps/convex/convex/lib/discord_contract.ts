@@ -101,7 +101,13 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
       channelId: id,
       runId: id,
       generation: z.number().int().positive(),
-      stage: z.enum(["triaging", "researching", "drafting", "catching_up"]),
+      stage: z.enum([
+        "triaging",
+        "acknowledging",
+        "researching",
+        "drafting",
+        "catching_up",
+      ]).optional(),
     }).strict().optional(),
   }).strict(),
   z.object({
@@ -119,6 +125,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     runId: id,
     generation: z.number().int().positive(),
     idempotencyKey: id,
+    replyKind: z.enum(["acknowledgement", "research_log", "final"]).optional(),
     content: z.string().trim().min(1).max(2_000),
     replyToMessageId: id.optional(),
     recheckRequested: z.boolean(),

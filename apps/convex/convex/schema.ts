@@ -75,10 +75,28 @@ export const discordChannelTypeValidator = v.union(
 export const discordLoopStatusValidator = v.union(
   v.literal("idle"),
   v.literal("triaging"),
+  v.literal("acknowledging"),
   v.literal("researching"),
   v.literal("drafting"),
   v.literal("catching_up"),
   v.literal("error"),
+);
+
+export const discordReplyKindValidator = v.union(
+  v.literal("acknowledgement"),
+  v.literal("research_log"),
+  v.literal("final"),
+);
+
+export const discordActivityEventTypeValidator = v.union(
+  v.literal("message_received"),
+  v.literal("loop_started"),
+  v.literal("stage_changed"),
+  v.literal("reply_queued"),
+  v.literal("reply_sent"),
+  v.literal("reply_failed"),
+  v.literal("loop_completed"),
+  v.literal("loop_failed"),
 );
 
 export const positionValidator = v.object({
@@ -461,6 +479,7 @@ export default defineSchema({
     mode: v.union(v.literal("messages"), v.literal("recheck")),
     status: v.union(
       v.literal("triaging"),
+      v.literal("acknowledging"),
       v.literal("researching"),
       v.literal("drafting"),
       v.literal("catching_up"),
@@ -493,6 +512,7 @@ export default defineSchema({
     idempotencyKey: v.string(),
     runId: v.string(),
     generation: v.number(),
+    replyKind: v.optional(discordReplyKindValidator),
     content: v.string(),
     replyToMessageId: v.optional(v.string()),
     recheckRequested: v.boolean(),
@@ -517,5 +537,20 @@ export default defineSchema({
     .index("by_owner_idempotency", ["ownerId", "idempotencyKey"])
     .index("by_owner_status_createdAt", ["ownerId", "status", "createdAt"])
     .index("by_owner_run", ["ownerId", "runId"]),
+
+  discordActivityEvents: defineTable({
+    ownerId: v.string(),
+    eventId: v.string(),
+    guildId: v.string(),
+    channelId: v.string(),
+    runId: v.optional(v.string()),
+    eventType: discordActivityEventTypeValidator,
+    stage: v.optional(discordLoopStatusValidator),
+    replyKind: v.optional(discordReplyKindValidator),
+    createdAt: v.number(),
+  })
+    .index("by_owner_event", ["ownerId", "eventId"])
+    .index("by_owner_createdAt", ["ownerId", "createdAt"])
+    .index("by_owner_guild_createdAt", ["ownerId", "guildId", "createdAt"]),
 
 });
