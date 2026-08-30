@@ -52,6 +52,13 @@ export const discordResearchRequestSchema = z.object({
   question: z.string().trim().min(1).max(1_000),
 }).strict();
 
+export const discordAcknowledgeRequestSchema = z.object({
+  ...commonRequest,
+  profile: z.literal("acknowledge"),
+  question: z.string().trim().min(1).max(1_000),
+  reason: z.string().trim().min(1).max(500),
+}).strict();
+
 export const discordResearchFindingSchema = z.object({
   claim: z.string().trim().min(1).max(1_500),
   sourceUrls: z.array(httpsUrl).max(5),
@@ -85,6 +92,11 @@ export const discordReplyRequestSchema = z.object({
   loopDepth: z.number().int().min(0).max(3),
 }).strict();
 
+export const discordAcknowledgeResponseSchema = z.object({
+  profile: z.literal("acknowledge"),
+  acknowledgement: z.string().trim().min(1).max(320),
+}).strict();
+
 export const discordReplyResponseSchema = z.object({
   profile: z.literal("reply"),
   reply: z.string().trim().min(1).max(1_200),
@@ -99,12 +111,14 @@ export const discordReplyResponseSchema = z.object({
 export const discordAgentRequestSchema = z.discriminatedUnion("profile", [
   discordTriageRequestSchema,
   discordResearchRequestSchema,
+  discordAcknowledgeRequestSchema,
   discordReplyRequestSchema,
 ]);
 
 export const discordAgentResponseSchema = z.discriminatedUnion("profile", [
   discordTriageResponseSchema,
   discordResearchResponseSchema,
+  discordAcknowledgeResponseSchema,
   discordReplyResponseSchema,
 ]);
 
@@ -116,3 +130,5 @@ export type DiscordResearchRequest = z.infer<typeof discordResearchRequestSchema
 export type DiscordResearchResponse = z.infer<typeof discordResearchResponseSchema>;
 export type DiscordReplyRequest = z.infer<typeof discordReplyRequestSchema>;
 export type DiscordReplyResponse = z.infer<typeof discordReplyResponseSchema>;
+export type DiscordAcknowledgeRequest = z.infer<typeof discordAcknowledgeRequestSchema>;
+export type DiscordAcknowledgeResponse = z.infer<typeof discordAcknowledgeResponseSchema>;

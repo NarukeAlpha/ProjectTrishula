@@ -14,6 +14,12 @@ describe("Discord Pi agent profiles", () => {
         serviceTier: "priority",
         toolNames: [],
       },
+      acknowledge: {
+        modelId: "gpt-5.6-luna",
+        thinkingLevel: "xhigh",
+        serviceTier: "priority",
+        toolNames: [],
+      },
       research: {
         modelId: "gpt-5.6-sol",
         thinkingLevel: "xhigh",
@@ -33,6 +39,12 @@ describe("Discord Pi agent profiles", () => {
     expect(parseDiscordAgentOutput("triage", `\`\`\`json
       {"profile":"triage","shouldRespond":true,"shouldResearch":true,"question":"Why did AMD move today?","reason":"Time-sensitive asset question.","confidence":0.94}
     \`\`\``)).toMatchObject({ profile: "triage", shouldResearch: true });
+  });
+
+  it("parses a fenced structured acknowledgement response", () => {
+    expect(parseDiscordAgentOutput("acknowledge", `\`\`\`json
+      {"profile":"acknowledge","acknowledgement":"I picked this up and will check the market move."}
+    \`\`\``)).toMatchObject({ profile: "acknowledge" });
   });
 
   it("stops recursive rechecks after two passes", () => {

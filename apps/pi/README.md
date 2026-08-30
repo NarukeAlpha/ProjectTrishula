@@ -27,13 +27,14 @@ generic MCP proxy and never returns credentials or OAuth tokens.
 
 ## Discord agent profiles
 
-The Discord gateway calls `POST /discord/agents/run` with one of three
+The Discord gateway calls `POST /discord/agents/run` with one of four
 profiles. Shared Zod request and response contracts are in
 `src/discord/contracts.ts`.
 
 | Profile | Model | Reasoning | Tools |
 | --- | --- | --- | --- |
 | `triage` | `gpt-5.6-luna` | `xhigh` | None |
+| `acknowledge` | `gpt-5.6-luna` | `xhigh` | None |
 | `research` | `gpt-5.6-sol` | `xhigh` | Public web search, public HTTPS fetch, and public market data |
 | `reply` | `gpt-5.6-luna` | `xhigh` | None |
 
@@ -53,6 +54,11 @@ project's humanizer rules: plain wording, no chatbot filler, no inflated
 claims, no forced groups of three, no em dashes, no emojis, and no canned
 conclusion. A reply can request a fresh review only for a new factual question
 or meaningful contraposition. Pi stops recursive rechecks after two passes.
+
+The acknowledgement profile returns one natural sentence of at most 320
+characters. It confirms that the question was picked up and says what will be
+checked next. It does not answer the question, promise a timeframe, or use
+filler, praise, em dashes, or emojis.
 
 ## Codex authentication
 
