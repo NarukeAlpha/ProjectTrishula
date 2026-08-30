@@ -15,11 +15,6 @@ for command_name in railway jq openssl; do
   }
 done
 
-railway link \
-  --project "$PROJECT_ID" \
-  --environment "$ENVIRONMENT" \
-  --json >/dev/null
-
 services_json="$(railway service list --project "$PROJECT_ID" --environment "$ENVIRONMENT" --json)"
 
 service_id() {
@@ -168,19 +163,22 @@ railway variable set \
   --skip-deploys \
   'PUBLIC_APPLICATION_NAME=Project Trishula' >/dev/null
 
-configure_service web "$web_id" /apps/web '["/apps/web/**"]' Dockerfile /healthz 30 3
-configure_service pi "$pi_id" /apps/pi '["/apps/pi/**"]' Dockerfile /health 30 5
-configure_service discord "$discord_id" /apps/discord '["/apps/discord/**"]' Dockerfile /health 120 10
-configure_service convex-backend "$backend_id" /infra/railway/convex-backend '["/infra/railway/convex-backend/**"]' Dockerfile /version 300 10
-configure_service convex-dashboard "$dashboard_id" /infra/railway/convex-dashboard '["/infra/railway/convex-dashboard/**"]' Dockerfile '' '' 5
-configure_service convex-functions "$functions_id" / '["/apps/convex/**","/infra/railway/convex-functions/**"]' infra/railway/convex-functions/Dockerfile /health 300 3
-
 connect_source web "$web_id"
 connect_source pi "$pi_id"
 connect_source discord "$discord_id"
 connect_source convex-backend "$backend_id"
 connect_source convex-dashboard "$dashboard_id"
 connect_source convex-functions "$functions_id"
+
+# Railway source connection can reset build detection to Railpack. Apply the
+# explicit Dockerfile settings after source connection so the committed service
+# configuration wins and starts a correctly configured deployment.
+configure_service web "$web_id" /apps/web '["/apps/web/**"]' Dockerfile /healthz 30 3
+configure_service pi "$pi_id" /apps/pi '["/apps/pi/**"]' Dockerfile /health 30 5
+configure_service discord "$discord_id" /apps/discord '["/apps/discord/**"]' Dockerfile /health 120 10
+configure_service convex-backend "$backend_id" /infra/railway/convex-backend '["/infra/railway/convex-backend/**"]' Dockerfile /version 300 10
+configure_service convex-dashboard "$dashboard_id" /infra/railway/convex-dashboard '["/infra/railway/convex-dashboard/**"]' Dockerfile '' '' 5
+configure_service convex-functions "$functions_id" / '["/apps/convex/**","/infra/railway/convex-functions/**"]' infra/railway/convex-functions/Dockerfile /health 300 3
 
 printf 'Connected Project Trishula GitHub sources for web, Pi, Discord, Convex backend, dashboard, and functions.\n'
 printf 'Add DISCORD_BOT_TOKEN to the Discord service in Railway to start the gateway.\n'

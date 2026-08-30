@@ -75,17 +75,21 @@ grep -Fq 'DISCORD_GATEWAY_SHARED_SECRET=${{convex-backend.DISCORD_GATEWAY_SHARED
 }
 
 first_source_connection="$({ grep -n '^connect_source ' "$SCRIPT_DIR/connect-github.sh" || true; } | head -n 1 | cut -d: -f1)"
+last_source_connection="$({ grep -n '^connect_source ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
 last_service_creation="$({ grep -n '^ensure_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
 last_variable_configuration="$({ grep -n '^railway variable set ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
+first_service_configuration="$({ grep -n '^configure_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | head -n 1 | cut -d: -f1)"
 last_service_configuration="$({ grep -n '^configure_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
 if [ -z "$first_source_connection" ] \
+  || [ -z "$last_source_connection" ] \
   || [ -z "$last_service_creation" ] \
   || [ -z "$last_variable_configuration" ] \
+  || [ -z "$first_service_configuration" ] \
   || [ -z "$last_service_configuration" ] \
   || [ "$last_service_creation" -ge "$last_variable_configuration" ] \
   || [ "$first_source_connection" -le "$last_variable_configuration" ] \
-  || [ "$first_source_connection" -le "$last_service_configuration" ]; then
-  printf 'GitHub sources must connect after service variables and settings are configured.\n' >&2
+  || [ "$first_service_configuration" -le "$last_source_connection" ]; then
+  printf 'GitHub sources must connect after variables and before final service settings.\n' >&2
   exit 1
 fi
 
