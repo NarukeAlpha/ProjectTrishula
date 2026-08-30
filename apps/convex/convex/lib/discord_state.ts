@@ -45,6 +45,16 @@ export interface DiscordFinalizationCandidate {
   finalizesLoop: boolean;
 }
 
+export interface DiscordAcknowledgementCandidate {
+  sourceChannelId: string;
+  guildId: string;
+  channelId: string;
+  replyKind?: DiscordReplyKind;
+  finalizesLoop: boolean;
+  status: "pending" | "sent" | "finalized" | "failed";
+  replyToMessageId?: string;
+}
+
 export interface DiscordLoopStateSnapshot {
   generation: number;
   latestSequence: number;
@@ -262,6 +272,23 @@ export function hasPendingDiscordReply(
     && reply.status === "pending");
 }
 
+export function isDeliveredDiscordAcknowledgement(
+  reply: DiscordAcknowledgementCandidate,
+  sourceChannelId: string,
+  guildId: string,
+  channelId: string,
+  replyToMessageId?: string,
+): boolean {
+  const replyKind = reply.replyKind
+    ?? (reply.finalizesLoop ? "final" : "research_log");
+  return replyKind === "acknowledgement"
+    && (reply.status === "sent" || reply.status === "finalized")
+    && reply.sourceChannelId === sourceChannelId
+    && reply.guildId === guildId
+    && reply.channelId === channelId
+    && reply.replyToMessageId === replyToMessageId;
+}
+
 export function discordClaimDecision(
   state: DiscordLoopStateSnapshot,
   now: number,
@@ -291,6 +318,14 @@ export function discordLoopErrorRetryReady(
     && state.triggerThroughSequence > state.completedThroughSequence
     && attempts < DISCORD_MAX_LOOP_ERROR_ATTEMPTS
     && state.updatedAt + DISCORD_LOOP_ERROR_RETRY_DELAY_MS <= now;
+}
+
+export function discordNextLoopErrorCount(
+  current: number | undefined,
+  retryable: boolean,
+): number {
+  if (!retryable) return DISCORD_MAX_LOOP_ERROR_ATTEMPTS;
+  return Math.min(DISCORD_MAX_LOOP_ERROR_ATTEMPTS, (current ?? 0) + 1);
 }
 
 export function isCurrentDiscordGeneration(

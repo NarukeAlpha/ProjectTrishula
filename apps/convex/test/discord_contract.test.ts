@@ -79,4 +79,17 @@ describe("Discord gateway HTTP contract", () => {
       },
     }).success).toBe(true);
   });
+
+  it("accepts retry classification when the gateway completes a failed loop", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "completeLoop",
+      actorId: "user_01HWORKOSALLOWED",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      outcome: "error",
+      error: "Pi research failed: provider_network.",
+      retryable: true,
+    }).success).toBe(true);
+  });
 });

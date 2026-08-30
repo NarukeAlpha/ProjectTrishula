@@ -87,6 +87,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     outcome: z.enum(["completed", "error"]),
     recheckRequested: z.boolean().optional(),
     error: z.string().trim().min(1).max(1_000).optional(),
+    retryable: z.boolean().optional(),
   }).strict(),
   z.object({
     operation: z.literal("heartbeat"),

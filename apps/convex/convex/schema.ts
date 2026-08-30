@@ -537,6 +537,7 @@ export default defineSchema({
     .index("by_owner_outbox", ["ownerId", "outboxId"])
     .index("by_owner_idempotency", ["ownerId", "idempotencyKey"])
     .index("by_owner_status_createdAt", ["ownerId", "status", "createdAt"])
+    .index("by_owner_source_reply", ["ownerId", "sourceChannelId", "replyToMessageId"])
     .index("by_owner_run", ["ownerId", "runId"]),
 
   discordActivityEvents: defineTable({

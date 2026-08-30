@@ -10,12 +10,14 @@ import {
   discordDuplicateMessageMatches,
   discordMessageIngestDecision,
   discordLoopErrorRetryReady,
+  discordNextLoopErrorCount,
   discordRecheckDecision,
   discordReplyKindMatchesFlags,
   discordReplyTargetAllowsKind,
   discordTrailingContextStart,
   hasPendingDiscordReply,
   hasSentDiscordFinalizer,
+  isDeliveredDiscordAcknowledgement,
   isCurrentDiscordGeneration,
   newestDiscordContext,
   resolveDiscordChannelRouting,
@@ -140,6 +142,46 @@ describe("Discord durable loop state", () => {
     ], "run_1", 3)).toBe(false);
   });
 
+  it("recognizes a delivered acknowledgement for the same reply target", () => {
+    const acknowledgement = {
+      sourceChannelId: "source",
+      guildId: "guild",
+      channelId: "target",
+      replyKind: "acknowledgement" as const,
+      finalizesLoop: false,
+      status: "finalized" as const,
+      replyToMessageId: "message-1",
+    };
+
+    expect(
+      isDeliveredDiscordAcknowledgement(
+        acknowledgement,
+        "source",
+        "guild",
+        "target",
+        "message-1",
+      ),
+    ).toBe(true);
+    expect(
+      isDeliveredDiscordAcknowledgement(
+        acknowledgement,
+        "source",
+        "guild",
+        "target",
+        "message-2",
+      ),
+    ).toBe(false);
+    expect(
+      isDeliveredDiscordAcknowledgement(
+        { ...acknowledgement, status: "failed" },
+        "source",
+        "guild",
+        "target",
+        "message-1",
+      ),
+    ).toBe(false);
+  });
+
   it("grants one lease when claim contenders observe serialized Convex state", () => {
     const now = 1_000;
     const initial = state({ latestSequence: 1, triggerThroughSequence: 1 });
@@ -201,6 +243,11 @@ describe("Discord durable loop state", () => {
         1_000 + DISCORD_LOOP_ERROR_RETRY_DELAY_MS,
       ),
     ).toBe(true);
+  });
+
+  it("exhausts recovery immediately for a nonretryable loop failure", () => {
+    expect(discordNextLoopErrorCount(1, false)).toBe(DISCORD_MAX_LOOP_ERROR_ATTEMPTS);
+    expect(discordNextLoopErrorCount(1, true)).toBe(2);
   });
 
   it("partitions a 25-message backlog into ordered ten-message catch-up windows", () => {

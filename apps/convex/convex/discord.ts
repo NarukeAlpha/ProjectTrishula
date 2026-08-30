@@ -13,7 +13,6 @@ import {
   DISCORD_CONTEXT_SIZE,
   DISCORD_GATEWAY_HEARTBEAT_TTL_MS,
   DISCORD_LOOP_LEASE_MS,
-  DISCORD_MAX_LOOP_ERROR_ATTEMPTS,
   DISCORD_MAX_AUTONOMOUS_RECHECKS,
   DISCORD_MAX_OUTBOX_ATTEMPTS,
   DISCORD_OUTBOX_DELIVERY_LEASE_MS,
@@ -23,6 +22,7 @@ import {
   discordDuplicateMessageMatches,
   discordMessageIngestDecision,
   discordLoopErrorRetryReady,
+  discordNextLoopErrorCount,
   discordRecheckDecision,
   discordReplyKindMatchesFlags,
   discordReplyTargetAllowsKind,
@@ -31,6 +31,7 @@ import {
   pendingDiscordMessageCount,
   hasPendingDiscordReply,
   hasSentDiscordFinalizer,
+  isDeliveredDiscordAcknowledgement,
   isCurrentDiscordGeneration,
   resolveDiscordChannelRouting,
   type DiscordChannelRole,
@@ -1091,6 +1092,7 @@ export const completeLoop = internalMutation({
     outcome: v.union(v.literal("completed"), v.literal("error")),
     recheckRequested: v.optional(v.boolean()),
     error: v.optional(v.string()),
+    retryable: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const ownerId = requireDiscordOwnerId(args.actorId);
@@ -1130,9 +1132,9 @@ export const completeLoop = internalMutation({
     }
     if (args.outcome === "error") {
       const error = args.error?.trim() || "Discord agent loop failed.";
-      const consecutiveErrorCount = Math.min(
-        DISCORD_MAX_LOOP_ERROR_ATTEMPTS,
-        (state.consecutiveErrorCount ?? 0) + 1,
+      const consecutiveErrorCount = discordNextLoopErrorCount(
+        state.consecutiveErrorCount,
+        args.retryable ?? true,
       );
       await ctx.db.patch(state._id, {
         status: "error",
@@ -1281,6 +1283,32 @@ export const enqueueReply = internalMutation({
     if (!discordReplyKindMatchesFlags(replyKind, args.finalizesLoop, args.recheckRequested)) {
       return { accepted: false as const, reason: "non_final_reply_cannot_recheck" as const };
     }
+    if (replyKind === "acknowledgement" && args.replyToMessageId !== undefined) {
+      const priorAcknowledgements = await ctx.db
+        .query("discordOutbox")
+        .withIndex("by_owner_source_reply", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("sourceChannelId", sourceChannelId)
+          .eq("replyToMessageId", args.replyToMessageId))
+        .collect();
+      const delivered = priorAcknowledgements.find((reply) =>
+        isDeliveredDiscordAcknowledgement(
+          reply,
+          sourceChannelId,
+          guildId,
+          channelId,
+          args.replyToMessageId,
+        )
+      );
+      if (delivered) {
+        return {
+          accepted: true as const,
+          duplicate: true,
+          outboxId: delivered.outboxId,
+          status: delivered.status,
+        };
+      }
+    }
     const existing = await ctx.db
       .query("discordOutbox")
       .withIndex("by_owner_idempotency", (index) => index
@@ -1290,6 +1318,23 @@ export const enqueueReply = internalMutation({
     if (existing) {
       const existingReplyKind = existing.replyKind
         ?? (existing.finalizesLoop ? "final" : "research_log");
+      if (
+        replyKind === "acknowledgement"
+        && isDeliveredDiscordAcknowledgement(
+          existing,
+          sourceChannelId,
+          guildId,
+          channelId,
+          args.replyToMessageId,
+        )
+      ) {
+        return {
+          accepted: true as const,
+          duplicate: true,
+          outboxId: existing.outboxId,
+          status: existing.status,
+        };
+      }
       const same = existing.sourceChannelId === sourceChannelId
         && existing.guildId === guildId
         && existing.channelId === channelId
