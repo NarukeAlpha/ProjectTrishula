@@ -1,12 +1,14 @@
-# Signal Pi service
+# Project Trishula Pi service
 
-This private service runs the phone-first trading assistant. Convex calls it
-over the service shared secret. The browser never calls Pi directly.
+This private service runs Project Trishula's chat and Discord agents. Convex
+calls the existing service routes with its service secret. The Discord gateway
+uses a separate agent-only secret. The browser never calls Pi directly.
 
 ## Contracts
 
-- `GET /health` reports Signal and broker readiness.
+- `GET /health` reports Pi and Discord-agent readiness.
 - `POST /runs` keeps the existing asynchronous execution contract.
+- `POST /discord/agents/run` runs one isolated Discord agent profile and returns strict JSON.
 - `POST /runs/:runId/cancel` accepts `{ "commandId": "...", "runId": "...", "actorId": "..." }`. The body `runId` must match the path.
 - `POST /connections/robinhood/start` accepts `{ "actorId": "..." }`.
 - `POST /connections/robinhood/complete` accepts `{ "actorId": "...", "code": "...", "state": "..." }`.
@@ -14,17 +16,50 @@ over the service shared secret. The browser never calls Pi directly.
 - `POST /portfolio/refresh` accepts `{ "actorId": "..." }`.
 - `POST /orders/execute` accepts `{ "actorId": "...", "proposalId": "...", "fingerprint": "..." }`.
 
-Every POST route requires `Authorization: Bearer <SERVICE_SHARED_SECRET>`.
+`POST /discord/agents/run` requires
+`Authorization: Bearer <PI_DISCORD_SHARED_SECRET>`. Other POST routes require
+`Authorization: Bearer <SERVICE_SHARED_SECRET>`. The two secrets must differ.
 In production, every actor-bearing request must match `BOUND_ACTOR_ID`. A
 runtime rejects a different actor before it starts, cancels, reads brokerage
 data, changes a connection, creates a proposal, or submits an order.
 The service exposes only application trading tools. It does not expose a
 generic MCP proxy and never returns credentials or OAuth tokens.
 
+## Discord agent profiles
+
+The Discord gateway calls `POST /discord/agents/run` with one of three
+profiles. Shared Zod request and response contracts are in
+`src/discord/contracts.ts`.
+
+| Profile | Model | Reasoning | Tools |
+| --- | --- | --- | --- |
+| `triage` | `gpt-5.6-luna` | `xhigh` | None |
+| `research` | `gpt-5.6-sol` | `xhigh` | Public web search, public HTTPS fetch, and public market data |
+| `reply` | `gpt-5.6-luna` | `xhigh` | None |
+
+Each call creates a new in-memory session and disposes it after the response.
+No Discord profile can use the brokerage, order, shell, filesystem, or code
+execution tools. Research results include exact source URLs, fetch freshness,
+findings, and uncertainty. The service rejects source URLs that were not
+returned by a research tool.
+
+The public page tool accepts HTTPS only. It resolves DNS before the request,
+rejects private or special-use addresses, pins the approved public address for
+the connection, checks every redirect, and limits redirects, bytes, and time.
+Search works without an API key. Public market data is read-only.
+
+The reply profile returns at most 1,200 characters. Its prompt applies the
+project's humanizer rules: plain wording, no chatbot filler, no inflated
+claims, no forced groups of three, no em dashes, no emojis, and no canned
+conclusion. A reply can request a fresh review only for a new factual question
+or meaningful contraposition. Pi stops recursive rechecks after two passes.
+
 ## Codex authentication
 
-Pi uses the `openai-codex` provider and the model in `PI_MODEL`. The default is
-`gpt-5.6-terra`. Authentication is read and written only at `PI_AUTH_PATH`.
+Pi uses the `openai-codex` provider. The existing `/runs` path uses the model
+in `PI_MODEL`, which defaults to `gpt-5.6-terra`. Discord uses the fixed models
+listed above. All four profiles share one model runtime. Authentication is read
+and written only at `PI_AUTH_PATH`.
 Mount the Railway volume at `/data` and run:
 
 ```sh
@@ -44,14 +79,12 @@ into Railway variables, source files, chat, or log exports. The waiting service
 then starts without another deployment. It fails closed while the file is
 missing.
 
-The complete Railway device-bootstrap sequence is in
-[`infra/railway/README.md`](../../infra/railway/README.md#codex-device-bootstrap).
-
 ## Required variables
 
 | Variable | Purpose |
 | --- | --- |
 | `SERVICE_SHARED_SECRET` | Internal service credential. Use at least 32 characters. |
+| `PI_DISCORD_SHARED_SECRET` | Agent-only credential for the Discord gateway. It must differ from the service secret. |
 | `CONVEX_SITE_URL` | Full Convex HTTP Actions prefix. It must end in `/http`. |
 | `BOUND_ACTOR_ID` | Exact WorkOS subject served by this runtime. Required in production. |
 

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { authPathFromEnvironment, runCodexAuth } from "./auth/codex-cli.js";
 
-const SIGNAL_SERVICE_NAME = "signal-execution-backend";
+const SERVICE_NAME = "project-trishula-pi";
 const POLL_INTERVAL_MS = 1_000;
 const codexAuthFileSchema = z.object({
   "openai-codex": z.object({
@@ -30,7 +30,7 @@ export function createDegradedServer(): Server {
       response.statusCode = 200;
       response.end(JSON.stringify({
         ok: false,
-        service: SIGNAL_SERVICE_NAME,
+        service: SERVICE_NAME,
         status: "auth_bootstrap_required",
       }));
       return;
@@ -87,7 +87,7 @@ export async function start(): Promise<void> {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   start().catch((error) => {
-    console.error(error instanceof Error ? error.message : "Signal startup failed.");
+    console.error(error instanceof Error ? error.message : "Project Trishula Pi startup failed.");
     process.exitCode = 1;
   });
 }

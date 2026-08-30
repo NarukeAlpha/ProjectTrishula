@@ -39,7 +39,7 @@ export function Composer({
       setError(
         commandError instanceof CommandUncertainError
           ? commandError.message
-          : "Signal rejected the prompt. Review it and try again.",
+          : "Trishula rejected the prompt. Review it and try again.",
       );
     } finally {
       setBusy(false);
@@ -63,7 +63,7 @@ export function Composer({
       setError(
         commandError instanceof Error
           ? commandError.message
-          : "Signal could not confirm the stop command.",
+          : "Trishula could not confirm the stop command.",
       );
     } finally {
       setBusy(false);
@@ -85,7 +85,7 @@ export function Composer({
     <div className="composer-wrap">
       <form className="composer" onSubmit={(event) => void submit(event)}>
         <label className="sr-only" htmlFor="prompt">
-          Ask Signal
+          Ask Trishula
         </label>
         <textarea
           id="prompt"
@@ -105,7 +105,7 @@ export function Composer({
             ) : activeRun?.run.status === "cancellation_requested" ? (
               "Stopping this run…"
             ) : active ? (
-              "Signal is working…"
+              "Trishula is working…"
             ) : (
               "Enter to send · Shift + Enter for a new line"
             )}
@@ -139,7 +139,7 @@ export function Composer({
         </div>
       </form>
       <p className="disclaimer">
-        Signal can make mistakes. Review every proposal before you approve it.
+        Trishula can make mistakes. Verify important market information.
       </p>
     </div>
   );

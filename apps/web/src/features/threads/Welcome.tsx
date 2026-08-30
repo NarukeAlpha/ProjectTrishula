@@ -31,11 +31,11 @@ export function Welcome() {
   const section = useRef<HTMLElement>(null);
   return (
     <section className="welcome" ref={section}>
-      <p className="welcome-kicker">Signal copilot</p>
+      <p className="welcome-kicker">Trishula chat</p>
       <h1>What are you watching?</h1>
       <p>
-        Ask about your portfolio, a market move, or a trade idea. Signal shows
-        every tool it uses and keeps order approval in your hands.
+        Ask about your portfolio, a market move, or a trade idea. Trishula shows
+        the tools it uses and keeps the final decision in your hands.
       </p>
       <div className="suggestions">
         {suggestions.map(([title, prompt]) => (

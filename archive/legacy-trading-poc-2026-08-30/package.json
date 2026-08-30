@@ -1,0 +1,23 @@
+{
+  "name": "phone-trading-poc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phone-first agentic trading proof of concept.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "check:web": "npm run validate --prefix apps/web",
+    "check:convex": "npm run typecheck --prefix apps/convex && npm test --prefix apps/convex",
+    "check:pi": "npm run typecheck --prefix apps/pi && npm test --prefix apps/pi && npm run build --prefix apps/pi",
+    "check:railway": "bash scripts/railway/validate.sh",
+    "check": "npm run lint && npm run check:convex && npm run check:pi && npm run check:web && npm run check:railway"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.79.0",
+    "oxlint": "1.79.0"
+  }
+}

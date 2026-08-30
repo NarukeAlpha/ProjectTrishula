@@ -21,6 +21,8 @@ import {
   requireWebAppOrigin,
 } from "./lib/robinhood_oauth.js";
 import { executionRequest } from "./lib/execution.js";
+import { authorizedServiceRequest, constantTimeEqual } from "./lib/service_auth.js";
+import { discordGateway } from "./discord_http.js";
 
 const jsonHeaders = {
   "cache-control": "no-store",
@@ -389,25 +391,8 @@ function json<TBody>(body: TBody, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: jsonHeaders });
 }
 
-function bearerCredential(request: Request): string | undefined {
-  const value = request.headers.get("authorization");
-  const matched = value?.match(/^Bearer\s+(.+)$/i);
-  return matched?.[1];
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  let difference = left.length ^ right.length;
-  const length = Math.max(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
-  }
-  return difference === 0;
-}
-
 function authorized(request: Request): boolean {
-  const expected = process.env.SERVICE_SHARED_SECRET;
-  const supplied = bearerCredential(request);
-  return Boolean(expected && supplied && constantTimeEqual(supplied, expected));
+  return authorizedServiceRequest(request);
 }
 
 async function jsonBody(request: Request): Promise<ServiceJsonObject | null> {
@@ -678,5 +663,6 @@ http.route({
   method: "GET",
   handler: robinhoodCallback,
 });
+http.route({ path: "/discord", method: "POST", handler: discordGateway });
 
 export default http;

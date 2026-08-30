@@ -6,6 +6,7 @@ import type { TradingBroker } from "../src/broker/types.js";
 import { TestExecutor, runRequest } from "./helpers.js";
 
 const secret = "a-secure-service-secret-with-32-chars";
+const discordSecret = "an-independent-discord-secret-with-32-chars";
 type ReserveStubResult = { type: "accepted" | "duplicate"; state: "reserved" };
 
 function makeRegistry() {
@@ -46,7 +47,7 @@ describe("execution HTTP API", () => {
   it("does not parse or accept an unauthorized run", async () => {
     const executor = new TestExecutor();
     const registry = makeRegistry();
-    const response = await request(createApp({ sharedSecret: secret, executor, registry }))
+    const response = await request(createApp({ sharedSecret: secret, discordSharedSecret: discordSecret, executor, registry }))
       .post("/runs")
       .send(runRequest);
     expect(response.status).toBe(401);
@@ -56,7 +57,7 @@ describe("execution HTTP API", () => {
   it("returns 202 after a valid run is registered", async () => {
     const executor = new TestExecutor();
     const registry = makeRegistry();
-    const response = await request(createApp({ sharedSecret: secret, executor, registry }))
+    const response = await request(createApp({ sharedSecret: secret, discordSharedSecret: discordSecret, executor, registry }))
       .post("/runs")
       .set("authorization", `Bearer ${secret}`)
       .send(runRequest);
@@ -88,7 +89,7 @@ describe("execution HTTP API", () => {
     };
 
     const response = await request(
-      createApp({ sharedSecret: secret, executor, registry }),
+      createApp({ sharedSecret: secret, discordSharedSecret: discordSecret, executor, registry }),
     )
       .post("/runs")
       .set("authorization", `Bearer ${secret}`)
@@ -102,7 +103,7 @@ describe("execution HTTP API", () => {
     const executor = new TestExecutor();
     const registry = makeRegistry();
     vi.mocked(registry.reserve).mockReturnValue({ type: "duplicate", state: "reserved" });
-    const response = await request(createApp({ sharedSecret: secret, executor, registry }))
+    const response = await request(createApp({ sharedSecret: secret, discordSharedSecret: discordSecret, executor, registry }))
       .post("/runs")
       .set("authorization", `Bearer ${secret}`)
       .send(runRequest);
@@ -114,7 +115,7 @@ describe("execution HTTP API", () => {
   it("returns 503 readiness when the executor is not ready", async () => {
     const executor = new TestExecutor();
     executor.ready = false;
-    const response = await request(createApp({ sharedSecret: secret, executor, registry: makeRegistry() }))
+    const response = await request(createApp({ sharedSecret: secret, discordSharedSecret: discordSecret, executor, registry: makeRegistry() }))
       .get("/health");
     expect(response.status).toBe(503);
     expect(response.body).toMatchObject({ ok: false });
@@ -123,7 +124,7 @@ describe("execution HTTP API", () => {
   it("accepts cancellation without waiting for Pi to stop", async () => {
     const executor = new TestExecutor();
     const registry = makeRegistry();
-    const response = await request(createApp({ sharedSecret: secret, executor, registry }))
+    const response = await request(createApp({ sharedSecret: secret, discordSharedSecret: discordSecret, executor, registry }))
       .post("/runs/run_1/cancel")
       .set("authorization", `Bearer ${secret}`)
       .send({ commandId: "command_1", runId: "run_1", actorId: runRequest.actorId });
@@ -133,7 +134,7 @@ describe("execution HTTP API", () => {
 
   it("requires an actor-bound cancellation body", async () => {
     const registry = makeRegistry();
-    const response = await request(createApp({ sharedSecret: secret, executor: new TestExecutor(), registry }))
+    const response = await request(createApp({ sharedSecret: secret, discordSharedSecret: discordSecret, executor: new TestExecutor(), registry }))
       .post("/runs/run_1/cancel")
       .set("authorization", `Bearer ${secret}`)
       .send({});
@@ -155,6 +156,7 @@ describe("execution HTTP API", () => {
     const broker = makeBroker();
     const response = await request(createApp({
       sharedSecret: secret,
+      discordSharedSecret: discordSecret,
       executor: new TestExecutor(),
       registry,
       broker,

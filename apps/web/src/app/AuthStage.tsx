@@ -11,17 +11,17 @@ export function AuthStage() {
   const status = isLoading
     ? "Checking your WorkOS session…"
     : user && convexAuth.isLoading
-      ? "Verifying your Signal access…"
+      ? "Verifying your Trishula access…"
       : (error ?? "Use your approved work account to continue.");
 
   return (
     <main className="auth-stage">
       <section className="auth-card" aria-labelledby="auth-title">
         <div className="auth-mark" aria-hidden="true">
-          S
+          T
         </div>
-        <div className="eyebrow">SECURE TRADING COPILOT</div>
-        <h1 id="auth-title">Signal</h1>
+        <div className="eyebrow">SECURE MARKET RESEARCH</div>
+        <h1 id="auth-title">Project Trishula</h1>
         <p
           role={error ? "alert" : "status"}
           data-state={error ? "error" : "normal"}
@@ -58,8 +58,8 @@ export function AuthStage() {
           </button>
         )}
         <small>
-          Your Signal identity is secured by WorkOS. Brokerage access stays
-          isolated from this browser.
+          WorkOS secures your Trishula identity. Service credentials stay out of
+          this browser.
         </small>
       </section>
     </main>

@@ -30,12 +30,18 @@ function allowedWorkosUserIds(): ReadonlySet<string> {
   return new Set(values);
 }
 
+export function requireAllowedWorkosUserId(value: string): string {
+  const workosUserId = value.trim();
+  if (!workosUserId) throw new Error("WorkOS user ID is required.");
+  if (!allowedWorkosUserIds().has(workosUserId)) {
+    throw new Error("WorkOS user is not allowed.");
+  }
+  return workosUserId;
+}
+
 export function actorFromIdentity(identity: UserIdentity | null): Actor {
   if (!identity) throw new Error("Authentication required.");
-  const workosUserId = requiredWorkosUserId(identity);
-  if (!allowedWorkosUserIds().has(workosUserId)) {
-    throw new Error("Authenticated WorkOS user is not allowed.");
-  }
+  const workosUserId = requireAllowedWorkosUserId(requiredWorkosUserId(identity));
   const actor: Actor = {
     id: workosUserId,
     workosUserId,

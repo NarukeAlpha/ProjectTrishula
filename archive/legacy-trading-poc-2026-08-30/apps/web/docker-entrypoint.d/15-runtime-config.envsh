@@ -1,0 +1,74 @@
+#!/bin/sh
+set -eu
+
+PUBLIC_ENVIRONMENT="${PUBLIC_ENVIRONMENT:-staging}"
+PUBLIC_APPLICATION_NAME="${PUBLIC_APPLICATION_NAME:-Signal}"
+PUBLIC_APPLICATION_VERSION="${PUBLIC_APPLICATION_VERSION:-unknown}"
+PUBLIC_DEMO_MODE="${PUBLIC_DEMO_MODE:-false}"
+PUBLIC_CONVEX_URL="${PUBLIC_CONVEX_URL:-}"
+PUBLIC_WORKOS_CLIENT_ID="${PUBLIC_WORKOS_CLIENT_ID:-}"
+PUBLIC_WORKOS_REDIRECT_URI="${PUBLIC_WORKOS_REDIRECT_URI:-}"
+PUBLIC_WORKOS_API_HOSTNAME="${PUBLIC_WORKOS_API_HOSTNAME:-api.workos.com}"
+
+case "$PUBLIC_DEMO_MODE" in
+  true|false) ;;
+  *) echo "PUBLIC_DEMO_MODE must be true or false." >&2; exit 1 ;;
+esac
+
+if [ "$PUBLIC_DEMO_MODE" = "false" ]; then
+  : "${PUBLIC_CONVEX_URL:?PUBLIC_CONVEX_URL is required when demo mode is disabled}"
+  : "${PUBLIC_WORKOS_CLIENT_ID:?PUBLIC_WORKOS_CLIENT_ID is required when demo mode is disabled}"
+  : "${PUBLIC_WORKOS_REDIRECT_URI:?PUBLIC_WORKOS_REDIRECT_URI is required when demo mode is disabled}"
+fi
+
+for value in "$PUBLIC_ENVIRONMENT" "$PUBLIC_APPLICATION_NAME" "$PUBLIC_APPLICATION_VERSION" "$PUBLIC_DEMO_MODE" "$PUBLIC_CONVEX_URL" "$PUBLIC_WORKOS_CLIENT_ID" "$PUBLIC_WORKOS_REDIRECT_URI" "$PUBLIC_WORKOS_API_HOSTNAME"; do
+  case "$value" in
+    *[![:print:]]*) echo "Public runtime variables must contain printable characters only." >&2; exit 1 ;;
+  esac
+done
+if [ "$PUBLIC_DEMO_MODE" = "false" ]; then
+  case "$PUBLIC_CONVEX_URL" in
+    https://*) ;;
+    *) echo "PUBLIC_CONVEX_URL must use HTTPS in the container." >&2; exit 1 ;;
+  esac
+  case "$PUBLIC_WORKOS_CLIENT_ID" in
+    client_*) ;;
+    *) echo "PUBLIC_WORKOS_CLIENT_ID must start with client_." >&2; exit 1 ;;
+  esac
+  case "$PUBLIC_WORKOS_REDIRECT_URI" in
+    https://*) ;;
+    *) echo "PUBLIC_WORKOS_REDIRECT_URI must use HTTPS in the container." >&2; exit 1 ;;
+  esac
+fi
+case "$PUBLIC_WORKOS_API_HOSTNAME" in
+  ''|*[!A-Za-z0-9.-]*|.*|*.) echo "PUBLIC_WORKOS_API_HOSTNAME must be a valid hostname." >&2; exit 1 ;;
+esac
+
+PORT="${PORT:-8080}"
+CONVEX_CONNECT_ORIGIN="${PUBLIC_CONVEX_URL%/}"
+CONVEX_WEBSOCKET_ORIGIN="$(printf '%s' "$CONVEX_CONNECT_ORIGIN" | sed 's#^https:#wss:#; s#^http:#ws:#')"
+WORKOS_API_ORIGIN="https://${PUBLIC_WORKOS_API_HOSTNAME}"
+export PORT CONVEX_CONNECT_ORIGIN CONVEX_WEBSOCKET_ORIGIN WORKOS_API_ORIGIN
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/</\\u003c/g; s/>/\\u003e/g'
+}
+
+umask 022
+{
+  printf 'window.__SIGNAL_CONFIG__ = {\n'
+  printf '  environment: "%s",\n' "$(json_escape "$PUBLIC_ENVIRONMENT")"
+  printf '  applicationName: "%s",\n' "$(json_escape "$PUBLIC_APPLICATION_NAME")"
+  printf '  applicationVersion: "%s",\n' "$(json_escape "$PUBLIC_APPLICATION_VERSION")"
+  printf '  demoMode: %s' "$PUBLIC_DEMO_MODE"
+  if [ "$PUBLIC_DEMO_MODE" = "false" ]; then
+    printf ',\n'
+    printf '  convexUrl: "%s",\n' "$(json_escape "$PUBLIC_CONVEX_URL")"
+    printf '  workosClientId: "%s",\n' "$(json_escape "$PUBLIC_WORKOS_CLIENT_ID")"
+    printf '  workosRedirectUri: "%s",\n' "$(json_escape "$PUBLIC_WORKOS_REDIRECT_URI")"
+    printf '  workosApiHostname: "%s"\n' "$(json_escape "$PUBLIC_WORKOS_API_HOSTNAME")"
+  else
+    printf '\n'
+  fi
+  printf '};\n'
+} > /usr/share/nginx/html/config.js

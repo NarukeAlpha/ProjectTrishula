@@ -15,7 +15,7 @@ export class AppErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error("Signal render failure", {
+    console.error("Trishula render failure", {
       name: error.name,
       componentStack: info.componentStack,
     });
@@ -27,9 +27,9 @@ export class AppErrorBoundary extends Component<
       <main className="fatal">
         <section>
           <div className="brand-mark" aria-hidden="true">
-            S
+            T
           </div>
-          <h1>Signal needs to reload</h1>
+          <h1>Trishula needs to reload</h1>
           <p>
             The application could not render the latest state. No command was
             sent by this error.

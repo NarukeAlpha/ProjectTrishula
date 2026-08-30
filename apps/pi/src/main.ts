@@ -3,12 +3,16 @@ import { createPiExecutor } from "./pi/createPiExecutor.js";
 import { createTradingBroker } from "./broker/trading-broker.js";
 import { consoleLogger } from "./runtime/logger.js";
 import { startExecutionService } from "./service.js";
+import { createCodexRuntime } from "./pi/codex-runtime.js";
+import { createDiscordAgentRunner } from "./discord/runner.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const broker = createTradingBroker(config);
-  const executor = createPiExecutor(config, broker);
-  const service = await startExecutionService(config, executor, consoleLogger, broker);
+  const codexRuntime = createCodexRuntime(config.piAuthPath);
+  const executor = createPiExecutor(config, broker, codexRuntime);
+  const discordAgents = createDiscordAgentRunner(codexRuntime);
+  const service = await startExecutionService(config, executor, consoleLogger, broker, discordAgents);
 
   const shutdown = async (signal: string): Promise<void> => {
     consoleLogger.info("execution_service_signal", { signal });

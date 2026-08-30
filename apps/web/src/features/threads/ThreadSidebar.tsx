@@ -74,11 +74,11 @@ export function ThreadSidebar({
         <div className="brand-row">
           <div className="brand">
             <div className="brand-mark" aria-hidden="true">
-              S
+              T
             </div>
             <div>
-              <strong>Signal</strong>
-              <span>Trading copilot</span>
+              <strong>Project Trishula</strong>
+              <span>Market research agent</span>
             </div>
           </div>
           <button
@@ -99,7 +99,7 @@ export function ThreadSidebar({
           }}
         >
           <span aria-hidden="true">＋</span>
-          <span>Ask Signal</span>
+          <span>New chat</span>
           <kbd>⌘ K</kbd>
         </button>
         <section className="thread-panel" aria-labelledby="threads-title">

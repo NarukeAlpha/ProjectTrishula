@@ -1,14 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
+import { isChatPathname } from "./routes";
 
-function OverviewIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z" />
-    </svg>
-  );
-}
-
-function AskIcon() {
+function ChatIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M5 5.5h14v10H9l-4 3v-13Z" />
@@ -17,31 +10,27 @@ function AskIcon() {
   );
 }
 
-function ActivityIcon() {
+function DiscordIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5 19V9m7 10V5m7 14v-7" />
+      <path d="M8 8.5a10 10 0 0 1 8 0M7 17c2 1 3.5 1.5 5 1.5s3-.5 5-1.5l2-7.5-3-1.7M8 7.8 5 9.5 7 17" />
+      <path d="M9 13h.01M15 13h.01" />
     </svg>
   );
 }
 
 export function BottomNavigation() {
   const location = useLocation();
-  const askActive =
-    location.pathname === "/ask" || location.pathname.startsWith("/threads/");
+  const askActive = isChatPathname(location.pathname);
   return (
     <nav className="bottom-nav" aria-label="Primary navigation">
-      <NavLink to="/" end>
-        <OverviewIcon />
-        <span>Overview</span>
-      </NavLink>
       <NavLink className={askActive ? "active" : undefined} to="/ask">
-        <AskIcon />
-        <span>Ask Signal</span>
+        <ChatIcon />
+        <span>Chat</span>
       </NavLink>
-      <NavLink to="/activity">
-        <ActivityIcon />
-        <span>Activity</span>
+      <NavLink to="/discord">
+        <DiscordIcon />
+        <span>Discord</span>
       </NavLink>
     </nav>
   );
@@ -49,17 +38,13 @@ export function BottomNavigation() {
 
 export function DesktopNavigation() {
   const location = useLocation();
-  const askActive =
-    location.pathname === "/ask" || location.pathname.startsWith("/threads/");
+  const askActive = isChatPathname(location.pathname);
   return (
     <nav className="desktop-nav" aria-label="Primary navigation">
-      <NavLink to="/" end>
-        Overview
-      </NavLink>
       <NavLink className={askActive ? "active" : undefined} to="/ask">
-        Ask Signal
+        Chat
       </NavLink>
-      <NavLink to="/activity">Activity</NavLink>
+      <NavLink to="/discord">Discord</NavLink>
     </nav>
   );
 }

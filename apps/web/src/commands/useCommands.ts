@@ -7,7 +7,7 @@ import { forgetCommand, rememberCommand } from "./recovery";
 export class CommandUncertainError extends Error {
   constructor(readonly commandId: string) {
     super(
-      "Signal could not confirm this command. It will check the canonical command status after reconnecting.",
+      "Trishula could not confirm this command. It will check the canonical command status after reconnecting.",
     );
     this.name = "CommandUncertainError";
   }

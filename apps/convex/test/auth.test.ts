@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { UserIdentity } from "convex/server";
-import { actorFromIdentity } from "../convex/lib/auth.js";
+import { actorFromIdentity, requireAllowedWorkosUserId } from "../convex/lib/auth.js";
 
 const allowedUserId = "user_01HWORKOSALLOWED";
 const originalAllowedUserIds = process.env.WORKOS_ALLOWED_USER_IDS;
@@ -49,6 +49,12 @@ describe("WorkOS public-function authorization", () => {
   it("rejects a valid WorkOS token for another user", () => {
     process.env.WORKOS_ALLOWED_USER_IDS = allowedUserId;
     expect(() => actorFromIdentity(identity("user_01NOTALLOWED"))).toThrow("not allowed");
+  });
+
+  it("applies the WorkOS allowlist to service-supplied actor IDs", () => {
+    process.env.WORKOS_ALLOWED_USER_IDS = `${allowedUserId},user_01HWORKOSSECOND`;
+    expect(requireAllowedWorkosUserId(allowedUserId)).toBe(allowedUserId);
+    expect(() => requireAllowedWorkosUserId("user_01NOTALLOWED")).toThrow("not allowed");
   });
 
   it("uses the official WorkOS custom-JWT issuers, JWKS, and audience", async () => {

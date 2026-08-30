@@ -260,3 +260,75 @@ export interface Page<T> {
   isDone: boolean;
   continueCursor: string;
 }
+
+export type DiscordGatewayStatus =
+  | "online"
+  | "offline"
+  | "degraded"
+  | "not_configured";
+
+export type DiscordChannelRole =
+  | "conversation_monitor"
+  | "reply_target"
+  | "research_log";
+
+export type DiscordLoopStatus =
+  | "idle"
+  | "triaging"
+  | "researching"
+  | "drafting"
+  | "catching_up"
+  | "error";
+
+export interface DiscordGatewayReadModel {
+  status: DiscordGatewayStatus;
+  connectedAt?: number;
+  lastHeartbeatAt?: number;
+  botUserName?: string;
+  error?: string;
+}
+
+export interface DiscordPermissionReadModel {
+  viewChannels: boolean;
+  sendMessages: boolean;
+  readMessageHistory: boolean;
+  messageContent: boolean;
+}
+
+export interface DiscordLoopReadModel {
+  status: DiscordLoopStatus;
+  pendingMessageCount: number;
+  lastProcessedAt?: number;
+  error?: string;
+}
+
+export interface DiscordChannelReadModel {
+  channelId: string;
+  name: string;
+  type: "text" | "announcement" | "forum" | "other";
+  canView: boolean;
+  canSend: boolean;
+  canReadHistory: boolean;
+  roles: DiscordChannelRole[];
+  loop?: DiscordLoopReadModel;
+}
+
+export interface DiscordGuildReadModel {
+  guildId: string;
+  name: string;
+  iconUrl?: string;
+  permissions: DiscordPermissionReadModel;
+  channels: DiscordChannelReadModel[];
+}
+
+export interface DiscordControlPlaneReadModel {
+  gateway: DiscordGatewayReadModel;
+  guilds: DiscordGuildReadModel[];
+}
+
+export interface DiscordChannelAssignmentReadModel {
+  guildId: string;
+  channelId: string;
+  roles: DiscordChannelRole[];
+  updatedAt?: number;
+}

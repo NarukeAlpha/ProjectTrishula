@@ -1,9 +1,11 @@
-node_modules/
-dist/
-coverage/
-.tmp/
+/node_modules/
+**/node_modules/
+**/dist/
+**/coverage/
+**/.tmp/
+**/tmp/
+**/target/
 *.log
-
 .env
 .env.*
 !.env.example
@@ -11,5 +13,7 @@ auth.json
 *.pem
 *.p12
 *.pfx
-
 .DS_Store
+/.idea/
+/.vscode/
+/.railway/

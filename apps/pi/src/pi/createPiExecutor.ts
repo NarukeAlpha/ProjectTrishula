@@ -6,7 +6,6 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   defineTool,
-  ModelRuntime,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -28,6 +27,7 @@ import type {
 } from "../execution/executor.js";
 import { createTradingBroker } from "../broker/trading-broker.js";
 import type { ApplicationToolArguments, TradingBroker } from "../broker/types.js";
+import { createCodexRuntime, type CodexRuntime } from "./codex-runtime.js";
 
 interface SafeError {
   code: string;
@@ -155,48 +155,39 @@ function aggregateMetrics(
 }
 
 class PiExecutionExecutor implements ExecutionExecutor {
-  private runtime: ModelRuntime | undefined;
-  private model: ReturnType<ModelRuntime["getModel"]> = undefined;
+  private modelRuntime: Awaited<ReturnType<CodexRuntime["get"]>> | undefined;
+  private model: Awaited<ReturnType<CodexRuntime["requireModel"]>> | undefined;
   private initializationError: string | undefined;
   private readonly sessions = new Map<string, SessionEntry>();
 
   constructor(
     private readonly config: AppConfig,
     private readonly broker: TradingBroker,
+    private readonly codexRuntime: CodexRuntime,
   ) {}
 
   async initialize(): Promise<void> {
     try {
-      this.runtime = await ModelRuntime.create({
-        authPath: this.config.piAuthPath,
-        modelsPath: null,
-        refreshOnCreate: true,
-      });
-      if (!this.runtime.hasConfiguredAuth("openai-codex")) {
-        throw new Error(`OpenAI Codex auth is not configured at ${this.config.piAuthPath}.`);
-      }
-      this.model = this.runtime.getModel("openai-codex", this.config.piModel);
-      if (!this.model) throw new Error(`Pi does not recognize OpenAI Codex model ${this.config.piModel}.`);
-      const auth = await this.runtime.getAuth(this.model, { minOAuthValidityMs: 0 });
-      if (!auth) throw new Error("OpenAI Codex auth is not ready.");
+      this.modelRuntime = await this.codexRuntime.get();
+      this.model = await this.codexRuntime.requireModel(this.config.piModel);
       this.initializationError = undefined;
     } catch (error) {
       this.initializationError = safeError(error instanceof Error ? error : new Error("Unknown model-provider error.")).message;
-      this.runtime = undefined;
+      this.modelRuntime = undefined;
       this.model = undefined;
       throw error;
     }
   }
 
   readiness(): ExecutorReadiness {
-    const ready = Boolean(this.runtime && this.model);
+    const ready = Boolean(this.modelRuntime && this.model);
     const result: ExecutorReadiness = { ready };
     if (!ready && this.initializationError) result.reason = this.initializationError;
     return result;
   }
 
   async execute(request: RunExecutionRequest, emit: EmitPiEvent, signal: AbortSignal): Promise<void> {
-    if (!this.runtime || !this.model) throw new Error("Pi is not ready.");
+    if (!this.modelRuntime || !this.model) throw new Error("Pi is not ready.");
     const key = scopeKey({ actorId: request.actorId, threadId: request.threadId });
     let entry = this.sessions.get(key);
     if (!entry) {
@@ -362,7 +353,7 @@ class PiExecutionExecutor implements ExecutionExecutor {
   }
 
   private async createSession(history: ConversationHistoryMessage[]): Promise<SessionEntry> {
-    if (!this.runtime || !this.model) throw new Error("Pi is not ready.");
+    if (!this.modelRuntime || !this.model) throw new Error("Pi is not ready.");
     const sessionManager = SessionManager.inMemory(IN_MEMORY_RUNTIME_CWD);
     for (const message of history) {
       const text = textFromHistory(message);
@@ -402,7 +393,7 @@ class PiExecutionExecutor implements ExecutionExecutor {
       cwd: IN_MEMORY_RUNTIME_CWD,
       agentDir: IN_MEMORY_RUNTIME_CWD,
       model: this.model,
-      modelRuntime: this.runtime,
+      modelRuntime: this.modelRuntime,
       thinkingLevel: "high",
       noTools: "all",
       tools: [...allowedToolNames],
@@ -517,6 +508,10 @@ class PiExecutionExecutor implements ExecutionExecutor {
   }
 }
 
-export function createPiExecutor(config: AppConfig, broker = createTradingBroker(config)): ExecutionExecutor {
-  return new PiExecutionExecutor(config, broker);
+export function createPiExecutor(
+  config: AppConfig,
+  broker = createTradingBroker(config),
+  runtime = createCodexRuntime(config.piAuthPath),
+): ExecutionExecutor {
+  return new PiExecutionExecutor(config, broker, runtime);
 }

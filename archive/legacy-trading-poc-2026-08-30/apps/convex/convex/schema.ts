@@ -1,0 +1,335 @@
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+export const commandTypeValidator = v.union(
+  v.literal("thread.prompt"),
+  v.literal("thread.retry"),
+  v.literal("thread.stop"),
+  v.literal("thread.rename"),
+  v.literal("thread.archive"),
+);
+
+export const commandStatusValidator = v.union(
+  v.literal("accepted"),
+  v.literal("dispatching"),
+  v.literal("running"),
+  v.literal("completed"),
+  v.literal("failed"),
+  v.literal("canceled"),
+);
+
+export const runStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("running"),
+  v.literal("cancellation_requested"),
+  v.literal("completed"),
+  v.literal("failed"),
+  v.literal("canceled"),
+);
+
+export const messageStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("streaming"),
+  v.literal("completed"),
+  v.literal("failed"),
+  v.literal("canceled"),
+);
+
+export const toolStatusValidator = v.union(
+  v.literal("running"),
+  v.literal("completed"),
+  v.literal("failed"),
+  v.literal("canceled"),
+);
+
+export const brokerConnectionStatusValidator = v.union(
+  v.literal("disconnected"),
+  v.literal("connecting"),
+  v.literal("connected"),
+  v.literal("error"),
+);
+
+export const tradeProposalStatusValidator = v.union(
+  v.literal("awaiting_confirmation"),
+  v.literal("approved"),
+  v.literal("rejected"),
+  v.literal("expired"),
+  v.literal("submitting"),
+  v.literal("submitted"),
+  v.literal("failed"),
+);
+
+export const positionValidator = v.object({
+  symbol: v.string(),
+  quantity: v.number(),
+  price: v.number(),
+  marketValue: v.number(),
+  averageCost: v.optional(v.number()),
+  dayChange: v.optional(v.number()),
+  dayChangePercent: v.optional(v.number()),
+});
+
+export const runMetricValidator = v.object({
+  provider: v.optional(v.string()),
+  model: v.optional(v.string()),
+  inputTokens: v.optional(v.number()),
+  promptTokens: v.optional(v.number()),
+  cacheReadTokens: v.optional(v.number()),
+  cacheWriteTokens: v.optional(v.number()),
+  cachedTokens: v.optional(v.number()),
+  outputTokens: v.optional(v.number()),
+  totalTokens: v.optional(v.number()),
+  estimatedCostUsd: v.optional(v.number()),
+  ttftMs: v.optional(v.union(v.number(), v.null())),
+  timeToFirstOutputMs: v.optional(v.union(v.number(), v.null())),
+  timeToFirstVisibleTextMs: v.optional(v.number()),
+  runDurationMs: v.optional(v.number()),
+  totalRunDurationMs: v.optional(v.number()),
+  approximateOutputTps: v.optional(v.union(v.number(), v.null())),
+  outputTokensPerSecond: v.optional(v.number()),
+});
+
+export const assistantPartValidator = v.union(
+  v.object({ type: v.literal("text"), text: v.string() }),
+  v.object({
+    type: v.literal("tool"),
+    toolCallId: v.string(),
+    name: v.string(),
+    status: v.union(v.literal("completed"), v.literal("failed"), v.literal("canceled")),
+    inputSummary: v.optional(v.string()),
+    outputSummary: v.optional(v.string()),
+    durationMs: v.optional(v.number()),
+  }),
+  v.object({ type: v.literal("error"), code: v.string(), message: v.string(), retryable: v.boolean() }),
+);
+
+export const finalAssistantMessageValidator = v.object({
+  status: v.union(v.literal("completed"), v.literal("failed"), v.literal("canceled")),
+  parts: v.array(assistantPartValidator),
+  metrics: v.optional(runMetricValidator),
+});
+
+export const piEventValidator = v.union(
+  v.object({ type: v.literal("text_delta"), text: v.string() }),
+  v.object({
+    type: v.literal("tool_start"),
+    toolCallId: v.string(),
+    name: v.string(),
+    inputSummary: v.optional(v.string()),
+  }),
+  v.object({
+    type: v.literal("tool_end"),
+    toolCallId: v.string(),
+    name: v.string(),
+    ok: v.boolean(),
+    outputSummary: v.optional(v.string()),
+    durationMs: v.number(),
+  }),
+  v.object({ type: v.literal("error"), code: v.string(), message: v.string(), retryable: v.boolean() }),
+  v.object({ type: v.literal("canceled") }),
+  v.object({ type: v.literal("completed"), metrics: runMetricValidator }),
+);
+
+export default defineSchema({
+  threads: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    title: v.string(),
+    preview: v.string(),
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_archivedAt_updatedAt", ["ownerId", "archivedAt", "updatedAt"])
+    .index("by_owner_stableId", ["ownerId", "stableId"]),
+
+  messages: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    threadId: v.id("threads"),
+    runId: v.optional(v.id("runs")),
+    ordinal: v.number(),
+    role: v.union(v.literal("user"), v.literal("assistant")),
+    status: messageStatusValidator,
+    text: v.optional(v.string()),
+    parts: v.optional(v.array(assistantPartValidator)),
+    metrics: v.optional(runMetricValidator),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_stableId", ["ownerId", "stableId"])
+    .index("by_runId", ["runId"])
+    .index("by_thread_ordinal", ["threadId", "ordinal"]),
+
+  commands: defineTable({
+    ownerId: v.string(),
+    commandId: v.string(),
+    type: commandTypeValidator,
+    status: commandStatusValidator,
+    requestFingerprint: v.string(),
+    threadId: v.optional(v.id("threads")),
+    runId: v.optional(v.id("runs")),
+    sourceRunId: v.optional(v.id("runs")),
+    promptText: v.optional(v.string()),
+    title: v.optional(v.string()),
+    dispatchAttempts: v.number(),
+    lastDispatchError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_commandId", ["ownerId", "commandId"])
+    .index("by_commandId", ["commandId"])
+    .index("by_runId", ["runId"]),
+
+  runs: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    commandId: v.string(),
+    threadId: v.id("threads"),
+    userMessageId: v.id("messages"),
+    assistantMessageId: v.id("messages"),
+    assistantMessageStableId: v.string(),
+    status: runStatusValidator,
+    streamStatus: v.union(v.literal("live"), v.literal("finalized")),
+    lastAcceptedSequence: v.number(),
+    dispatchDeadlineAt: v.optional(v.number()),
+    leaseExpiresAt: v.optional(v.number()),
+    terminalErrorCode: v.optional(v.string()),
+    terminalAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_stableId", ["stableId"])
+    .index("by_thread_status", ["threadId", "status"])
+    .index("by_status_dispatchDeadlineAt", ["status", "dispatchDeadlineAt"])
+    .index("by_status_leaseExpiresAt", ["status", "leaseExpiresAt"]),
+
+  runResultBatches: defineTable({
+    runId: v.id("runs"),
+    sequence: v.number(),
+    payloadHash: v.string(),
+    events: v.array(piEventValidator),
+    finalMessage: v.optional(finalAssistantMessageValidator),
+    terminal: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_runId_sequence", ["runId", "sequence"])
+    .index("by_runId", ["runId"]),
+
+  toolActivities: defineTable({
+    runId: v.id("runs"),
+    assistantMessageId: v.id("messages"),
+    toolCallId: v.string(),
+    name: v.string(),
+    status: toolStatusValidator,
+    inputSummary: v.optional(v.string()),
+    outputSummary: v.optional(v.string()),
+    durationMs: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_runId", ["runId"])
+    .index("by_runId_toolCallId", ["runId", "toolCallId"]),
+
+  brokerConnections: defineTable({
+    ownerId: v.string(),
+    provider: v.literal("robinhood"),
+    status: brokerConnectionStatusValidator,
+    label: v.optional(v.string()),
+    grantedScopes: v.array(v.string()),
+    lastVerifiedAt: v.optional(v.number()),
+    errorCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_provider", ["ownerId", "provider"])
+    .index("by_owner_updatedAt", ["ownerId", "updatedAt"]),
+
+  credentialVaults: defineTable({
+    ownerId: v.string(),
+    provider: v.literal("robinhood"),
+    credential: v.optional(
+      v.object({
+        schemaVersion: v.literal(1),
+        actorId: v.string(),
+        provider: v.literal("robinhood"),
+        keyVersion: v.number(),
+        algorithm: v.literal("A256GCM"),
+        iv: v.string(),
+        ciphertext: v.string(),
+        authTag: v.string(),
+      }),
+    ),
+    revision: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    deletedAt: v.optional(v.number()),
+  }).index("by_owner_provider", ["ownerId", "provider"]),
+
+  brokerOAuthTransactions: defineTable({
+    ownerId: v.string(),
+    provider: v.literal("robinhood"),
+    stateHash: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_stateHash", ["stateHash"])
+    .index("by_owner_provider", ["ownerId", "provider"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  portfolioSnapshots: defineTable({
+    ownerId: v.string(),
+    provider: v.literal("robinhood"),
+    capturedAt: v.number(),
+    totalEquity: v.number(),
+    buyingPower: v.number(),
+    cash: v.number(),
+    dayChange: v.number(),
+    dayChangePercent: v.number(),
+    positions: v.array(positionValidator),
+  })
+    .index("by_owner_capturedAt", ["ownerId", "capturedAt"]),
+
+  tradeProposals: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    threadStableId: v.optional(v.string()),
+    runStableId: v.optional(v.string()),
+    status: tradeProposalStatusValidator,
+    symbol: v.string(),
+    side: v.union(v.literal("buy"), v.literal("sell")),
+    quantity: v.optional(v.number()),
+    notionalUsd: v.optional(v.number()),
+    orderType: v.union(v.literal("market"), v.literal("limit"), v.literal("stop"), v.literal("stop_limit")),
+    timeInForce: v.union(v.literal("day"), v.literal("gtc")),
+    limitPrice: v.optional(v.number()),
+    stopPrice: v.optional(v.number()),
+    estimatedPrice: v.optional(v.number()),
+    estimatedTotal: v.optional(v.number()),
+    reviewReference: v.string(),
+    fingerprint: v.string(),
+    idempotencyKey: v.string(),
+    expiresAt: v.number(),
+    approvedAt: v.optional(v.number()),
+    submittedAt: v.optional(v.number()),
+    brokerOrderId: v.optional(v.string()),
+    failureCode: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_stableId", ["ownerId", "stableId"])
+    .index("by_owner_updatedAt", ["ownerId", "updatedAt"])
+    .index("by_status_expiresAt", ["status", "expiresAt"]),
+
+  auditEvents: defineTable({
+    ownerId: v.string(),
+    eventType: v.string(),
+    subjectId: v.string(),
+    outcome: v.union(v.literal("accepted"), v.literal("rejected"), v.literal("failed")),
+    details: v.array(v.object({ key: v.string(), value: v.string() })),
+    createdAt: v.number(),
+  })
+    .index("by_owner_createdAt", ["ownerId", "createdAt"])
+    .index("by_subject_createdAt", ["subjectId", "createdAt"]),
+
+});

@@ -3,6 +3,9 @@ import type {
   ActiveRunReadModel,
   CommandAccepted,
   CommandReadModel,
+  DiscordChannelAssignmentReadModel,
+  DiscordChannelRole,
+  DiscordControlPlaneReadModel,
   MessageReadModel,
   Page,
   PortfolioSnapshotReadModel,
@@ -82,6 +85,22 @@ export const publicApi = {
       },
       CommandAccepted
     >("commands:requestStop"),
+  },
+  discord: {
+    getControlPlane: makeFunctionReference<
+      "query",
+      NoArguments,
+      DiscordControlPlaneReadModel
+    >("discord:getControlPlane"),
+    setChannelRoles: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        channelId: string;
+        roles: DiscordChannelRole[];
+      },
+      DiscordChannelAssignmentReadModel
+    >("discord:setChannelRoles"),
   },
   trading: {
     getDashboard: makeFunctionReference<

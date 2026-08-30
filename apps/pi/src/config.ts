@@ -8,6 +8,7 @@ const environmentSchema = z.object({
   HOST: z.string().trim().min(1).default("0.0.0.0"),
   PORT: positiveInteger.max(65_535).default(8080),
   SERVICE_SHARED_SECRET: z.string().min(32),
+  PI_DISCORD_SHARED_SECRET: z.string().min(32),
   CONVEX_SITE_URL: z.string().url().transform((value) => value.replace(/\/$/, "")),
   GLOBAL_CONCURRENCY: positiveInteger.max(64).default(4),
   RESULT_BATCH_WINDOW_MS: positiveInteger.max(100).default(25),
@@ -31,6 +32,7 @@ export interface AppConfig {
   host: string;
   port: number;
   sharedSecret: string;
+  discordSharedSecret: string;
   convexSiteUrl: string;
   globalConcurrency: number;
   batchWindowMs: number;
@@ -67,6 +69,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   if (value.NODE_ENV === "production" && value.BOUND_ACTOR_ID === undefined) {
     throw new Error("BOUND_ACTOR_ID is required in production.");
   }
+  if (value.PI_DISCORD_SHARED_SECRET === value.SERVICE_SHARED_SECRET) {
+    throw new Error("PI_DISCORD_SHARED_SECRET must be independent from SERVICE_SHARED_SECRET.");
+  }
   if (value.BROKER_MODE === "robinhood" && value.PI_CREDENTIAL_ENCRYPTION_KEY === undefined) {
     throw new Error("PI_CREDENTIAL_ENCRYPTION_KEY is required in Robinhood mode.");
   }
@@ -93,6 +98,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     host: value.HOST,
     port: value.PORT,
     sharedSecret: value.SERVICE_SHARED_SECRET,
+    discordSharedSecret: value.PI_DISCORD_SHARED_SECRET,
     convexSiteUrl: value.CONVEX_SITE_URL,
     globalConcurrency: value.GLOBAL_CONCURRENCY,
     batchWindowMs: value.RESULT_BATCH_WINDOW_MS,

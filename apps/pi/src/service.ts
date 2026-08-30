@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { createApp } from "./app.js";
+import { createApp, type AppDependencies } from "./app.js";
 import type { AppConfig } from "./config.js";
 import { ConvexClient } from "./results/convex-client.js";
 import type { Logger } from "./runtime/logger.js";
@@ -8,6 +8,7 @@ import { RunRegistry } from "./execution/run-registry.js";
 import { SessionCoordinator } from "./execution/session-coordinator.js";
 import type { TradingBroker } from "./broker/types.js";
 import { createTradingBroker } from "./broker/trading-broker.js";
+import type { DiscordAgentRunner } from "./discord/runner.js";
 
 export interface RunningExecutionService {
   server: Server;
@@ -20,10 +21,17 @@ export async function startExecutionService(
   executor: ExecutionExecutor,
   logger: Logger,
   broker: TradingBroker = createTradingBroker(config),
+  discordAgents?: DiscordAgentRunner,
 ): Promise<RunningExecutionService> {
   await executor.initialize();
   if (!executor.readiness().ready) {
     throw new Error(`Pi executor is not ready: ${executor.readiness().reason ?? "unknown reason"}`);
+  }
+  if (discordAgents) {
+    await discordAgents.initialize();
+    if (!discordAgents.readiness().ready) {
+      throw new Error(`Discord agents are not ready: ${discordAgents.readiness().reason ?? "unknown reason"}`);
+    }
   }
 
   const sessions = new SessionCoordinator(executor);
@@ -43,12 +51,14 @@ export async function startExecutionService(
     batchBytes: config.batchBytes,
     logger,
   });
-  const appDependencies = {
+  const appDependencies: AppDependencies = {
     sharedSecret: config.sharedSecret,
+    discordSharedSecret: config.discordSharedSecret,
     executor,
     registry,
     broker,
   };
+  if (discordAgents) appDependencies.discordAgents = discordAgents;
   const app = createApp(config.boundActorId
     ? { ...appDependencies, boundActorId: config.boundActorId }
     : appDependencies);
@@ -72,6 +82,7 @@ export async function startExecutionService(
           await registry.waitForIdle();
           await sessions.dispose();
           await broker.dispose();
+          await discordAgents?.dispose();
           await executor.dispose();
         })();
         await Promise.race([

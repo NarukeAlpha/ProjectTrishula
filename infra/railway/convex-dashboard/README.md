@@ -1,6 +1,6 @@
-# Signal Convex dashboard
+# Project Trishula Convex dashboard
 
-This service runs the dashboard for the Signal self-hosted Convex deployment.
+This service runs the dashboard for the Project Trishula self-hosted Convex deployment.
 Keep it private. Do not create a Railway public domain for this service.
 
 Set:

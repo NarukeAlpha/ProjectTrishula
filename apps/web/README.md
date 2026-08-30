@@ -1,14 +1,32 @@
-# Signal web
+# Project Trishula web
 
-Signal is a phone-first React and Vite trading copilot. Railway builds the static application and serves it through Nginx.
+This service is the phone-first control surface for Project Trishula. Railway builds the React and Vite application and serves it through Nginx.
 
-Production mode uses WorkOS AuthKit and one authenticated Convex connection. The browser never calls Pi or a brokerage service directly. It sends narrow commands to Convex and renders canonical thread, message, run, and tool-event state.
+The production application uses WorkOS AuthKit and one authenticated Convex connection. The browser never connects to Pi or Discord directly. It does not receive model credentials, Discord credentials, service secrets, or brokerage credentials.
 
-Demo mode is a deterministic local product preview. It does not mount WorkOS or Convex. Demo connection changes, portfolio values, chat replies, and trade decisions stay in browser memory. No demo action can place an order.
+## Active sections
+
+- `/ask` and `/threads/:threadId` provide the existing authenticated chat workspace.
+- `/discord` shows gateway health, Discord server and channel inventory, bot permissions, agent-loop state, and per-channel assignments.
+- `/` redirects to `/ask`.
+
+The active navigation does not expose the old overview, activity, brokerage, or Robinhood return routes. Their source files remain for archive history only.
+
+## Discord channel roles
+
+Each usable channel can have any of these roles:
+
+- **Conversation monitor** reads messages and starts the serialized agent loop when research can help.
+- **Reply target** receives the concise final response.
+- **Research log** receives loop status or research traces without interrupting the main chat.
+
+Convex owns the assignments. The page explains missing Message Content intent, channel visibility, message-history access, and send permission. It also shows messages waiting while a loop is already running.
+
+Discord credentials belong only on the Railway Discord service. Do not add them to this web service or to a public runtime variable.
 
 ## Local demo
 
-The checked-in `public/config.js` enables demo mode.
+The checked-in `public/config.js` enables deterministic demo mode.
 
 ```sh
 npm ci
@@ -16,53 +34,40 @@ npm run validate
 npm run dev
 ```
 
-Open the Vite URL. The demo supports primary navigation, a fixed prompt reply, connection changes, and simulated approval and rejection decisions.
+Demo mode does not mount WorkOS or Convex. Chat replies stay in browser memory. The Discord section shows the expected pre-configuration state and never attempts to connect to Discord.
 
 ## Railway runtime configuration
 
-Create one Railway service from this directory. Railway uses `Dockerfile` and checks `/healthz`.
+Create the web Railway service from this directory. Railway uses `Dockerfile` and checks `/healthz`.
 
 Production requires these public variables:
 
-| Variable                     | Example                               | Purpose                                       |
-| ---------------------------- | ------------------------------------- | --------------------------------------------- |
-| `PUBLIC_DEMO_MODE`           | `false`                               | Enables the WorkOS and Convex production path |
-| `PUBLIC_CONVEX_URL`          | `https://convex.example.com`          | Public self-hosted Convex API                 |
-| `PUBLIC_WORKOS_CLIENT_ID`    | `client_...`                          | Public AuthKit client identifier              |
-| `PUBLIC_WORKOS_REDIRECT_URI` | `https://signal.example.com/callback` | Registered AuthKit redirect URI               |
+| Variable                     | Example                                 | Purpose                                       |
+| ---------------------------- | --------------------------------------- | --------------------------------------------- |
+| `PUBLIC_DEMO_MODE`           | `false`                                 | Enables the WorkOS and Convex production path |
+| `PUBLIC_CONVEX_URL`          | `https://convex.example.com`            | Public self-hosted Convex API                 |
+| `PUBLIC_WORKOS_CLIENT_ID`    | `client_...`                            | Public AuthKit client identifier              |
+| `PUBLIC_WORKOS_REDIRECT_URI` | `https://trishula.example.com/callback` | Registered AuthKit redirect URI               |
 
 Optional variables:
 
-| Variable                     | Default          | Purpose                            |
-| ---------------------------- | ---------------- | ---------------------------------- |
-| `PUBLIC_ENVIRONMENT`         | `staging`        | Deployment label                   |
-| `PUBLIC_APPLICATION_NAME`    | `Signal`         | Browser title                      |
-| `PUBLIC_APPLICATION_VERSION` | `unknown`        | Deployment correlation value       |
-| `PUBLIC_WORKOS_API_HOSTNAME` | `api.workos.com` | Custom AuthKit hostname            |
-| `PORT`                       | `8080`           | Nginx listener supplied by Railway |
+| Variable                     | Default            | Purpose                      |
+| ---------------------------- | ------------------ | ---------------------------- |
+| `PUBLIC_ENVIRONMENT`         | `staging`          | Deployment label             |
+| `PUBLIC_APPLICATION_NAME`    | `Project Trishula` | Browser title                |
+| `PUBLIC_APPLICATION_VERSION` | `unknown`          | Deployment correlation value |
+| `PUBLIC_WORKOS_API_HOSTNAME` | `api.workos.com`   | Custom AuthKit hostname      |
+| `PORT`                       | `8080`             | Nginx listener from Railway  |
 
-Set `PUBLIC_DEMO_MODE=true` to deploy the isolated demo. WorkOS and Convex variables are not required in that mode.
-
-All values above are public. Never add WorkOS API keys, Convex administrative keys, Pi URLs, service secrets, brokerage credentials, brokerage tokens, cookies, model keys, or database credentials.
-
-Register the exact WorkOS redirect URI and application origin with WorkOS. Configure the WorkOS Sign-in URL as the public `/login` route. Keep the WorkOS callback at the URI in `PUBLIC_WORKOS_REDIRECT_URI`, normally `/callback`.
-
-Register `https://<convex-site-domain>/http/broker/robinhood/callback` as the separate Robinhood OAuth redirect URI. The public Convex callback consumes the one-time OAuth response and redirects to the web app at `/broker/connected` or `/broker/failed`. Those public result pages do not read OAuth parameters and scrub any unexpected query string or fragment before paint. The legacy web route `/broker/callback` always scrubs its URL and redirects to `/broker/failed`. Do not use the WorkOS callback path for Robinhood.
-
-The connect action returns a validated `https://robinhood.com` authorization URL. The browser keeps that URL only in React component memory and shows controls to open or copy it for desktop handoff. It never stores the URL or exchanges a Robinhood code.
+All values above are public. Never add a WorkOS API key, Convex administrative key, Pi URL, service secret, Discord bot token, model credential, or brokerage credential.
 
 ## Public Convex contract
 
-`src/convex/functions.ts` contains typed string references for these browser functions:
+`src/convex/functions.ts` uses typed public string references. The Discord surface expects:
 
-- Queries: `threads:list`, `threads:get`, `messages:listPage`, `runs:getActive`, `commands:get`, and `trading:getDashboard`.
-- Mutations: `commands:submitPrompt`, `commands:retryRun`, `commands:requestStop`, `threads:rename`, `threads:archive`, and `trading:rejectProposal`.
-- Actions: `trading:startRobinhoodConnection`, `trading:disconnectRobinhood`, `trading:refreshPortfolio`, and `trading:approveProposal`.
+- Query: `discord:getControlPlane`
+- Mutation: `discord:setChannelRoles`
 
-The frontend does not import the generated Convex server API. It cannot import internal actions, result ingestion functions, or private Pi service calls by accident.
+The control-plane query returns gateway health, Discord server and channel inventory, permission state, saved roles, and loop status. Role updates contain only `guildId`, `channelId`, and the complete deduplicated role set.
 
-The active-run query supplies the temporary contiguous event window used for streaming. A terminal Convex transaction supplies the canonical assistant message and run state together. The UI then stops rendering temporary batches.
-
-## Browser boundary
-
-Nginx allows browser connections only to Signal, WorkOS, and the public Convex HTTPS and WebSocket origins. It sends `Referrer-Policy: no-referrer`, including on the OAuth handoff. The bundle check rejects administrative keys, service secrets, private service URLs, and common brokerage secret names.
+The chat surface keeps its existing thread, message, run, and command functions. The frontend does not import Convex internal actions or private service functions.

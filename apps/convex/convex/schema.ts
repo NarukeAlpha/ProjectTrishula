@@ -59,6 +59,28 @@ export const tradeProposalStatusValidator = v.union(
   v.literal("failed"),
 );
 
+export const discordChannelRoleValidator = v.union(
+  v.literal("conversation_monitor"),
+  v.literal("reply_target"),
+  v.literal("research_log"),
+);
+
+export const discordChannelTypeValidator = v.union(
+  v.literal("text"),
+  v.literal("announcement"),
+  v.literal("forum"),
+  v.literal("other"),
+);
+
+export const discordLoopStatusValidator = v.union(
+  v.literal("idle"),
+  v.literal("triaging"),
+  v.literal("researching"),
+  v.literal("drafting"),
+  v.literal("catching_up"),
+  v.literal("error"),
+);
+
 export const positionValidator = v.object({
   symbol: v.string(),
   quantity: v.number(),
@@ -331,5 +353,169 @@ export default defineSchema({
   })
     .index("by_owner_createdAt", ["ownerId", "createdAt"])
     .index("by_subject_createdAt", ["subjectId", "createdAt"]),
+
+  discordGateways: defineTable({
+    ownerId: v.string(),
+    instanceId: v.string(),
+    reportedStatus: v.union(v.literal("online"), v.literal("degraded")),
+    botUserId: v.optional(v.string()),
+    botUserName: v.optional(v.string()),
+    connectedAt: v.optional(v.number()),
+    lastHeartbeatAt: v.number(),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_owner", ["ownerId"]),
+
+  discordGuilds: defineTable({
+    ownerId: v.string(),
+    guildId: v.string(),
+    name: v.string(),
+    iconUrl: v.optional(v.string()),
+    permissions: v.object({
+      viewChannels: v.boolean(),
+      sendMessages: v.boolean(),
+      readMessageHistory: v.boolean(),
+      messageContent: v.boolean(),
+    }),
+    available: v.boolean(),
+    lastSeenAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_guild", ["ownerId", "guildId"])
+    .index("by_owner_available_name", ["ownerId", "available", "name"]),
+
+  discordChannels: defineTable({
+    ownerId: v.string(),
+    guildId: v.string(),
+    channelId: v.string(),
+    name: v.string(),
+    type: discordChannelTypeValidator,
+    canView: v.boolean(),
+    canSend: v.boolean(),
+    canReadHistory: v.boolean(),
+    roles: v.array(discordChannelRoleValidator),
+    available: v.boolean(),
+    lastSeenAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_channel", ["ownerId", "channelId"])
+    .index("by_owner_guild_channel", ["ownerId", "guildId", "channelId"])
+    .index("by_owner_guild_available_name", ["ownerId", "guildId", "available", "name"]),
+
+  discordChannelStates: defineTable({
+    ownerId: v.string(),
+    guildId: v.string(),
+    channelId: v.string(),
+    generation: v.number(),
+    status: discordLoopStatusValidator,
+    latestSequence: v.number(),
+    triggerThroughSequence: v.number(),
+    completedThroughSequence: v.number(),
+    recheckCount: v.number(),
+    recheckPending: v.boolean(),
+    lastRecheckHash: v.optional(v.string()),
+    activeRunId: v.optional(v.string()),
+    activeClaimId: v.optional(v.string()),
+    activeWorkerId: v.optional(v.string()),
+    activeMode: v.optional(v.union(v.literal("messages"), v.literal("recheck"))),
+    activeWindowStart: v.optional(v.number()),
+    activeWindowEnd: v.optional(v.number()),
+    activeContextHash: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    lastProcessedAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_channel", ["ownerId", "channelId"])
+    .index("by_owner_status_updatedAt", ["ownerId", "status", "updatedAt"]),
+
+  discordMessages: defineTable({
+    ownerId: v.string(),
+    guildId: v.string(),
+    channelId: v.string(),
+    messageId: v.string(),
+    sequence: v.number(),
+    authorId: v.string(),
+    authorName: v.string(),
+    content: v.string(),
+    isBot: v.boolean(),
+    replyToMessageId: v.optional(v.string()),
+    createdAt: v.number(),
+    receivedAt: v.number(),
+  })
+    .index("by_owner_channel_message", ["ownerId", "channelId", "messageId"])
+    .index("by_owner_channel_sequence", ["ownerId", "channelId", "sequence"]),
+
+  discordLoopRuns: defineTable({
+    ownerId: v.string(),
+    guildId: v.string(),
+    channelId: v.string(),
+    runId: v.string(),
+    claimId: v.string(),
+    workerId: v.string(),
+    generation: v.number(),
+    mode: v.union(v.literal("messages"), v.literal("recheck")),
+    status: v.union(
+      v.literal("triaging"),
+      v.literal("researching"),
+      v.literal("drafting"),
+      v.literal("catching_up"),
+      v.literal("completed"),
+      v.literal("error"),
+      v.literal("stale"),
+    ),
+    windowStart: v.number(),
+    windowEnd: v.number(),
+    contextHash: v.string(),
+    recheckCount: v.number(),
+    leaseExpiresAt: v.number(),
+    error: v.optional(v.string()),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_run", ["ownerId", "runId"])
+    .index("by_owner_claim", ["ownerId", "claimId"])
+    .index("by_owner_channel_startedAt", ["ownerId", "channelId", "startedAt"]),
+
+  discordOutbox: defineTable({
+    ownerId: v.string(),
+    sourceGuildId: v.string(),
+    sourceChannelId: v.string(),
+    guildId: v.string(),
+    channelId: v.string(),
+    outboxId: v.string(),
+    idempotencyKey: v.string(),
+    runId: v.string(),
+    generation: v.number(),
+    content: v.string(),
+    replyToMessageId: v.optional(v.string()),
+    recheckRequested: v.boolean(),
+    finalizesLoop: v.boolean(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("sent"),
+      v.literal("finalized"),
+      v.literal("failed"),
+    ),
+    attempts: v.number(),
+    deliveryWorkerId: v.optional(v.string()),
+    deliveryToken: v.optional(v.string()),
+    deliveryLeaseExpiresAt: v.optional(v.number()),
+    discordMessageId: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    sentAt: v.optional(v.number()),
+  })
+    .index("by_owner_outbox", ["ownerId", "outboxId"])
+    .index("by_owner_idempotency", ["ownerId", "idempotencyKey"])
+    .index("by_owner_status_createdAt", ["ownerId", "status", "createdAt"])
+    .index("by_owner_run", ["ownerId", "runId"]),
 
 });

@@ -1,19 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App } from "../../app/App";
-import type { ProductionRuntimeConfig } from "../../config/runtime";
 import { BrokerReturnPage, LegacyBrokerCallback } from "./BrokerReturn";
-
-const config: ProductionRuntimeConfig = {
-  environment: "production",
-  applicationName: "Signal",
-  applicationVersion: "test",
-  demoMode: false,
-  convexUrl: "https://convex.example.com",
-  workosClientId: "client_test",
-  workosRedirectUri: "https://signal.example.com/callback",
-};
 
 function LocationProbe() {
   const location = useLocation();
@@ -29,25 +17,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("public Robinhood return routes", () => {
-  it("renders the success page before the WorkOS and Convex auth gate", () => {
-    render(
-      <MemoryRouter initialEntries={["/broker/connected"]}>
-        <App config={config} />
-      </MemoryRouter>,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "Authorization complete" }),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("link", { name: "Return to dashboard" }),
-    ).toHaveAttribute("href", "/");
-    expect(
-      screen.queryByText(/opening secure sign-in/i),
-    ).not.toBeInTheDocument();
-  });
-
+describe("archived Robinhood return components", () => {
   it("scrubs unexpected parameters from a public result page", async () => {
     render(
       <MemoryRouter

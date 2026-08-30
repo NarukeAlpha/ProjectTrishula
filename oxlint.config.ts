@@ -13,7 +13,7 @@ export default defineConfig({
     ".pi/**",
     ".roo/**",
     ".windsurf/**",
-    "POC/**",
+    "archive/**",
     "coverage/**",
     "dist/**",
     "node_modules/**",
@@ -43,4 +43,3 @@ export default defineConfig({
     "anti-slop/require-safety-comment-for-type-assertion": "error",
   },
 });
-

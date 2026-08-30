@@ -1,88 +1,33 @@
 import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import type { DemoRuntimeConfig } from "../config/runtime";
-import type { MessageReadModel } from "../convex/types";
+import type {
+  DiscordControlPlaneReadModel,
+  MessageReadModel,
+} from "../convex/types";
+import { DiscordControlView } from "../features/discord/DiscordControlPage";
 import { MessageList } from "../features/messages/MessageList";
-import {
-  ActivityView,
-  TradingDashboard,
-  type PortfolioSnapshot,
-  type Position,
-  type TradeProposal,
-} from "../features/dashboard/TradingDashboard";
 import {
   BottomNavigation,
   DesktopNavigation,
 } from "../features/navigation/BottomNavigation";
 import { Welcome } from "../features/threads/Welcome";
 
-const demoPortfolio: PortfolioSnapshot = {
-  totalValue: 27_846.2,
-  buyingPower: 4_382.14,
-  dayChange: 412.87,
-  dayChangePercent: 1.5,
-  updatedLabel: "Demo snapshot · 10:42 AM ET",
+const demoDiscord: DiscordControlPlaneReadModel = {
+  gateway: { status: "not_configured" },
+  guilds: [],
 };
-
-const demoPositions: Position[] = [
-  {
-    symbol: "NVDA",
-    name: "NVIDIA",
-    quantity: 14,
-    marketValue: 8_731.38,
-    dayChangePercent: 2.84,
-  },
-  {
-    symbol: "AAPL",
-    name: "Apple",
-    quantity: 22,
-    marketValue: 5_096.08,
-    dayChangePercent: 0.72,
-  },
-  {
-    symbol: "AMD",
-    name: "Advanced Micro Devices",
-    quantity: 18,
-    marketValue: 3_121.92,
-    dayChangePercent: -0.46,
-  },
-];
-
-const initialProposals: TradeProposal[] = [
-  {
-    id: "proposal-nvda",
-    side: "buy",
-    symbol: "NVDA",
-    quantity: 2,
-    orderType: "limit",
-    limitPrice: 134.2,
-    estimatedTotal: 268.4,
-    rationale: "Adds only if price pulls back to the defined support zone.",
-    status: "pending",
-  },
-  {
-    id: "proposal-amd",
-    side: "sell",
-    symbol: "AMD",
-    quantity: 3,
-    orderType: "market",
-    estimatedTotal: 520.32,
-    rationale:
-      "Reduces concentration after the position crossed the demo risk limit.",
-    status: "pending",
-  },
-];
 
 function DemoHeader({ onReset }: { onReset: () => void }) {
   return (
     <header className="topbar demo-topbar">
       <div className="topbar-brand">
         <span className="brand-mark" aria-hidden="true">
-          S
+          T
         </span>
         <div>
-          <strong>Signal</strong>
-          <span>Trading copilot</span>
+          <strong>Project Trishula</strong>
+          <span>Market research agent</span>
         </div>
       </div>
       <DesktopNavigation />
@@ -124,14 +69,14 @@ function DemoComposer({ onSubmit }: { onSubmit: (prompt: string) => void }) {
     <div className="composer-wrap">
       <form className="composer" onSubmit={submit}>
         <label className="sr-only" htmlFor="prompt">
-          Ask Signal
+          Ask Trishula
         </label>
         <textarea
           id="prompt"
           ref={textarea}
           rows={2}
           maxLength={10_000}
-          placeholder="Ask about your portfolio or a trade idea…"
+          placeholder="Ask about a market move or trade idea…"
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={keyDown}
@@ -152,7 +97,9 @@ function DemoComposer({ onSubmit }: { onSubmit: (prompt: string) => void }) {
           </button>
         </div>
       </form>
-      <p className="disclaimer">Demo only. Signal cannot place a real order.</p>
+      <p className="disclaimer">
+        Demo only. Verify important market information.
+      </p>
     </div>
   );
 }
@@ -173,7 +120,7 @@ function DemoConversation({
         <header className="thread-header">
           <div>
             <span>Demo conversation</span>
-            <h1 id="demo-thread-title">Market plan</h1>
+            <h1 id="demo-thread-title">Market research</h1>
           </div>
         </header>
         <section
@@ -193,19 +140,17 @@ function DemoConversation({
 export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
   const navigate = useNavigate();
   const nextMessage = useRef(1);
-  const [brokerConnected, setBrokerConnected] = useState(true);
-  const [proposals, setProposals] = useState(initialProposals);
   const [messages, setMessages] = useState<MessageReadModel[]>([]);
 
   function submitPrompt(prompt: string) {
     const sequence = nextMessage.current++;
     const timestamp = 1_770_000_000_000 + sequence;
     const reply = [
-      "### Demo portfolio read",
+      "### Demo research read",
       "",
-      "Signal reviewed the local snapshot. NVDA has the strongest demo momentum, while AMD is the only position down today.",
+      "Trishula reviewed the fixed local snapshot. NVDA has the strongest demo momentum, while AMD is the only position down today.",
       "",
-      "A cautious next step is to wait for the defined NVDA limit price and keep the position size small. The approval card is a simulation, and no order can leave this browser.",
+      "A cautious next step is to wait for confirmation and define the invalidation before taking risk. This demo does not use live market data.",
     ].join("\n");
     setMessages((current) => [
       ...current,
@@ -221,7 +166,7 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
         updatedAt: timestamp,
       },
       {
-        stableId: `demo-signal-${sequence}`,
+        stableId: `demo-trishula-${sequence}`,
         threadId: "demo-session",
         ordinal: current.length + 2,
         role: "assistant",
@@ -234,51 +179,18 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
     navigate("/threads/demo-session");
   }
 
-  function decide(proposalId: string, decision: "approve" | "reject") {
-    setProposals((current) =>
-      current.map((proposal) =>
-        proposal.id === proposalId
-          ? {
-              ...proposal,
-              status: decision === "approve" ? "approved" : "rejected",
-            }
-          : proposal,
-      ),
-    );
-  }
-
   function reset() {
     nextMessage.current = 1;
-    setBrokerConnected(true);
-    setProposals(initialProposals);
     setMessages([]);
-    navigate("/");
+    navigate("/ask");
   }
 
   return (
     <div className="shell demo-shell" data-environment={config.environment}>
-      <div className="workspace demo-workspace">
+      <div className="workspace demo-workspace workspace--full">
         <DemoHeader onReset={reset} />
         <Routes>
-          <Route
-            path="/"
-            element={
-              <TradingDashboard
-                cloudConnected
-                brokerConnection={
-                  brokerConnected ? "connected" : "disconnected"
-                }
-                portfolio={brokerConnected ? demoPortfolio : null}
-                positions={brokerConnected ? demoPositions : []}
-                proposals={proposals}
-                demoMode
-                onToggleConnection={() =>
-                  setBrokerConnected((connected) => !connected)
-                }
-                onDecision={decide}
-              />
-            }
-          />
+          <Route path="/" element={<Navigate to="/ask" replace />} />
           <Route
             path="/ask"
             element={
@@ -297,16 +209,15 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
             }
           />
           <Route
-            path="/activity"
+            path="/discord"
             element={
-              <ActivityView
-                proposals={proposals}
-                demoMode
-                onDecision={decide}
+              <DiscordControlView
+                model={demoDiscord}
+                onSetChannelRoles={() => Promise.resolve()}
               />
             }
           />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/ask" replace />} />
         </Routes>
         <BottomNavigation />
       </div>

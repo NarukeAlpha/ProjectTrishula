@@ -1,6 +1,6 @@
-# Signal self-hosted Convex backend
+# Project Trishula self-hosted Convex backend
 
-This service runs the self-hosted Convex backend for the Signal trading POC.
+This service runs the self-hosted Convex backend for Project Trishula.
 The image is pinned to the tested Convex commit in `Dockerfile`.
 
 Publish one Railway domain from this service on port `3210`:

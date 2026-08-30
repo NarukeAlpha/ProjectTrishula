@@ -3,7 +3,7 @@ import { parseRuntimeConfig } from "./runtime";
 
 const valid = {
   environment: "staging",
-  applicationName: "Signal",
+  applicationName: "Project Trishula",
   applicationVersion: "test",
   demoMode: false,
   convexUrl: "https://convex.example.com",
@@ -24,13 +24,13 @@ describe("parseRuntimeConfig", () => {
     expect(
       parseRuntimeConfig({
         environment: "development",
-        applicationName: "Signal",
+        applicationName: "Project Trishula",
         applicationVersion: "demo",
         demoMode: true,
       }),
     ).toEqual({
       environment: "development",
-      applicationName: "Signal",
+      applicationName: "Project Trishula",
       applicationVersion: "demo",
       demoMode: true,
     });

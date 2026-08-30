@@ -12,18 +12,10 @@ import type { ProductionRuntimeConfig } from "../config/runtime";
 import { useConnectionState } from "../convex/client";
 import { Composer } from "../features/composer/Composer";
 import {
-  ActivityView,
-  TradingDashboard,
-} from "../features/dashboard/TradingDashboard";
-import {
   BottomNavigation,
   DesktopNavigation,
 } from "../features/navigation/BottomNavigation";
-import {
-  BrokerReturnPage,
-  LegacyBrokerCallback,
-} from "../features/trading/BrokerReturn";
-import { useTrading } from "../features/trading/useTrading";
+import { isChatPathname } from "../features/navigation/routes";
 import { ThreadSidebar } from "../features/threads/ThreadSidebar";
 import { Welcome } from "../features/threads/Welcome";
 import { AuthStage } from "./AuthStage";
@@ -32,6 +24,12 @@ import { RecoveryBanner } from "./RecoveryBanner";
 const ThreadWorkspace = lazy(() =>
   import("../features/threads/ThreadWorkspace").then((module) => ({
     default: module.ThreadWorkspace,
+  })),
+);
+
+const DiscordControlPage = lazy(() =>
+  import("../features/discord/DiscordControlPage").then((module) => ({
+    default: module.DiscordControlPage,
   })),
 );
 
@@ -63,7 +61,7 @@ function WorkOSLoginRoute() {
     <main className="auth-stage">
       <section className="auth-card" role="status">
         <div className="auth-mark" aria-hidden="true">
-          S
+          T
         </div>
         <h1>Opening secure sign-in…</h1>
       </section>
@@ -75,39 +73,43 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
   const { user, signOut } = useAuth();
   const connection = useConnectionState();
   const location = useLocation();
-  const trading = useTrading();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isChatRoute = isChatPathname(location.pathname);
   const reconnecting =
     connection.hasEverConnected && !connection.isWebSocketConnected;
-  const connectionBusy =
-    trading.operation === "connecting" || trading.operation === "disconnecting";
   return (
-    <div className="shell">
+    <div className="shell" data-section={isChatRoute ? "chat" : "discord"}>
       <KeyboardShortcuts />
-      <ThreadSidebar
-        mobileOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-      <div className="workspace">
+      {isChatRoute && (
+        <ThreadSidebar
+          mobileOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+        />
+      )}
+      <div
+        className={`workspace ${isChatRoute ? "workspace--chat" : "workspace--full"}`}
+      >
         <header className="topbar">
-          <button
-            className="icon-button sidebar-toggle"
-            type="button"
-            aria-label="Open navigation"
-            onClick={() => setSidebarOpen(true)}
-          >
-            ☰
-          </button>
+          {isChatRoute && (
+            <button
+              className="icon-button sidebar-toggle"
+              type="button"
+              aria-label="Open conversation history"
+              onClick={() => setSidebarOpen(true)}
+            >
+              ☰
+            </button>
+          )}
           <div className="topbar-brand">
             <span className="brand-mark" aria-hidden="true">
-              S
+              T
             </span>
             <div>
-              <strong>Signal</strong>
+              <strong>Project Trishula</strong>
               <span>
                 {config.environment !== "production"
                   ? config.environment
-                  : "Trading copilot"}
+                  : "Market research agent"}
               </span>
             </div>
           </div>
@@ -127,48 +129,13 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
         </header>
         {reconnecting && (
           <div className="connection-banner" role="status">
-            Connection interrupted. Signal is showing the last confirmed state
+            Connection interrupted. Trishula is showing the last confirmed state
             while it reconnects…
           </div>
         )}
-        {trading.error && (
-          <div className="notice warning notice-with-action" role="alert">
-            <span>{trading.error}</span>
-            <button type="button" onClick={trading.clearError}>
-              Dismiss
-            </button>
-          </div>
-        )}
-        <RecoveryBanner key={location.key} />
+        {isChatRoute && <RecoveryBanner key={location.key} />}
         <Routes>
-          <Route
-            path="/"
-            element={
-              <TradingDashboard
-                cloudConnected={connection.isWebSocketConnected}
-                brokerConnection={trading.dashboard.brokerConnection}
-                brokerIsMock={trading.dashboard.brokerIsMock}
-                brokerLabel={trading.dashboard.brokerLabel}
-                authorizationUrl={trading.authorizationUrl}
-                portfolio={trading.dashboard.portfolio}
-                positions={trading.dashboard.positions}
-                proposals={trading.dashboard.proposals}
-                isLoading={trading.isLoading}
-                connectionBusy={connectionBusy}
-                connectionNeedsAttention={
-                  trading.dashboard.connectionNeedsAttention
-                }
-                decisionBusyId={trading.decisionBusyId}
-                refreshBusy={trading.operation === "refreshing"}
-                onToggleConnection={() => void trading.toggleConnection()}
-                onDismissAuthorization={trading.dismissAuthorization}
-                onRefresh={() => void trading.refresh()}
-                onDecision={(proposalId, decision) =>
-                  void trading.decide(proposalId, decision)
-                }
-              />
-            }
-          />
+          <Route path="/" element={<Navigate to="/ask" replace />} />
           <Route
             path="/ask"
             element={
@@ -195,18 +162,20 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
             }
           />
           <Route
-            path="/activity"
+            path="/discord"
             element={
-              <ActivityView
-                proposals={trading.dashboard.proposals}
-                decisionBusyId={trading.decisionBusyId}
-                onDecision={(proposalId, decision) =>
-                  void trading.decide(proposalId, decision)
+              <Suspense
+                fallback={
+                  <main className="discord-page">
+                    <div className="loading">Loading Discord control…</div>
+                  </main>
                 }
-              />
+              >
+                <DiscordControlPage />
+              </Suspense>
             }
           />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/ask" replace />} />
         </Routes>
         <BottomNavigation />
       </div>
@@ -224,15 +193,5 @@ function ProtectedApp({ config }: { config: ProductionRuntimeConfig }) {
 }
 
 export function App({ config }: { config: ProductionRuntimeConfig }) {
-  const location = useLocation();
-  if (location.pathname === "/broker/connected") {
-    return <BrokerReturnPage result="connected" />;
-  }
-  if (location.pathname === "/broker/failed") {
-    return <BrokerReturnPage result="failed" />;
-  }
-  if (location.pathname === "/broker/callback") {
-    return <LegacyBrokerCallback />;
-  }
   return <ProtectedApp config={config} />;
 }

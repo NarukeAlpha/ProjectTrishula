@@ -4,6 +4,7 @@ import { loadConfig } from "../src/config.js";
 const base = {
   NODE_ENV: "test",
   SERVICE_SHARED_SECRET: "a-secure-service-secret-with-32-chars",
+  PI_DISCORD_SHARED_SECRET: "an-independent-discord-secret-with-32-chars",
   CONVEX_SITE_URL: "http://convex.internal/http",
 };
 
@@ -17,6 +18,7 @@ describe("loadConfig", () => {
     expect(config.brokerMode).toBe("mock");
     expect(config.robinhoodOAuthRedirectUri).toBe("http://convex.internal/http/broker/robinhood/callback");
     expect(config.piCredentialKeyVersion).toBe(1);
+    expect(config.discordSharedSecret).toBe(base.PI_DISCORD_SHARED_SECRET);
   });
 
   it("requires HTTPS for the production Convex endpoint", () => {
@@ -70,6 +72,13 @@ describe("loadConfig", () => {
   it("does not fall back to the service secret for broker encryption", () => {
     const config = loadConfig(base);
     expect(config.piCredentialEncryptionKey).toBeUndefined();
+  });
+
+  it("requires a dedicated Discord agent secret", () => {
+    expect(() => loadConfig({
+      ...base,
+      PI_DISCORD_SHARED_SECRET: base.SERVICE_SHARED_SECRET,
+    })).toThrow(/must be independent/);
   });
 
   it("rejects batching windows above 100 milliseconds", () => {

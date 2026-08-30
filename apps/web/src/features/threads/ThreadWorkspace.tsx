@@ -63,7 +63,7 @@ export function ThreadWorkspace() {
       setRetryError(
         error instanceof CommandUncertainError
           ? error.message
-          : "Signal could not start the retry.",
+          : "Trishula could not start the retry.",
       );
     }
   }

@@ -6,6 +6,7 @@ import { TradingBrokerService } from "../src/broker/trading-broker.js";
 const base = {
   NODE_ENV: "test",
   SERVICE_SHARED_SECRET: "a-secure-service-secret-with-32-chars",
+  PI_DISCORD_SHARED_SECRET: "an-independent-discord-secret-with-32-chars",
   CONVEX_SITE_URL: "http://convex.internal/http",
 };
 

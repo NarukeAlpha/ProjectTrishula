@@ -1,0 +1,9 @@
+.git
+.railway
+archive
+**/node_modules
+**/dist
+**/coverage
+**/.env
+**/.env.*
+**/auth.json

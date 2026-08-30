@@ -1,9 +1,11 @@
-# Signal Convex application
+# Project Trishula Convex application
 
-This package is the Signal trading proof-of-concept state plane. It owns
-authenticated browser state, chat threads and runs, trade proposals, portfolio
-snapshots, broker connection status, and the audit trail. It is deployed to the
-self-hosted Convex backend, not to the browser or the private Pi service.
+This package is Project Trishula's state plane. It owns authenticated browser
+state, chat, Discord channel assignments, Discord message windows, loop leases,
+and outbox delivery state. The preserved trading POC functions remain available
+to the existing chat runtime, but the current Discord pipeline does not call
+brokerage or order functions. This package deploys to the self-hosted Convex
+backend, not to the browser or private Pi service.
 
 ## Public functions
 
@@ -23,6 +25,16 @@ Trading functions:
 - `trading:refreshPortfolio`
 - `trading:approveProposal`
 - `trading:rejectProposal`
+
+Discord control functions:
+
+- `discord:getControlPlane`
+- `discord:setChannelRoles`
+
+The Discord control plane lists the connected gateway, discovered guilds and
+channels, bot permissions, channel roles, and current loop state. Channel
+roles are `conversation_monitor`, `reply_target`, and `research_log`. Public
+queries and mutations use the same WorkOS actor boundary as chat and trading.
 
 Every public function derives the actor from the validated WorkOS subject. The
 actor owns the queried records and is the only actor allowed to approve or
@@ -56,6 +68,34 @@ Pi calls these Convex HTTP Actions with
 - `POST /service/broker-credentials/put`
 - `POST /service/broker-credentials/delete`
 
+The Discord gateway calls `POST /http/discord` on the self-hosted public URL
+with `Authorization: Bearer $DISCORD_GATEWAY_SHARED_SECRET`. The dedicated
+secret cannot authorize broker credentials, trade proposals, or Pi run routes.
+
+The Discord gateway uses one service-authenticated JSON endpoint. Each request
+has an `operation` discriminator. Supported operations are `syncGuilds`,
+`ingestMessage`, `claimLoop`, `newestContext`, `completeLoop`, `heartbeat`,
+`listRunnable`, `enqueueReply`, and `acknowledgeReply`. The exact TypeScript and
+Zod request contract is exported from
+`convex/lib/discord_contract.ts`. Every response is JSON and has either
+`{ok:true,operation,result}` or `{ok:false,operation?,error}`.
+The request `actorId` must also be present in `WORKOS_ALLOWED_USER_IDS`; the
+dedicated gateway credential cannot create state for an unknown WorkOS actor.
+
+Convex assigns a monotonic sequence to each monitored-channel message and
+deduplicates Discord message IDs. A channel has one fenced lease at a time.
+Each claim advances its generation and processes at most 10 ordered messages.
+A 25-message backlog therefore runs as `1-10`, `11-20`, and `21-25`. New
+messages that arrive during a run only advance the pending watermark. They do
+not start another concurrent run. `newestContext` always returns the newest 10
+messages in ascending order.
+
+Bot messages are stored as context but do not start a loop. An agent can ask
+for an autonomous recheck after its reply appears in the context. Convex caps
+that path at two rechecks and rejects an unchanged context hash. Replies use an
+idempotent outbox. A sent acknowledgement also records the bot reply in the
+channel context, so a delayed Discord event does not lose the reply.
+
 The broker credential routes use schema version `1`. A GET body is
 `{schemaVersion:1,actorId,provider:"robinhood"}` and returns
 `{schemaVersion:1,credential:<opaque-envelope>|null,revision:number}`. A PUT
@@ -82,18 +122,19 @@ The Convex-to-Pi boundary uses:
 ```text
 EXECUTION_PRIVATE_DOMAIN_SUFFIX=railway.internal:8080
 SERVICE_SHARED_SECRET=<shared-server-to-server-secret>
-WEB_APP_ORIGIN=https://signal.example.com
+WEB_APP_ORIGIN=https://trishula.example.com
 ```
 
-Keep `SERVICE_SHARED_SECRET` out of browser variables, source files, logs, and
-Convex records. Convex derives the private Pi service name from the trusted
+Keep `SERVICE_SHARED_SECRET` and `DISCORD_GATEWAY_SHARED_SECRET` out of browser
+variables, source files, logs, and Convex records. Convex derives the private Pi service name from the trusted
 actor ID as `pi-u-${sha256(actorId).slice(0,20)}` and appends the configured
 private-domain suffix. There is no singleton Pi execution URL.
 
 Railway service variables and Convex function variables are separate stores.
-Use `scripts/railway/release.sh`; its allowlisted sync copies these five required
-names into the function environment without printing or persisting their
-values. It also removes the obsolete `EXECUTION_BASE_URL`.
+The `convex-functions` Railway service derives a short-lived admin key and
+copies only the allowlisted WorkOS and service variables into the Convex
+function environment. It withholds detailed deploy output so credentials do
+not enter build logs.
 
 The callback route accepts the provider's `code` and `state`, hashes and
 atomically consumes the state mapping, sends the exchange to the actor's Pi

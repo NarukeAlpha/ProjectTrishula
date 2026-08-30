@@ -1,23 +1,24 @@
 {
-  "name": "phone-trading-poc",
+  "name": "project-trishula",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Phone-first agentic trading proof of concept.",
+  "description": "Discord-native market research conversations with a Convex-backed agent pipeline.",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
-    "lint": "oxlint .",
-    "lint:fix": "oxlint . --fix",
+    "lint": "oxlint apps oxlint.config.ts",
+    "lint:fix": "oxlint apps oxlint.config.ts --fix",
     "check:web": "npm run validate --prefix apps/web",
     "check:convex": "npm run typecheck --prefix apps/convex && npm test --prefix apps/convex",
     "check:pi": "npm run typecheck --prefix apps/pi && npm test --prefix apps/pi && npm run build --prefix apps/pi",
+    "check:discord": "npm run typecheck --prefix apps/discord && npm test --prefix apps/discord && npm run build --prefix apps/discord",
     "check:railway": "bash scripts/railway/validate.sh",
-    "check": "npm run lint && npm run check:convex && npm run check:pi && npm run check:web && npm run check:railway"
+    "check": "npm run lint && npm run check:convex && npm run check:pi && npm run check:discord && npm run check:web && npm run check:railway"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.79.0",
-    "oxlint": "1.79.0"
+    "@oxlint/plugins": "1.80.0",
+    "oxlint": "1.80.0"
   }
 }

@@ -1,6 +1,6 @@
 window.__SIGNAL_CONFIG__ = {
   environment: "development",
-  applicationName: "Signal",
+  applicationName: "Project Trishula",
   applicationVersion: "local-demo",
   demoMode: true,
 };

@@ -1,0 +1,17 @@
+GET http://localhost:8080/Manga/get-list
+Accept: application/json
+
+###
+
+POST http://localhost:8080/Manga/update-chapter
+Content-Type: application/json
+Accept: application/json
+
+{
+  "_id": "66287271fe8786cac322093c",
+  "manga": "Solo Leveling",
+  "lastchapter": 199,
+  "monitoring": true,
+  "chapterlink": "https://asurascans.us/manga/solo-leveling-asura/chapter-199/",
+  "identifier": "asurascans"
+}

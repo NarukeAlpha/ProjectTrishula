@@ -12,13 +12,17 @@ import {
 } from "./http/schemas.js";
 import type { TradingBroker } from "./broker/types.js";
 import { isBoundActor } from "./identity/actor-binding.js";
+import { discordAgentRequestSchema } from "./discord/contracts.js";
+import type { DiscordAgentRunner } from "./discord/runner.js";
 
 export interface AppDependencies {
   sharedSecret: string;
+  discordSharedSecret: string;
   executor: ExecutionExecutor;
   registry: AppRunRegistry;
   broker?: TradingBroker;
   boundActorId?: string;
+  discordAgents?: DiscordAgentRunner;
 }
 
 export interface AppRunRegistry {
@@ -28,22 +32,56 @@ export interface AppRunRegistry {
   cancel(runId: string, actorId: string): CancelRunResult;
 }
 
+interface HealthResponse {
+  ok: boolean;
+  service: string;
+  acceptingRuns: boolean;
+  executor: ReturnType<ExecutionExecutor["readiness"]>;
+  discordAgents?: ReturnType<DiscordAgentRunner["readiness"]>;
+}
+
 export function createApp(dependencies: AppDependencies): express.Express {
   const app = express();
   const authenticate = bearerAuthentication(dependencies.sharedSecret);
+  const authenticateDiscord = bearerAuthentication(dependencies.discordSharedSecret);
   const json = express.json({ limit: "2mb", strict: true });
 
   app.disable("x-powered-by");
 
   app.get("/health", (_request, response) => {
     const executor = dependencies.executor.readiness();
-    const ready = dependencies.registry.isAccepting() && executor.ready;
-    response.status(ready ? 200 : 503).json({
+    const discordAgents = dependencies.discordAgents?.readiness();
+    const ready = dependencies.registry.isAccepting() && executor.ready && (discordAgents?.ready ?? true);
+    const health: HealthResponse = {
       ok: ready,
-      service: "signal-execution-backend",
+      service: "project-trishula-pi",
       acceptingRuns: dependencies.registry.isAccepting(),
       executor,
-    });
+    };
+    if (discordAgents) health.discordAgents = discordAgents;
+    response.status(ready ? 200 : 503).json(health);
+  });
+
+  app.post("/discord/agents/run", authenticateDiscord, json, async (request, response) => {
+    if (!dependencies.discordAgents?.readiness().ready) {
+      response.status(503).json({ error: "discord_agents_not_ready" });
+      return;
+    }
+    const parsed = discordAgentRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ error: "invalid_discord_agent_request" });
+      return;
+    }
+    const abortController = new AbortController();
+    const abort = () => abortController.abort(new Error("discord_request_aborted"));
+    request.once("aborted", abort);
+    try {
+      response.json(await dependencies.discordAgents.run(parsed.data, abortController.signal));
+    } catch {
+      if (!response.headersSent) response.status(502).json({ error: "discord_agent_run_failed" });
+    } finally {
+      request.off("aborted", abort);
+    }
   });
 
   app.post("/runs", authenticate, json, (request, response) => {

@@ -108,7 +108,7 @@ function Parts({
         role="alert"
       >
         <strong>
-          {part.retryable ? "Signal could not finish" : "Signal stopped"}
+          {part.retryable ? "Trishula could not finish" : "Trishula stopped"}
         </strong>
         <p>{part.message}</p>
         <code>{part.code}</code>
@@ -148,7 +148,7 @@ function Message({
       aria-label={`${message.role} message`}
     >
       <header className="message-header">
-        <strong>{message.role === "user" ? "You" : "Signal"}</strong>
+        <strong>{message.role === "user" ? "You" : "Trishula"}</strong>
         {live && (
           <span className="streaming">
             <i aria-hidden="true" /> Writing
@@ -287,7 +287,7 @@ function MessageListView({
       })}
       {presentation?.hasGap && (
         <div className="notice warning" role="status">
-          Live output paused while Signal restores a missing batch.
+          Live output paused while Trishula restores a missing batch.
         </div>
       )}
     </div>
