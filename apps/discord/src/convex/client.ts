@@ -207,6 +207,11 @@ export interface RunIdentity extends ChannelReference {
   generation: number;
 }
 
+type HeartbeatRunIdentity = Pick<
+  RunIdentity,
+  "channelId" | "runId" | "generation"
+> & { stage?: LoopStage };
+
 export interface GatewayHeartbeat {
   status: "online" | "degraded";
   botUserId?: string | undefined;
@@ -378,19 +383,36 @@ export class ConvexDiscordClient {
     stage: LoopStage,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    return this.heartbeat({ status: "online" }, { ...run, stage }, signal);
+    return this.heartbeat(
+      { status: "online" },
+      {
+        channelId: run.channelId,
+        runId: run.runId,
+        generation: run.generation,
+        stage,
+      },
+      signal,
+    );
   }
 
   async renewRunLease(
     run: RunIdentity,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    return this.heartbeat({ status: "online" }, run, signal);
+    return this.heartbeat(
+      { status: "online" },
+      {
+        channelId: run.channelId,
+        runId: run.runId,
+        generation: run.generation,
+      },
+      signal,
+    );
   }
 
   private async heartbeat(
     gateway: GatewayHeartbeat,
-    run?: RunIdentity & { stage?: LoopStage },
+    run?: HeartbeatRunIdentity,
     signal?: AbortSignal,
   ): Promise<boolean> {
     const result = await this.request(
