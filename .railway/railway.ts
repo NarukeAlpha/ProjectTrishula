@@ -10,6 +10,8 @@ import {
 } from "railway/iac";
 
 export default defineRailway(() => {
+  // Railway normalizes its default ON_FAILURE policy and 10-retry limit to
+  // unset values. Keep only non-default retry limits so plans remain stable.
   const projectTrishula = (rootDirectory: string) =>
     github("NarukeAlpha/ProjectTrishula", {
       branch: "master",

@@ -31,13 +31,17 @@ Pi uses Codex OAuth stored on its existing Railway volume at `PI_AUTH_PATH`. Do 
 
 Railway's source must point to `NarukeAlpha/ProjectTrishula`, branch `master`, for each code service. A push to that branch starts builds when the service watch path matches the changed files.
 
-Run `bash scripts/railway/connect-github.sh` once after the first push. The script connects each service and uses Railway references for existing shared variables. It does not set `DISCORD_BOT_TOKEN`.
-
-Then preview and apply the infrastructure settings:
+Preview and apply the infrastructure settings after the first push:
 
 ```sh
 railway config plan
 railway config apply
 ```
 
-The plan must contain only the expected updates before you apply it. Do not use `--show-values` or commit a literal secret to `.railway/railway.ts`.
+The plan must contain only the expected updates before you apply it. The apply creates the code services and connects each GitHub source. Do not use `--show-values` or commit a literal secret to `.railway/railway.ts`.
+
+Railway omits its default `ON_FAILURE` restart policy and default 10-retry limit from exported configuration. The IaC file declares only non-default retry limits so repeated plans remain stable.
+
+Then run `bash scripts/railway/connect-github.sh` once. The script first requires a zero-drift IaC plan. It configures Railway references, generates missing service credentials through standard input, and starts fresh source deployments for the affected services. It does not set `DISCORD_BOT_TOKEN`.
+
+Install and authenticate the Railway CLI before you use either command. The `railway` npm package in this repository supplies the typed IaC SDK; it is not the CLI executable.

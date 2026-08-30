@@ -31,8 +31,8 @@ for file in \
   }
 done
 
-grep -Fq 'service source connect' "$SCRIPT_DIR/connect-github.sh" || {
-  printf 'connect-github.sh does not connect GitHub service sources.\n' >&2
+grep -Fq 'railway config plan --detailed-exit-code' "$SCRIPT_DIR/connect-github.sh" || {
+  printf 'connect-github.sh must verify that Railway IaC is applied before changing variables.\n' >&2
   exit 1
 }
 grep -Fq 'convex-generate-key' "$REPO_ROOT/infra/railway/convex-functions/deploy-functions.sh" || {
@@ -58,20 +58,31 @@ grep -Fq 'DISCORD_GATEWAY_SHARED_SECRET=${{convex-backend.DISCORD_GATEWAY_SHARED
   exit 1
 }
 
-first_source_connection="$({ grep -n '^connect_source ' "$SCRIPT_DIR/connect-github.sh" || true; } | head -n 1 | cut -d: -f1)"
-last_service_creation="$({ grep -n '^ensure_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
+last_service_lookup="$({ grep -n '^require_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
 last_variable_configuration="$({ grep -n '^railway variable set ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
-if [ -z "$first_source_connection" ] \
-  || [ -z "$last_service_creation" ] \
+if [ -z "$last_service_lookup" ] \
   || [ -z "$last_variable_configuration" ] \
-  || [ "$last_service_creation" -ge "$last_variable_configuration" ] \
-  || [ "$first_source_connection" -le "$last_variable_configuration" ]; then
-  printf 'GitHub sources must connect after services and variables exist.\n' >&2
+  || [ "$last_service_lookup" -ge "$last_variable_configuration" ]; then
+  printf 'Railway services must be resolved before variables are configured.\n' >&2
   exit 1
 fi
 
-[ "$(grep -c '^connect_source ' "$SCRIPT_DIR/connect-github.sh")" -eq 6 ] || {
-  printf 'Every Project Trishula code service must connect its GitHub source once.\n' >&2
+[ "$(grep -c '^require_service ' "$SCRIPT_DIR/connect-github.sh")" -eq 6 ] || {
+  printf 'Every Project Trishula code service must be resolved once.\n' >&2
+  exit 1
+}
+
+grep -Fq 'printf '\''%s'\'' "$secret_value" | railway variable set' "$SCRIPT_DIR/connect-github.sh" || {
+  printf 'Generated Railway secrets must be passed through standard input.\n' >&2
+  exit 1
+}
+grep -Fq -- '--stdin' "$SCRIPT_DIR/connect-github.sh" || {
+  printf 'Generated Railway secrets must not appear in process arguments.\n' >&2
+  exit 1
+}
+grep -Fq 'railway redeploy' "$SCRIPT_DIR/connect-github.sh" \
+  && grep -Fq -- '--from-source' "$SCRIPT_DIR/connect-github.sh" || {
+  printf 'The variable bootstrap must deploy the configured services from their GitHub source.\n' >&2
   exit 1
 }
 

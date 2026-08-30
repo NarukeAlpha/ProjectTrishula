@@ -5,8 +5,6 @@ set +x
 
 readonly PROJECT_ID="${RAILWAY_PROJECT_ID:-54092f1d-ed01-4ae7-9d33-3f19179957ea}"
 readonly ENVIRONMENT="${RAILWAY_ENVIRONMENT:-production}"
-readonly REPOSITORY="${RAILWAY_GITHUB_REPOSITORY:-NarukeAlpha/ProjectTrishula}"
-readonly BRANCH="${RAILWAY_GITHUB_BRANCH:-master}"
 
 for command_name in railway jq openssl; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -14,6 +12,19 @@ for command_name in railway jq openssl; do
     exit 1
   }
 done
+
+set +e
+railway config plan --detailed-exit-code
+plan_status="$?"
+set -e
+if [ "$plan_status" -eq 2 ]; then
+  printf 'Railway IaC has pending changes. Review and apply it before configuring service variables.\n' >&2
+  exit 2
+fi
+if [ "$plan_status" -ne 0 ]; then
+  printf 'Could not verify the Railway IaC plan.\n' >&2
+  exit "$plan_status"
+fi
 
 services_json="$(railway service list --project "$PROJECT_ID" --environment "$ENVIRONMENT" --json)"
 
@@ -26,16 +37,10 @@ service_id() {
   '
 }
 
-ensure_service() {
+require_service() {
   local service_name="$1"
   local output_variable="$2"
   local id
-  if id="$(service_id "$service_name" 2>/dev/null)"; then
-    printf -v "$output_variable" '%s' "$id"
-    return
-  fi
-  railway add --service "$service_name" --json >/dev/null
-  services_json="$(railway service list --project "$PROJECT_ID" --environment "$ENVIRONMENT" --json)"
   id="$(service_id "$service_name")"
   printf -v "$output_variable" '%s' "$id"
 }
@@ -53,34 +58,23 @@ ensure_generated_secret() {
   fi
   local secret_value
   secret_value="$(openssl rand -hex 32)"
-  railway variable set \
+  printf '%s' "$secret_value" | railway variable set \
     --project "$PROJECT_ID" \
     --environment "$ENVIRONMENT" \
     --service "$id" \
     --skip-deploys \
-    "$variable_name=$secret_value" >/dev/null
+    --stdin \
+    "$variable_name" >/dev/null
   unset secret_value
   printf 'Created the dedicated %s credential for %s.\n' "$variable_name" "$service_name"
 }
 
-connect_source() {
-  local service_name="$1"
-  local id="$2"
-  railway service source connect \
-    --project "$PROJECT_ID" \
-    --environment "$ENVIRONMENT" \
-    --service "$id" \
-    --repo "$REPOSITORY" \
-    --branch "$BRANCH" \
-    --json >/dev/null
-}
-
-ensure_service web web_id
-ensure_service pi pi_id
-ensure_service discord discord_id
-ensure_service convex-backend backend_id
-ensure_service convex-dashboard dashboard_id
-ensure_service convex-functions functions_id
+require_service web web_id
+require_service pi pi_id
+require_service discord discord_id
+require_service convex-backend backend_id
+require_service convex-dashboard dashboard_id
+require_service convex-functions functions_id
 
 ensure_generated_secret convex-backend "$backend_id" DISCORD_GATEWAY_SHARED_SECRET
 ensure_generated_secret pi "$pi_id" PI_DISCORD_SHARED_SECRET
@@ -132,15 +126,17 @@ railway variable set \
   --skip-deploys \
   'PUBLIC_APPLICATION_NAME=Project Trishula' >/dev/null
 
-connect_source web "$web_id"
-connect_source pi "$pi_id"
-connect_source discord "$discord_id"
-connect_source convex-backend "$backend_id"
-connect_source convex-dashboard "$dashboard_id"
-connect_source convex-functions "$functions_id"
+for id in "$backend_id" "$functions_id" "$discord_id" "$pi_id" "$web_id"; do
+  railway redeploy \
+    --project "$PROJECT_ID" \
+    --environment "$ENVIRONMENT" \
+    --service "$id" \
+    --from-source \
+    --yes \
+    --json >/dev/null
+done
 
-printf 'Connected Project Trishula GitHub sources and variables for all six code services.\n'
-printf 'Run railway config plan, review it, then run railway config apply to publish service settings.\n'
+printf 'Configured Project Trishula service variables and started fresh source deployments.\n'
 printf 'Add DISCORD_BOT_TOKEN to the Discord service in Railway to start the gateway.\n'
 
 unset services_json web_id pi_id discord_id backend_id dashboard_id functions_id
