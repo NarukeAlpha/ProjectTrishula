@@ -13,6 +13,7 @@ import {
   DISCORD_CONTEXT_SIZE,
   DISCORD_GATEWAY_HEARTBEAT_TTL_MS,
   DISCORD_LOOP_LEASE_MS,
+  DISCORD_MAX_LOOP_ERROR_ATTEMPTS,
   DISCORD_MAX_AUTONOMOUS_RECHECKS,
   DISCORD_MAX_OUTBOX_ATTEMPTS,
   DISCORD_OUTBOX_DELIVERY_LEASE_MS,
@@ -21,6 +22,7 @@ import {
   discordDeliveryToken,
   discordDuplicateMessageMatches,
   discordMessageIngestDecision,
+  discordLoopErrorRetryReady,
   discordRecheckDecision,
   discordReplyKindMatchesFlags,
   discordReplyTargetAllowsKind,
@@ -514,6 +516,7 @@ export const setChannelRoles = mutation({
         completedThroughSequence: 0,
         recheckCount: 0,
         recheckPending: false,
+        consecutiveErrorCount: 0,
         createdAt: now,
         updatedAt: now,
       });
@@ -730,6 +733,7 @@ export const ingestMessage = internalMutation({
         completedThroughSequence: 0,
         recheckCount: 0,
         recheckPending: false,
+        consecutiveErrorCount: 0,
         createdAt: now,
         updatedAt: now,
       });
@@ -779,6 +783,9 @@ export const ingestMessage = internalMutation({
       recheckPending: startsNewChain ? false : state.recheckPending,
       lastRecheckHash: startsNewChain ? undefined : state.lastRecheckHash,
       lastError: !args.isBot && !running ? undefined : state.lastError,
+      consecutiveErrorCount: !args.isBot && !running
+        ? 0
+        : (state.consecutiveErrorCount ?? 0),
       updatedAt: now,
     });
     if (!args.isBot) {
@@ -1123,9 +1130,14 @@ export const completeLoop = internalMutation({
     }
     if (args.outcome === "error") {
       const error = args.error?.trim() || "Discord agent loop failed.";
+      const consecutiveErrorCount = Math.min(
+        DISCORD_MAX_LOOP_ERROR_ATTEMPTS,
+        (state.consecutiveErrorCount ?? 0) + 1,
+      );
       await ctx.db.patch(state._id, {
         status: "error",
         lastError: error,
+        consecutiveErrorCount,
         ...clearActiveLoop(),
         updatedAt: now,
       });
@@ -1184,6 +1196,7 @@ export const completeLoop = internalMutation({
       lastRecheckHash: recheck.accepted ? newestContextHash : state.lastRecheckHash,
       lastProcessedAt: now,
       lastError: undefined,
+      consecutiveErrorCount: 0,
       ...clearActiveLoop(),
       updatedAt: now,
     });
@@ -1513,8 +1526,9 @@ export const listRunnable = internalMutation({
       const leaseExpired = state.activeRunId !== undefined
         && state.leaseExpiresAt !== undefined
         && state.leaseExpiresAt <= now;
+      const retryableError = discordLoopErrorRetryReady(state, now);
       const runnable = (!state.activeRunId || leaseExpired)
-        && state.status !== "error"
+        && (state.status !== "error" || retryableError)
         && (state.triggerThroughSequence > state.completedThroughSequence
           || state.recheckPending
           || (leaseExpired && state.activeMode === "recheck"));
@@ -1530,6 +1544,9 @@ export const listRunnable = internalMutation({
       }
       const channel = await discordChannel(ctx, ownerId, state.guildId, state.channelId);
       if (!channel?.available || !hasRole(channel, "conversation_monitor")) continue;
+      if (retryableError && state.consecutiveErrorCount === undefined) {
+        await ctx.db.patch(state._id, { consecutiveErrorCount: 1 });
+      }
       channels.push({
         guildId: state.guildId,
         channelId: state.channelId,

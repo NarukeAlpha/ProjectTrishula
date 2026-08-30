@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   DISCORD_CONTEXT_SIZE,
+  DISCORD_LOOP_ERROR_RETRY_DELAY_MS,
   DISCORD_MAX_AUTONOMOUS_RECHECKS,
+  DISCORD_MAX_LOOP_ERROR_ATTEMPTS,
   discordCatchupWindows,
   discordClaimDecision,
   discordContextHash,
   discordDuplicateMessageMatches,
   discordMessageIngestDecision,
+  discordLoopErrorRetryReady,
   discordRecheckDecision,
   discordReplyKindMatchesFlags,
   discordReplyTargetAllowsKind,
@@ -151,6 +154,53 @@ describe("Discord durable loop state", () => {
       leaseExpiresAt: now + 120_000,
     });
     expect(discordClaimDecision(afterFirst, now)).toEqual({ claimed: false, reason: "busy" });
+  });
+
+  it("retries a queued loop error only after the cooldown and below the cap", () => {
+    const updatedAt = 1_000;
+    const retryable = {
+      status: "error",
+      triggerThroughSequence: 5,
+      completedThroughSequence: 0,
+      updatedAt,
+      consecutiveErrorCount: 1,
+    };
+
+    expect(
+      discordLoopErrorRetryReady(
+        retryable,
+        updatedAt + DISCORD_LOOP_ERROR_RETRY_DELAY_MS - 1,
+      ),
+    ).toBe(false);
+    expect(
+      discordLoopErrorRetryReady(
+        retryable,
+        updatedAt + DISCORD_LOOP_ERROR_RETRY_DELAY_MS,
+      ),
+    ).toBe(true);
+    expect(
+      discordLoopErrorRetryReady(
+        {
+          ...retryable,
+          consecutiveErrorCount: DISCORD_MAX_LOOP_ERROR_ATTEMPTS,
+        },
+        updatedAt + DISCORD_LOOP_ERROR_RETRY_DELAY_MS,
+      ),
+    ).toBe(false);
+  });
+
+  it("treats a stored pre-counter loop error as its first failed attempt", () => {
+    expect(
+      discordLoopErrorRetryReady(
+        {
+          status: "error",
+          triggerThroughSequence: 5,
+          completedThroughSequence: 0,
+          updatedAt: 1_000,
+        },
+        1_000 + DISCORD_LOOP_ERROR_RETRY_DELAY_MS,
+      ),
+    ).toBe(true);
   });
 
   it("partitions a 25-message backlog into ordered ten-message catch-up windows", () => {

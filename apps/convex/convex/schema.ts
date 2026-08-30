@@ -445,6 +445,7 @@ export default defineSchema({
     leaseExpiresAt: v.optional(v.number()),
     lastProcessedAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
+    consecutiveErrorCount: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

@@ -1,6 +1,8 @@
 export const DISCORD_CONTEXT_SIZE = 10;
 export const DISCORD_GATEWAY_HEARTBEAT_TTL_MS = 60_000;
 export const DISCORD_LOOP_LEASE_MS = 120_000;
+export const DISCORD_LOOP_ERROR_RETRY_DELAY_MS = 30_000;
+export const DISCORD_MAX_LOOP_ERROR_ATTEMPTS = 3;
 export const DISCORD_OUTBOX_DELIVERY_LEASE_MS = 30_000;
 export const DISCORD_MAX_AUTONOMOUS_RECHECKS = 2;
 export const DISCORD_MAX_OUTBOX_ATTEMPTS = 5;
@@ -54,6 +56,15 @@ export interface DiscordLoopStateSnapshot {
   activeRunId?: string;
   activeClaimId?: string;
   leaseExpiresAt?: number;
+}
+
+export interface DiscordLoopErrorRetrySnapshot {
+  status: string;
+  triggerThroughSequence: number;
+  completedThroughSequence: number;
+  activeRunId?: string;
+  updatedAt: number;
+  consecutiveErrorCount?: number;
 }
 
 export interface DiscordWindowBounds {
@@ -268,6 +279,18 @@ export function discordClaimDecision(
     generation: state.generation + 1,
     window,
   };
+}
+
+export function discordLoopErrorRetryReady(
+  state: DiscordLoopErrorRetrySnapshot,
+  now: number,
+): boolean {
+  const attempts = state.consecutiveErrorCount ?? 1;
+  return state.status === "error"
+    && state.activeRunId === undefined
+    && state.triggerThroughSequence > state.completedThroughSequence
+    && attempts < DISCORD_MAX_LOOP_ERROR_ATTEMPTS
+    && state.updatedAt + DISCORD_LOOP_ERROR_RETRY_DELAY_MS <= now;
 }
 
 export function isCurrentDiscordGeneration(
