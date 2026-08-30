@@ -1,0 +1,1 @@
+FROM ghcr.io/get-convex/convex-dashboard:c6f2ffdaaa651fbdb9146a9dc1cd0057de343054

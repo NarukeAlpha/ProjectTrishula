@@ -1,0 +1,8 @@
+/target/
+/.DS_Store
+/node_modules/
+/dist/
+/tmp/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

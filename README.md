@@ -1,103 +1,92 @@
-# Trading
+# Phone Trading POC
 
-Rust backend plus from-scratch Electron and Swift frontends for the trading platform rebuild.
+This repository now targets a phone-first agentic trading application.
 
-The old Agentic Trading workspace is not part of this validation path. Everything in the current rebuild lives under this repository:
+[`POC/`](POC/README.md) preserves the prior proof-of-concept snapshot that was
+still present on disk when this direction started. It does not restore files
+that earlier work had already deleted, including the prior Swift package and a
+shared frontend fixture. The snapshot remains reference material. It is not
+part of the new application gate.
 
-- Rust adapter: `src/`
-- Electron frontend: `apps/electron/`
-- Swift frontend: `apps/swift/`
-- Shared frontend data: `frontend/shared/`
-- Visual target: `CONCEPT.png`
+## Current status
 
-## Backend
+The new root contains the mobile application, Convex state layer, isolated Pi
+execution runtimes, Railway deployment files, and repository quality gates.
+Local development and browser tests can use the deterministic mock broker. The
+Railway path uses WorkOS, Convex, one private Pi runtime per approved user, and
+the fixed official Robinhood MCP boundary. Live order placement remains
+disabled.
 
-The Rust adapter preserves the local `ibkr-local-adapter.v1` HTTP/WebSocket contract and fails closed unless a connected fixture or broker startup mode is selected.
+## Application modules
 
-Run it:
+| Module | Railway role | Responsibility |
+| --- | --- | --- |
+| [`apps/web`](apps/web/README.md) | Public `web` service | Phone UI, WorkOS sign-in, and explicit trade approval |
+| [`apps/convex`](apps/convex/README.md) | Convex deployment | Canonical users, conversations, runs, approvals, and audit state |
+| [`apps/pi`](apps/pi/README.md) | Private Pi service per user | Pi sessions, tool execution, Codex OAuth, and the user-scoped Robinhood MCP bridge |
+
+These are three application modules. A self-hosted Convex deployment also needs supporting Railway resources such as its backend, dashboard, Postgres database, and artifact storage.
+
+Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the trust boundaries and trade-approval contract.
+
+## Per-user isolation
+
+Convex accepts only the WorkOS subjects in `WORKOS_ALLOWED_USER_IDS`. For each
+approved subject, Convex derives the private Railway endpoint
+`pi-u-${sha256(actorId).slice(0,20)}.railway.internal:8080`. The corresponding
+Railway service binds to that exact actor. It rejects requests for any other
+actor.
+
+Each user gets one private Pi service and one unique volume mounted at `/data`.
+Do not add a public domain or replicas to a Pi runtime. The volume stores only
+that runtime's Codex subscription OAuth file at `/data/auth.json`. Pi encrypts
+Robinhood OAuth records with its independent AES-256-GCM key. Convex stores
+only the opaque encrypted envelope and its revision.
+
+Robinhood redirects to the public Convex callback at
+`/http/broker/robinhood/callback`. Convex consumes the one-time state and then
+redirects to the web application's connected or failed page without `code` or
+`state`. The phone browser never receives a Robinhood token, Pi service secret,
+or Convex admin key.
+
+## Local phone demo
+
+The demo does not need WorkOS, Convex, Pi, or brokerage credentials. It cannot
+send an order or make a broker network request.
 
 ```sh
-cargo run -- serve --listen 127.0.0.1:8765
-cargo run -- serve --startup-mode connected-fixture --listen 127.0.0.1:8765
+cd apps/web
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Fetch the frontend workbench payload from live external market data:
+Open `http://127.0.0.1:5173/` and use a phone-size viewport.
 
-```sh
-curl 'http://127.0.0.1:8765/v1/workbench/live?symbol=NVDA'
-```
+## Quality gate
 
-Verify backend readiness:
-
-```sh
-cargo run -- verify backend-readiness --output /tmp/agentic-trading-rust-backend-readiness.json
-```
-
-## Frontends
-
-`CONCEPT.png` is the `1586x992` visual contract. Both frontends target the same chart-first workstation shape:
-
-- top app bar with workspace mode, provider state, paper/live state, rollback, adapter health, and alerts
-- left rail with watchlist, saved captures, and account footer
-- dominant center market workspace with quote header, chart, volume, price levels, and markers
-- right decision panel with Proposal/Ticket/Risk/Preview tabs, locked Live, and primary Review Paper
-- bottom dock with Positions, Orders, Fills, Options Chain, Audit, and Diagnostics
-- diagnostics as the only normal place for raw proof details
-
-Electron:
+Anti-Slop is vendored under `tools/oxlint/anti-slop`. Oxlint and its plugin runtime are pinned to the same version.
 
 ```sh
 npm install
-npm run live:frontends
-npm run electron
-npm run verify:electron
-npm run snapshot:electron
+npm ci --prefix apps/convex
+npm ci --prefix apps/pi
+npm ci --prefix apps/web
+npm run check
 ```
 
-Swift:
+The root gate runs Anti-Slop Oxlint, Convex type checks and tests, Pi type
+checks, tests, and build, the web formatter, ESLint, type checks, tests and
+build, the browser bundle boundary check, and Railway configuration checks.
 
-```sh
-swift build --package-path apps/swift
-swift run --package-path apps/swift TradingSwiftApp
-swift run --package-path apps/swift TradingSwiftApp --snapshot /tmp/agentic-trading-swift.png --width 1586 --height 992
-```
+## Railway
 
-## Validation
-
-Run the full local gate:
-
-```sh
-scripts/validate-local.sh
-```
-
-That gate runs:
-
-- Rust formatter, build, tests, clippy, and backend-readiness trace
-- Electron frontend contract verifier and Electron snapshot
-- Swift package build and Swift snapshot
-- Electron/Swift parity verifier
-
-Run the live backend-to-frontend gate:
-
-```sh
-npm run verify:live-frontends
-```
-
-That gate starts the Rust backend when needed, fetches current external market data through `/v1/workbench/live`, renders both Electron and Swift against that backend payload, and verifies both screenshots.
-
-Open both usable frontends against the live backend:
-
-```sh
-npm run live:frontends
-```
-
-That command starts or reuses the Rust backend, checks the live NVDA payload, opens Electron, opens the Swift/macOS app, and keeps the backend alive until the launched apps exit.
-
-Create the FE-01 review scaffold from a validation output directory:
-
-```sh
-VALIDATION_OUTPUT_DIR=/tmp/agentic-trading-validation \
-scripts/prepare-fe01-snapshot-review.sh
-```
-
-Passing local validation proves the local Rust/Electron/Swift implementation is healthy. It does not prove real IBKR Gateway/TWS paper or live readiness.
+The isolated Railway project is named `signal-trading-poc`. Use the guarded
+scripts in [`scripts/railway`](scripts/railway/README.md). They hard-deny the
+known OTA production project name and ID. Bootstrap creates the shared
+services. Run `provision-user-runtime.sh` once for each approved WorkOS subject,
+then complete the Codex device login for that runtime. The controlled deploy
+uses `scripts/railway/release.sh`. It enumerates the legacy `pi` service and all
+`pi-u-*` services without persisting or printing the temporary Convex admin
+key. Before it pushes functions, it synchronizes the allowlisted WorkOS,
+service-auth, private-routing, and web-origin variables into the Convex function
+environment without printing or persisting their values. Keep
+`LIVE_TRADING_ENABLED=false`.

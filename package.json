@@ -1,19 +1,23 @@
 {
-  "name": "agentic-trading-frontend",
+  "name": "phone-trading-poc",
   "version": "0.1.0",
   "private": true,
-  "description": "Local Electron and Swift frontends for the Rust trading adapter.",
-  "main": "apps/electron/main.cjs",
+  "type": "module",
+  "description": "Phone-first agentic trading proof of concept.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
-    "live:frontends": "scripts/open-live-frontends.sh",
-    "electron": "electron apps/electron/main.cjs",
-    "snapshot:electron": "electron apps/electron/main.cjs --snapshot /tmp/agentic-trading-electron.png --width 1586 --height 992",
-    "verify:electron": "node apps/electron/scripts/verify-electron.mjs",
-    "verify:frontend": "node scripts/verify-frontend-parity.mjs",
-    "verify:live-frontends": "scripts/validate-live-frontends.sh",
-    "verify:snapshots": "node scripts/verify-snapshots.mjs --electron /tmp/trading-local-validation/electron-1586x992.png --swift /tmp/trading-local-validation/swift-1586x992.png"
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "check:web": "npm run validate --prefix apps/web",
+    "check:convex": "npm run typecheck --prefix apps/convex && npm test --prefix apps/convex",
+    "check:pi": "npm run typecheck --prefix apps/pi && npm test --prefix apps/pi && npm run build --prefix apps/pi",
+    "check:railway": "bash scripts/railway/validate.sh",
+    "check": "npm run lint && npm run check:convex && npm run check:pi && npm run check:web && npm run check:railway"
   },
   "devDependencies": {
-    "electron": "^39.2.6"
+    "@oxlint/plugins": "1.79.0",
+    "oxlint": "1.79.0"
   }
 }

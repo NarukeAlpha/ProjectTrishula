@@ -1,0 +1,138 @@
+//@version=6
+indicator("Hourly Flip Support & Resistance", overlay = true, scale = scale.none, behind_chart = false, max_lines_count = 100, max_labels_count = 100)
+
+// Hidden output required by TradingView's indicator compiler.
+plot(close, "Compatibility anchor", display = display.none)
+
+// A confirmed red-to-green hourly change creates support.
+// A confirmed green-to-red hourly change creates resistance.
+// Support is removed after a confirmed close below it.
+// Resistance is removed after a confirmed close above it.
+
+string sourceTimeframe = input.timeframe("60", "Color-flip timeframe", group = "Level logic")
+string levelPriceMode = input.string("Flip candle open", "Level price", options = ["Flip candle open", "Previous candle close"], group = "Level logic")
+string breakMode = input.string("Hourly close", "Remove level after", options = ["Hourly close", "Chart close"], group = "Level logic")
+string breakRule = input.string("Body crosses level", "Break rule", options = ["Body crosses level", "Close beyond level"], group = "Level logic")
+int maximumLevels = input.int(12, "Maximum active levels", minval = 1, maxval = 40, group = "Level logic")
+
+color supportColor = input.color(color.rgb(41, 98, 255), "Support color", group = "Appearance")
+color resistanceColor = input.color(color.rgb(41, 98, 255), "Resistance color", group = "Appearance")
+int lineWidth = input.int(1, "Line width", minval = 1, maxval = 4, group = "Appearance")
+bool extendThroughHistory = input.bool(false, "Extend lines left", group = "Appearance")
+bool showPriceLabels = input.bool(true, "Show price labels", group = "Appearance")
+bool showTimeframeTag = input.bool(true, "Show 1H tag", group = "Appearance")
+int labelOffset = input.int(3, "Label offset (chart bars)", minval = 0, maxval = 25, group = "Appearance")
+
+// Request the two latest completed source candles. The one-bar offset and
+// lookahead setting expose only confirmed hourly values on lower-timeframe charts.
+[requestedHourOpen, requestedHourClose, requestedPreviousHourOpen, requestedPreviousHourClose, requestedHourOpenTime] = request.security(syminfo.tickerid, sourceTimeframe, [open[1], close[1], open[2], close[2], time[1]], lookahead = barmerge.lookahead_on)
+
+// On a chart that already uses the source timeframe, process the closed candle
+// directly. This includes the final hourly candle without waiting for another bar.
+bool chartUsesSourceTimeframe = timeframe.in_seconds() == timeframe.in_seconds(sourceTimeframe)
+int sourceBarMilliseconds = int(timeframe.in_seconds(sourceTimeframe) * 1000)
+float hourOpen = chartUsesSourceTimeframe ? open : requestedHourOpen
+float hourClose = chartUsesSourceTimeframe ? close : requestedHourClose
+float previousHourOpen = chartUsesSourceTimeframe ? open[1] : requestedPreviousHourOpen
+float previousHourClose = chartUsesSourceTimeframe ? close[1] : requestedPreviousHourClose
+int hourOpenTime = chartUsesSourceTimeframe ? time : requestedHourOpenTime
+bool newConfirmedHour = chartUsesSourceTimeframe ? barstate.isconfirmed : (not na(hourOpenTime) and (na(hourOpenTime[1]) or hourOpenTime != hourOpenTime[1]))
+bool hourIsGreen = hourClose > hourOpen
+bool hourIsRed = hourClose < hourOpen
+bool previousHourIsGreen = previousHourClose > previousHourOpen
+bool previousHourIsRed = previousHourClose < previousHourOpen
+bool flippedToGreen = newConfirmedHour and hourIsGreen and previousHourIsRed
+bool flippedToRed = newConfirmedHour and hourIsRed and previousHourIsGreen
+
+// A side value of 1 means support. A side value of -1 means resistance.
+var array<float> activePrices = array.new<float>()
+var array<int> activeSides = array.new<int>()
+var array<int> activeStartTimes = array.new<int>()
+var array<line> activeLines = array.new<line>()
+var array<label> activeLabels = array.new<label>()
+
+// Check invalidation before adding the newest color-flip level.
+bool checkHourlyClose = breakMode == "Hourly close" and newConfirmedHour
+bool checkChartClose = breakMode == "Chart close" and barstate.isconfirmed
+bool shouldCheckBreaks = checkHourlyClose or checkChartClose
+float breakOpen = breakMode == "Hourly close" ? hourOpen : open
+float breakClose = breakMode == "Hourly close" ? hourClose : close
+bool brokeSupport = false
+bool brokeResistance = false
+
+if shouldCheckBreaks and array.size(activePrices) > 0
+    int removalIndex = array.size(activePrices) - 1
+    while removalIndex >= 0
+        float activePrice = array.get(activePrices, removalIndex)
+        int activeSide = array.get(activeSides, removalIndex)
+        bool closedBeyond = activeSide == 1 ? breakClose < activePrice : breakClose > activePrice
+        bool openedOnValidSide = activeSide == 1 ? breakOpen >= activePrice : breakOpen <= activePrice
+        bool levelBroke = breakRule == "Body crosses level" ? closedBeyond and openedOnValidSide : closedBeyond
+
+        if levelBroke
+            brokeSupport := brokeSupport or activeSide == 1
+            brokeResistance := brokeResistance or activeSide == -1
+            line.delete(array.get(activeLines, removalIndex))
+            array.remove(activePrices, removalIndex)
+            array.remove(activeSides, removalIndex)
+            array.remove(activeStartTimes, removalIndex)
+            array.remove(activeLines, removalIndex)
+
+        removalIndex -= 1
+
+// Add a level when two consecutive completed hourly candles have opposite colors.
+bool createdSupport = false
+bool createdResistance = false
+
+if flippedToGreen or flippedToRed
+    float newLevelPrice = levelPriceMode == "Flip candle open" ? hourOpen : previousHourClose
+    int newLevelSide = flippedToGreen ? 1 : -1
+    bool duplicateLevel = false
+
+    if array.size(activePrices) > 0
+        for index = 0 to array.size(activePrices) - 1
+            if math.abs(array.get(activePrices, index) - newLevelPrice) < syminfo.mintick * 0.5
+                duplicateLevel := true
+                break
+
+    if not duplicateLevel
+        if array.size(activePrices) >= maximumLevels
+            line.delete(array.shift(activeLines))
+            array.shift(activePrices)
+            array.shift(activeSides)
+            array.shift(activeStartTimes)
+
+        color newLevelColor = newLevelSide == 1 ? supportColor : resistanceColor
+        string lineExtension = extendThroughHistory ? extend.both : extend.right
+        int lineSecondTime = hourOpenTime + sourceBarMilliseconds
+        line newLevelLine = line.new(hourOpenTime, newLevelPrice, lineSecondTime, newLevelPrice, xloc = xloc.bar_time, extend = lineExtension, color = newLevelColor, width = lineWidth, force_overlay = true)
+        array.push(activePrices, newLevelPrice)
+        array.push(activeSides, newLevelSide)
+        array.push(activeStartTimes, hourOpenTime)
+        array.push(activeLines, newLevelLine)
+        createdSupport := newLevelSide == 1
+        createdResistance := newLevelSide == -1
+
+// Refresh labels at the chart's right edge.
+if barstate.islast
+    while array.size(activeLabels) > 0
+        label.delete(array.pop(activeLabels))
+
+    int activeCount = array.size(activePrices)
+    if activeCount > 0
+        int chartBarMilliseconds = int(timeframe.in_seconds() * 1000)
+        int labelTime = time + chartBarMilliseconds * labelOffset
+
+        for index = 0 to activeCount - 1
+            float activePrice = array.get(activePrices, index)
+            int activeSide = array.get(activeSides, index)
+            color levelColor = activeSide == 1 ? supportColor : resistanceColor
+            string timeframeText = showTimeframeTag ? "  1H" : ""
+            string labelText = str.tostring(activePrice, format.mintick) + timeframeText
+            label priceLabel = label.new(labelTime, activePrice, labelText, xloc = xloc.bar_time, yloc = yloc.price, color = color.new(levelColor, 100), style = label.style_label_lower_left, textcolor = levelColor, size = size.small, textalign = text.align_left, force_overlay = true)
+            array.push(activeLabels, priceLabel)
+
+alertcondition(createdSupport, "Hourly support created", "A confirmed hourly candle changed from red to green.")
+alertcondition(createdResistance, "Hourly resistance created", "A confirmed hourly candle changed from green to red.")
+alertcondition(brokeSupport, "Hourly support broken", "A candle closed below an active hourly support level.")
+alertcondition(brokeResistance, "Hourly resistance broken", "A candle closed above an active hourly resistance level.")
