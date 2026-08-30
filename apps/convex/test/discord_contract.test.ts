@@ -25,6 +25,58 @@ describe("Discord gateway HTTP contract", () => {
     }).success).toBe(false);
   });
 
+  it("accepts image-only Discord messages from the Discord CDN", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "ingestMessage",
+      actorId: "user_01HWORKOSALLOWED",
+      guildId: "123",
+      channelId: "456",
+      messageId: "789",
+      authorId: "user_1",
+      authorName: "User One",
+      content: "",
+      images: [{
+        attachmentId: "111",
+        url: "https://cdn.discordapp.com/attachments/123/456/chart.png",
+        filename: "chart.png",
+        mediaType: "image/png",
+        sizeBytes: 1_024,
+        width: 800,
+        height: 600,
+      }],
+      mentionsBot: true,
+      isBot: false,
+      createdAt: 1_000,
+    }).success).toBe(true);
+  });
+
+  it("rejects empty Discord messages and untrusted image hosts", () => {
+    const message = {
+      operation: "ingestMessage",
+      actorId: "user_01HWORKOSALLOWED",
+      guildId: "123",
+      channelId: "456",
+      messageId: "789",
+      authorId: "user_1",
+      authorName: "User One",
+      content: "",
+      mentionsBot: false,
+      isBot: false,
+      createdAt: 1_000,
+    } as const;
+    expect(discordGatewayRequestSchema.safeParse(message).success).toBe(false);
+    expect(discordGatewayRequestSchema.safeParse({
+      ...message,
+      images: [{
+        attachmentId: "111",
+        url: "https://example.com/chart.png",
+        filename: "chart.png",
+        mediaType: "image/png",
+        sizeBytes: 1_024,
+      }],
+    }).success).toBe(false);
+  });
+
   it("requires the delivery lease token on a sent acknowledgement", () => {
     expect(discordGatewayRequestSchema.safeParse({
       operation: "acknowledgeReply",
@@ -33,6 +85,26 @@ describe("Discord gateway HTTP contract", () => {
       status: "sent",
       discordMessageId: "123",
     }).success).toBe(false);
+  });
+
+  it("accepts generated image metadata on a sent acknowledgement", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "acknowledgeReply",
+      actorId: "user_01HWORKOSALLOWED",
+      outboxId: "outbox_1",
+      deliveryToken: "delivery_1",
+      status: "sent",
+      discordMessageId: "123",
+      images: [{
+        attachmentId: "456",
+        url: "https://cdn.discordapp.com/attachments/1/2/chart.png",
+        filename: "chart.png",
+        mediaType: "image/png",
+        sizeBytes: 4_096,
+        width: 960,
+        height: 540,
+      }],
+    }).success).toBe(true);
   });
 
   it("accepts an explicit acknowledgement reply kind", () => {
@@ -66,6 +138,30 @@ describe("Discord gateway HTTP contract", () => {
     }).success).toBe(false);
   });
 
+  it("rejects market charts whose timestamps do not increase", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "enqueueReply",
+      actorId: "user_01HWORKOSALLOWED",
+      sourceChannelId: "123",
+      guildId: "456",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      idempotencyKey: "run_1:reply",
+      replyKind: "final",
+      content: "Here is the chart.",
+      chart: {
+        symbol: "AMD",
+        points: [
+          { timestamp: 200, close: 12 },
+          { timestamp: 100, close: 10 },
+        ],
+      },
+      recheckRequested: false,
+      finalizesLoop: true,
+    }).success).toBe(false);
+  });
+
   it("allows an outbox worker to renew a lease without changing the stage", () => {
     expect(discordGatewayRequestSchema.safeParse({
       operation: "heartbeat",
@@ -90,6 +186,20 @@ describe("Discord gateway HTTP contract", () => {
       outcome: "error",
       error: "Pi research failed: provider_network.",
       retryable: true,
+    }).success).toBe(true);
+  });
+
+  it("accepts a bounded context cutoff when a final reply is suppressed", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "completeLoop",
+      actorId: "user_01HWORKOSALLOWED",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      outcome: "completed",
+      consumesThroughSequence: 12,
+      suppressPendingReplies: true,
+      recheckRequested: false,
     }).success).toBe(true);
   });
 });

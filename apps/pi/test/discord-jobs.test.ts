@@ -10,17 +10,21 @@ import { silentLogger } from "./helpers.js";
 const triageRequest: DiscordAgentRequest = {
   requestId: "triage_job_1",
   profile: "triage",
+  triggerKind: "ambient",
   channel: discordChannel,
   messages: discordMessages,
 };
 
 const triageResponse: DiscordAgentResponse = {
   profile: "triage",
-  shouldRespond: true,
-  shouldResearch: true,
+  decision: "research",
+  targetMessageId: "123456789012345678",
   question: "Why did AMD move today?",
+  directReply: null,
+  acknowledgement: "I'll check what moved AMD today.",
   reason: "Time-sensitive asset question.",
   confidence: 0.95,
+  additiveValue: 0.95,
 };
 
 const firstDiscordMessage = discordMessages.at(0);

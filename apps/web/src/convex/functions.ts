@@ -6,6 +6,7 @@ import type {
   DiscordChannelAssignmentReadModel,
   DiscordChannelRole,
   DiscordControlPlaneReadModel,
+  DiscordGuildRoutingReadModel,
   MessageReadModel,
   Page,
   PortfolioSnapshotReadModel,
@@ -101,6 +102,15 @@ export const publicApi = {
       },
       DiscordChannelAssignmentReadModel
     >("discord:setChannelRoles"),
+    setGuildRouting: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        conversationChannelId: string | null;
+        researchLogChannelId: string | null;
+      },
+      DiscordGuildRoutingReadModel
+    >("discord:setGuildRouting"),
   },
   trading: {
     getDashboard: makeFunctionReference<

@@ -38,12 +38,21 @@ function controlPlane(
             canView: true,
             canSend: true,
             canReadHistory: true,
-            roles: ["conversation_monitor"],
+            roles: ["conversation_monitor", "reply_target"],
             loop: {
               status: "researching",
               pendingMessageCount: 12,
               lastProcessedAt: Date.now() - 60_000,
             },
+          },
+          {
+            channelId: "channel_2",
+            name: "research-log",
+            type: "text",
+            canView: true,
+            canSend: true,
+            canReadHistory: true,
+            roles: ["research_log"],
           },
         ],
       },
@@ -64,7 +73,7 @@ describe("Discord control surface", () => {
       <DiscordControlView
         applicationId="1114379702015111228"
         model={controlPlane()}
-        onSetChannelRoles={vi.fn()}
+        onSetGuildRouting={vi.fn()}
       />,
     );
 
@@ -73,32 +82,67 @@ describe("Discord control surface", () => {
     ).toHaveAttribute("href", discordInstallUrl("1114379702015111228"));
   });
 
-  it("saves a stable set of channel roles", async () => {
-    const onSetChannelRoles = vi.fn().mockResolvedValue(undefined);
+  it("shows exactly two server-level routes instead of channel cards", () => {
     render(
-      <DiscordControlView
-        model={controlPlane()}
-        onSetChannelRoles={onSetChannelRoles}
-      />,
+      <DiscordControlView model={controlPlane()} onSetGuildRouting={vi.fn()} />,
     );
 
     expect(
-      screen.getByRole("checkbox", { name: /conversation monitor/i }),
-    ).toBeChecked();
+      screen.getByRole("combobox", { name: "Conversation channel" }),
+    ).toHaveValue("channel_1");
+    expect(
+      screen.getByRole("combobox", { name: "Research log channel" }),
+    ).toHaveValue("channel_2");
+    expect(screen.getAllByRole("combobox")).toHaveLength(3);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("does not present split legacy roles as a configured conversation", () => {
+    const model = controlPlane();
+    const guild = model.guilds[0];
+    const firstChannel = guild?.channels[0];
+    const secondChannel = guild?.channels[1];
+    if (!firstChannel || !secondChannel) {
+      throw new Error("The test channels are missing.");
+    }
+    firstChannel.roles = ["conversation_monitor"];
+    secondChannel.roles = ["reply_target", "research_log"];
+
+    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
+
+    expect(
+      screen.getByRole("combobox", { name: "Conversation channel" }),
+    ).toHaveValue("");
+  });
+
+  it("moves a server route and preserves the other purpose", async () => {
+    const onSetGuildRouting = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={onSetGuildRouting}
+      />,
+    );
+
     expect(screen.getByText("12 messages waiting")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /reply target/i }));
-
-    await waitFor(() =>
-      expect(onSetChannelRoles).toHaveBeenCalledWith("guild_1", "channel_1", [
-        "conversation_monitor",
-        "reply_target",
-      ]),
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Research log channel" }),
+      { target: { value: "channel_1" } },
     );
+
+    await waitFor(() => {
+      expect(onSetGuildRouting).toHaveBeenCalledOnce();
+      expect(onSetGuildRouting).toHaveBeenCalledWith(
+        "guild_1",
+        "channel_1",
+        "channel_1",
+      );
+    });
   });
 
   it("selects and updates one server at a time", async () => {
-    const onSetChannelRoles = vi.fn().mockResolvedValue(undefined);
+    const onSetGuildRouting = vi.fn().mockResolvedValue(undefined);
     const first = controlPlane().guilds[0];
     if (!first) throw new Error("The test server is missing.");
     const model = controlPlane({
@@ -131,7 +175,7 @@ describe("Discord control surface", () => {
     render(
       <DiscordControlView
         model={model}
-        onSetChannelRoles={onSetChannelRoles}
+        onSetGuildRouting={onSetGuildRouting}
       />,
     );
 
@@ -147,12 +191,17 @@ describe("Discord control surface", () => {
       screen.queryByRole("heading", { name: "Market Desk" }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /reply target/i }));
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Research log channel" }),
+      { target: { value: "channel_2" } },
+    );
 
     await waitFor(() =>
-      expect(onSetChannelRoles).toHaveBeenCalledWith("guild_2", "channel_2", [
-        "reply_target",
-      ]),
+      expect(onSetGuildRouting).toHaveBeenCalledWith(
+        "guild_2",
+        null,
+        "channel_2",
+      ),
     );
   });
 
@@ -206,7 +255,7 @@ describe("Discord control surface", () => {
       ],
     });
 
-    render(<DiscordControlView model={model} onSetChannelRoles={vi.fn()} />);
+    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
 
     expect(screen.getByText("Acknowledgment sent")).toBeVisible();
     expect(screen.queryByText("Writing reply")).not.toBeInTheDocument();
@@ -219,7 +268,7 @@ describe("Discord control surface", () => {
     expect(screen.queryByText("Acknowledgment sent")).not.toBeInTheDocument();
   });
 
-  it("shows a disconnected gateway and blocks roles without permissions", () => {
+  it("shows a disconnected gateway and blocks unavailable channel routes", () => {
     const model = controlPlane({
       gateway: { status: "offline" },
       guilds: [
@@ -247,15 +296,19 @@ describe("Discord control surface", () => {
       ],
     });
 
-    render(<DiscordControlView model={model} onSetChannelRoles={vi.fn()} />);
+    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
 
     expect(screen.getByText("The Discord gateway is offline.")).toBeVisible();
+    const conversation = screen.getByRole("combobox", {
+      name: "Conversation channel",
+    });
+    const research = screen.getByRole("combobox", {
+      name: "Research log channel",
+    });
     expect(
-      screen.getByRole("checkbox", { name: /conversation monitor/i }),
+      conversation.querySelector('option[value="channel_1"]'),
     ).toBeDisabled();
-    expect(
-      screen.getByRole("checkbox", { name: /reply target/i }),
-    ).toBeDisabled();
+    expect(research.querySelector('option[value="channel_1"]')).toBeDisabled();
     expect(
       screen.getByText("Message content intent").closest("li"),
     ).toHaveAttribute("data-allowed", "false");
@@ -273,7 +326,7 @@ describe("Discord control surface", () => {
           activity: [],
           guilds: [],
         }}
-        onSetChannelRoles={vi.fn()}
+        onSetGuildRouting={vi.fn()}
       />,
     );
 
@@ -290,14 +343,17 @@ describe("Discord control surface", () => {
     render(
       <DiscordControlView
         model={controlPlane()}
-        onSetChannelRoles={() => Promise.reject(new Error("unavailable"))}
+        onSetGuildRouting={() => Promise.reject(new Error("unavailable"))}
       />,
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /research log/i }));
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Research log channel" }),
+      { target: { value: "channel_1" } },
+    );
 
     expect(
-      await screen.findByText("Channel roles could not be saved. Try again."),
+      await screen.findByText("Server routing could not be saved. Try again."),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Market Desk" })).toBeVisible();
   });

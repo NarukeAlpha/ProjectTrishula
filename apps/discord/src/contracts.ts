@@ -1,4 +1,21 @@
 import { z } from "zod";
+import {
+  discordImageAttachmentSchema,
+  MAX_DISCORD_CONTEXT_IMAGES,
+} from "./media/images.js";
+import {
+  marketChartSpecSchema,
+  type MarketChartSpec,
+} from "./media/market-chart.js";
+
+export {
+  discordImageAttachmentSchema,
+  type DiscordImageAttachment,
+} from "./media/images.js";
+export {
+  marketChartSpecSchema,
+  type MarketChartSpec,
+} from "./media/market-chart.js";
 
 export const stableIdSchema = z
   .string()
@@ -23,15 +40,38 @@ const httpsUrlSchema = z
 export const agentMessageSchema = z
   .object({
     messageId: snowflakeSchema,
+    sequence: z.number().int().positive(),
     authorId: snowflakeSchema,
     authorName: z.string().trim().min(1).max(100),
-    content: z.string().trim().min(1).max(4_000),
+    content: z.string().max(4_000),
+    images: z
+      .array(discordImageAttachmentSchema)
+      .max(MAX_DISCORD_CONTEXT_IMAGES)
+      .optional(),
+    mentionsBot: z.boolean().optional(),
+    replyToMessageId: snowflakeSchema.optional(),
     createdAt: isoDateTimeSchema,
     isBot: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((message, context) => {
+    if (message.content.trim().length === 0 && !message.images?.length) {
+      context.addIssue({
+        code: "custom",
+        message: "A Discord message requires text or an image.",
+      });
+    }
+  });
 
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
+
+export const discordTriggerKindSchema = z.enum([
+  "ambient",
+  "mention",
+  "recheck",
+]);
+
+export type DiscordTriggerKind = z.infer<typeof discordTriggerKindSchema>;
 
 export const agentChannelSchema = z
   .object({
@@ -50,41 +90,58 @@ const commonAgentRequestSchema = z.object({
 export const triageRequestSchema = commonAgentRequestSchema
   .extend({
     profile: z.literal("triage"),
-  })
-  .strict();
-
-export const acknowledgeRequestSchema = commonAgentRequestSchema
-  .extend({
-    profile: z.literal("acknowledge"),
-    question: z.string().trim().min(1).max(1_000),
-    reason: z.string().trim().min(1).max(500),
+    triggerKind: discordTriggerKindSchema,
   })
   .strict();
 
 export const triageResponseSchema = z
   .object({
     profile: z.literal("triage"),
-    shouldRespond: z.boolean(),
-    shouldResearch: z.boolean(),
+    decision: z.enum(["silent", "direct", "research"]),
+    targetMessageId: snowflakeSchema.nullable(),
     question: z.string().trim().min(1).max(1_000).nullable(),
+    directReply: z.string().trim().min(1).max(1_200).nullable(),
+    acknowledgement: z.string().trim().min(1).max(320).nullable(),
     reason: z.string().trim().min(1).max(500),
     confidence: z.number().min(0).max(1),
+    additiveValue: z.number().min(0).max(1),
   })
   .strict()
   .superRefine((value, context) => {
+    if (value.decision === "silent") {
+      if (
+        value.targetMessageId !== null ||
+        value.question !== null ||
+        value.directReply !== null ||
+        value.acknowledgement !== null
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "A silent triage decision cannot include reply fields.",
+        });
+      }
+      return;
+    }
+    if (value.targetMessageId === null || value.question === null) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "A response requires a target message and normalized question.",
+      });
+    }
     if (
-      value.shouldResearch &&
-      (!value.shouldRespond || value.question === null)
+      value.decision === "direct" &&
+      (value.directReply === null || value.acknowledgement !== null)
     ) {
       context.addIssue({
         code: "custom",
-        message: "Research requires a response and a question.",
+        message: "A direct decision requires only a direct reply.",
       });
     }
-    if (value.shouldRespond && value.question === null) {
+    if (value.decision === "research" && value.directReply !== null) {
       context.addIssue({
         code: "custom",
-        message: "A response requires a normalized question.",
+        message: "A research decision cannot include a direct reply.",
       });
     }
   });
@@ -119,6 +176,7 @@ export const researchResponseSchema = z
       .strict(),
     uncertainty: z.array(z.string().trim().min(1).max(500)).max(12),
     noTradingAction: z.literal(true),
+    chart: marketChartSpecSchema.optional(),
   })
   .strict();
 
@@ -132,40 +190,39 @@ export const researchRequestSchema = commonAgentRequestSchema
 export const replyRequestSchema = commonAgentRequestSchema
   .extend({
     profile: z.literal("reply"),
+    triggerKind: discordTriggerKindSchema,
+    targetMessageId: snowflakeSchema,
     question: z.string().trim().min(1).max(1_000),
     research: researchResponseSchema.nullable(),
-    loopDepth: z.number().int().min(0).max(3),
   })
   .strict();
 
 export const replyResponseSchema = z
   .object({
     profile: z.literal("reply"),
-    reply: z.string().trim().min(1).max(1_200),
-    recheck: z.boolean(),
-    recheckReason: z.string().trim().min(1).max(500).nullable(),
+    action: z.enum(["send", "suppress"]),
+    reply: z.string().trim().min(1).max(1_200).nullable(),
+    reason: z.string().trim().min(1).max(500),
+    chart: marketChartSpecSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.recheck !== (value.recheckReason !== null)) {
+    if ((value.action === "send") !== (value.reply !== null)) {
       context.addIssue({
         code: "custom",
-        message: "recheck and recheckReason must agree.",
+        message: "Reply action and reply content must agree.",
+      });
+    }
+    if (value.action === "suppress" && value.chart !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "A suppressed reply cannot include a chart.",
       });
     }
   });
 
-export const acknowledgeResponseSchema = z
-  .object({
-    profile: z.literal("acknowledge"),
-    acknowledgement: z.string().trim().min(1).max(320),
-  })
-  .strict();
-
 export type TriageRequest = z.infer<typeof triageRequestSchema>;
 export type TriageResponse = z.infer<typeof triageResponseSchema>;
-export type AcknowledgeRequest = z.infer<typeof acknowledgeRequestSchema>;
-export type AcknowledgeResponse = z.infer<typeof acknowledgeResponseSchema>;
 export type ResearchRequest = z.infer<typeof researchRequestSchema>;
 export type ResearchResponse = z.infer<typeof researchResponseSchema>;
 export type ReplyRequest = z.infer<typeof replyRequestSchema>;
@@ -212,11 +269,24 @@ export const storedMessageSchema = z
     authorId: snowflakeSchema,
     authorName: z.string().trim().min(1).max(200),
     content: z.string().max(8_000),
+    images: z
+      .array(discordImageAttachmentSchema)
+      .max(MAX_DISCORD_CONTEXT_IMAGES)
+      .optional(),
+    mentionsBot: z.boolean(),
     isBot: z.boolean(),
     replyToMessageId: snowflakeSchema.optional(),
     createdAt: timestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((message, context) => {
+    if (message.content.trim().length === 0 && !message.images?.length) {
+      context.addIssue({
+        code: "custom",
+        message: "A stored Discord message requires text or an image.",
+      });
+    }
+  });
 
 export type StoredMessage = z.infer<typeof storedMessageSchema>;
 
@@ -227,11 +297,24 @@ export const convexMessageSchema = z
     authorId: stableIdSchema,
     authorName: z.string().trim().min(1).max(200),
     content: z.string().max(8_000),
+    images: z
+      .array(discordImageAttachmentSchema)
+      .max(MAX_DISCORD_CONTEXT_IMAGES)
+      .optional(),
+    mentionsBot: z.boolean().default(false),
     isBot: z.boolean(),
     replyToMessageId: stableIdSchema.optional(),
     createdAt: timestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((message, context) => {
+    if (message.content.trim().length === 0 && !message.images?.length) {
+      context.addIssue({
+        code: "custom",
+        message: "A Convex Discord message requires text or an image.",
+      });
+    }
+  });
 
 export type ConvexMessage = z.infer<typeof convexMessageSchema>;
 
@@ -252,6 +335,7 @@ export interface ClaimedLoop extends ChannelReference {
   windowEnd: number;
   contextHash: string;
   recheckCount: number;
+  triggerKind: DiscordTriggerKind;
   replyChannelId: string;
   researchLogChannelId?: string | undefined;
   messages: AgentMessage[];
@@ -282,7 +366,9 @@ export interface OutboxItem extends ChannelReference {
   replyKind?: ReplyKind | undefined;
   status: "pending" | "sent";
   content: string;
+  chart?: MarketChartSpec | undefined;
   replyToMessageId?: string | undefined;
+  consumesThroughSequence?: number | undefined;
   recheckRequested: boolean;
   finalizesLoop: boolean;
   discordMessageId?: string | undefined;

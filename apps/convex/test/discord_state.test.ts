@@ -44,6 +44,7 @@ function message(sequence: number, overrides: Partial<DiscordMessageContext> = {
     authorId: `user_${sequence}`,
     authorName: `User ${sequence}`,
     content: `Message ${sequence}`,
+    mentionsBot: false,
     isBot: false,
     createdAt: sequence,
     ...overrides,
@@ -65,6 +66,7 @@ describe("Discord durable loop state", () => {
       authorId: "discord-bot",
       authorName: "Bot",
       content: "Concise reply",
+      mentionsBot: false,
       isBot: true,
       createdAt: 1_000,
     }, {
@@ -72,6 +74,7 @@ describe("Discord durable loop state", () => {
       authorId: "bot_123",
       authorName: "Trishula",
       content: "Concise reply",
+      mentionsBot: false,
       isBot: true,
       createdAt: 995,
     })).toBe(true);
@@ -80,6 +83,7 @@ describe("Discord durable loop state", () => {
       authorId: "discord-bot",
       authorName: "Bot",
       content: "First reply",
+      mentionsBot: false,
       isBot: true,
       createdAt: 1_000,
     }, {
@@ -87,9 +91,37 @@ describe("Discord durable loop state", () => {
       authorId: "bot_123",
       authorName: "Trishula",
       content: "Different reply",
+      mentionsBot: false,
       isBot: true,
       createdAt: 995,
     })).toBe(false);
+  });
+
+  it("accepts generated attachment metadata added by the Discord bot echo", () => {
+    expect(discordDuplicateMessageMatches({
+      guildId: "guild_1",
+      authorId: "discord-bot",
+      authorName: "Bot",
+      content: "Here is the verified chart.",
+      mentionsBot: false,
+      isBot: true,
+      createdAt: 1_000,
+    }, {
+      guildId: "guild_1",
+      authorId: "bot_123",
+      authorName: "Trishula",
+      content: "Here is the verified chart.",
+      images: [{
+        attachmentId: "attachment_1",
+        url: "https://cdn.discordapp.com/attachments/1/2/chart.png",
+        filename: "chart.png",
+        mediaType: "image/png",
+        sizeBytes: 4_096,
+      }],
+      mentionsBot: false,
+      isBot: true,
+      createdAt: 1_005,
+    })).toBe(true);
   });
 
   it("prioritizes finalizing a sent reply over reclaiming its expired loop", () => {

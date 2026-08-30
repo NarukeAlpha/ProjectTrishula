@@ -21,6 +21,7 @@ import type {
   StoredMessage,
 } from "../contracts.js";
 import type { ChannelLoopOrchestrator } from "../orchestrator/channel-loop.js";
+import { discordImageAttachments } from "../media/images.js";
 import { logger } from "../runtime/logger.js";
 
 export interface DiscordGatewayDependencies {
@@ -105,7 +106,8 @@ function storedMessage(
   )
     return null;
   const content = message.content.trim().slice(0, 4_000);
-  if (!content) return null;
+  const images = discordImageAttachments(message.attachments.values());
+  if (!content && images.length === 0) return null;
   const payload: StoredMessage = {
     guildId: message.guildId,
     channelId: message.channelId,
@@ -117,9 +119,16 @@ function storedMessage(
       message.author.username
     ).slice(0, 200),
     content,
+    mentionsBot:
+      ownBotUserId !== undefined
+      && (
+        message.mentions.users.has(ownBotUserId)
+        || message.mentions.repliedUser?.id === ownBotUserId
+      ),
     createdAt: message.createdTimestamp,
     isBot: message.author.bot,
   };
+  if (images.length > 0) payload.images = images;
   if (message.reference?.messageId !== undefined) {
     payload.replyToMessageId = message.reference.messageId;
   }

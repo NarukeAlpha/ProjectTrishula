@@ -58,9 +58,15 @@ describe("Project Trishula demo mode", () => {
     fireEvent.click(screen.getAllByRole("link", { name: "Discord" })[0]);
 
     expect(
-      screen.getByRole("heading", { name: "Channel control" }),
+      screen.getByRole("heading", { name: "Server routing" }),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Stardust" })).toBeVisible();
+    expect(
+      screen.getByRole("combobox", { name: "Conversation channel" }),
+    ).toHaveValue("demo-testing-bot");
+    expect(
+      screen.getByRole("combobox", { name: "Research log channel" }),
+    ).toHaveValue("demo-research-log");
     expect(
       screen.getByRole("heading", { name: "Agent activity" }),
     ).toBeVisible();

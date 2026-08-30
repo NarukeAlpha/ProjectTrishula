@@ -17,6 +17,53 @@ export const DISCORD_SERVICE_CONTRACT = {
 
 const id = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
 const timestamp = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const discordAttachmentUrl = z.url().max(2_000).refine((value) => {
+  const url = new URL(value);
+  const hostname = url.hostname.toLowerCase();
+  return url.protocol === "https:"
+    && url.username === ""
+    && url.password === ""
+    && url.port === ""
+    && (hostname === "cdn.discordapp.com" || hostname === "media.discordapp.net")
+    && url.pathname.startsWith("/attachments/");
+}, "Discord attachment URL required.");
+const discordImageAttachment = z.object({
+  attachmentId: z.string().regex(/^\d{1,32}$/),
+  url: discordAttachmentUrl,
+  filename: z.string().trim().min(1).max(200),
+  mediaType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]),
+  sizeBytes: z.number().int().positive().max(8 * 1024 * 1024),
+  width: z.number().int().positive().max(8_192).optional(),
+  height: z.number().int().positive().max(8_192).optional(),
+}).strict().superRefine((image, context) => {
+  if (
+    image.width !== undefined
+    && image.height !== undefined
+    && image.width * image.height > 25_000_000
+  ) {
+    context.addIssue({ code: "custom", message: "Discord image dimensions are too large." });
+  }
+});
+const discordMarketChart = z.object({
+  symbol: z.string().trim().min(1).max(20).regex(/^[A-Z0-9.^=-]+$/i),
+  title: z.string().trim().min(1).max(64).optional(),
+  points: z.array(z.object({
+    timestamp,
+    close: z.number().finite().nonnegative(),
+  }).strict()).min(2).max(240),
+}).strict().superRefine((chart, context) => {
+  for (let index = 1; index < chart.points.length; index += 1) {
+    const previous = chart.points[index - 1];
+    const current = chart.points[index];
+    if (previous !== undefined && current !== undefined && current.timestamp <= previous.timestamp) {
+      context.addIssue({
+        code: "custom",
+        path: ["points", index, "timestamp"],
+        message: "Chart timestamps must increase.",
+      });
+    }
+  }
+});
 const permissions = z.object({
   viewChannels: z.boolean(),
   sendMessages: z.boolean(),
@@ -60,10 +107,20 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     authorId: id,
     authorName: z.string().trim().min(1).max(200),
     content: z.string().max(8_000),
+    images: z.array(discordImageAttachment).max(4).optional(),
+    mentionsBot: z.boolean(),
     isBot: z.boolean(),
     replyToMessageId: id.optional(),
     createdAt: timestamp,
-  }).strict(),
+  }).strict().superRefine((message, context) => {
+    if (message.content.trim().length === 0 && (message.images?.length ?? 0) === 0) {
+      context.addIssue({
+        code: "custom",
+        message: "A Discord message must include text or an image.",
+        path: ["content"],
+      });
+    }
+  }),
   z.object({
     operation: z.literal("claimLoop"),
     actorId: id,
@@ -86,6 +143,8 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     generation: z.number().int().positive(),
     outcome: z.enum(["completed", "error"]),
     recheckRequested: z.boolean().optional(),
+    consumesThroughSequence: timestamp.optional(),
+    suppressPendingReplies: z.boolean().optional(),
     error: z.string().trim().min(1).max(1_000).optional(),
     retryable: z.boolean().optional(),
   }).strict(),
@@ -128,7 +187,9 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     idempotencyKey: id,
     replyKind: z.enum(["acknowledgement", "research_log", "final"]).optional(),
     content: z.string().trim().min(1).max(2_000),
+    chart: discordMarketChart.optional(),
     replyToMessageId: id.optional(),
+    consumesThroughSequence: timestamp.optional(),
     recheckRequested: z.boolean(),
     finalizesLoop: z.boolean(),
   }).strict(),
@@ -139,6 +200,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     deliveryToken: id,
     status: z.enum(["sent", "failed"]),
     discordMessageId: id.optional(),
+    images: z.array(discordImageAttachment).max(4).optional(),
     error: z.string().trim().min(1).max(1_000).optional(),
     retryable: z.boolean().optional(),
   }).strict(),

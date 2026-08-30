@@ -10,6 +10,8 @@ import {
 } from "./_generated/server.js";
 import { actorFromIdentity, requireAllowedWorkosUserId } from "./lib/auth.js";
 import {
+  DISCORD_AMBIENT_COOLDOWN_MS,
+  DISCORD_AMBIENT_DEBOUNCE_MS,
   DISCORD_CONTEXT_SIZE,
   DISCORD_GATEWAY_HEARTBEAT_TTL_MS,
   DISCORD_LOOP_LEASE_MS,
@@ -35,13 +37,17 @@ import {
   isCurrentDiscordGeneration,
   resolveDiscordChannelRouting,
   type DiscordChannelRole,
+  type DiscordImageAttachment,
   type DiscordMessageIdentity,
   type DiscordMessageContext,
   type DiscordRecheckInput,
+  type DiscordTriggerKind,
 } from "./lib/discord_state.js";
 import {
   discordChannelRoleValidator,
   discordChannelTypeValidator,
+  discordImageAttachmentValidator,
+  discordMarketChartValidator,
   discordReplyKindValidator,
 } from "./schema.js";
 
@@ -75,6 +81,8 @@ const discordMessageValidator = v.object({
   authorId: serviceId,
   authorName: v.string(),
   content: v.string(),
+  images: v.optional(v.array(discordImageAttachmentValidator)),
+  mentionsBot: v.boolean(),
   isBot: v.boolean(),
   replyToMessageId: v.optional(v.string()),
   createdAt: v.number(),
@@ -130,6 +138,11 @@ interface DiscordActivityView {
   stage?: Doc<"discordActivityEvents">["stage"];
   replyKind?: Doc<"discordActivityEvents">["replyKind"];
   createdAt: number;
+}
+
+interface DiscordGuildRoutingView {
+  conversationChannelId?: string;
+  researchLogChannelId?: string;
 }
 
 interface MonitoredChannelCursor {
@@ -200,10 +213,81 @@ function requireDiscordContent(value: string): string {
   return value;
 }
 
+function requireDiscordImages(
+  images: readonly DiscordImageAttachment[] | undefined,
+): DiscordImageAttachment[] | undefined {
+  if (images === undefined) return undefined;
+  if (images.length === 0 || images.length > 4) {
+    throw new Error("Discord image attachments are invalid.");
+  }
+  return images.map((image) => {
+    const url = new URL(image.url);
+    const hostname = url.hostname.toLowerCase();
+    const width = image.width;
+    const height = image.height;
+    if (
+      url.protocol !== "https:"
+      || url.username !== ""
+      || url.password !== ""
+      || url.port !== ""
+      || !["cdn.discordapp.com", "media.discordapp.net"].includes(hostname)
+      || !url.pathname.startsWith("/attachments/")
+      || !/^\d{1,32}$/.test(image.attachmentId)
+      || image.sizeBytes <= 0
+      || image.sizeBytes > 8 * 1_024 * 1_024
+      || !image.filename.trim()
+      || image.filename.length > 200
+      || (width !== undefined && (!Number.isSafeInteger(width) || width <= 0 || width > 8_192))
+      || (height !== undefined && (!Number.isSafeInteger(height) || height <= 0 || height > 8_192))
+      || (width !== undefined && height !== undefined && width * height > 25_000_000)
+    ) {
+      throw new Error("Discord image attachment is invalid.");
+    }
+    const result: DiscordImageAttachment = {
+      attachmentId: requireDiscordId(image.attachmentId, "attachmentId"),
+      url: url.toString(),
+      filename: image.filename.trim(),
+      mediaType: image.mediaType,
+      sizeBytes: image.sizeBytes,
+    };
+    if (width !== undefined) result.width = width;
+    if (height !== undefined) result.height = height;
+    return result;
+  });
+}
+
 function requireReplyContent(value: string): string {
   const normalized = value.trim();
   if (!normalized || normalized.length > 2_000) throw new Error("Discord reply content is invalid.");
   return normalized;
+}
+
+function requireMarketChart(chart: {
+  symbol: string;
+  title?: string;
+  points: Array<{ timestamp: number; close: number }>;
+} | undefined) {
+  if (chart === undefined) return undefined;
+  const symbol = chart.symbol.trim().toUpperCase();
+  const title = chart.title?.trim();
+  if (
+    !/^[A-Z0-9.^=-]{1,20}$/.test(symbol)
+    || (title !== undefined && (!title || title.length > 64))
+    || chart.points.length < 2
+    || chart.points.length > 240
+    || chart.points.some((point, index) => {
+      const previous = chart.points[index - 1];
+      return !Number.isSafeInteger(point.timestamp)
+        || point.timestamp < 0
+        || !Number.isFinite(point.close)
+        || point.close < 0
+        || (previous !== undefined && point.timestamp <= previous.timestamp);
+    })
+  ) {
+    throw new Error("Discord market chart is invalid.");
+  }
+  const points = chart.points.map((point) => ({ ...point }));
+  return title === undefined ? { symbol, points } : { symbol, title, points };
 }
 
 async function recordActivity(
@@ -267,9 +351,11 @@ function toMessageContext(message: Doc<"discordMessages">): DiscordMessageContex
     authorId: message.authorId,
     authorName: message.authorName,
     content: message.content,
+    mentionsBot: message.mentionsBot ?? false,
     isBot: message.isBot,
     createdAt: message.createdAt,
   };
+  if (message.images !== undefined) context.images = message.images;
   if (message.replyToMessageId !== undefined) context.replyToMessageId = message.replyToMessageId;
   return context;
 }
@@ -313,6 +399,7 @@ async function channelRouting(
   ownerId: string,
   guildId: string,
   sourceChannelId: string,
+  preferSource = false,
 ) {
   const channels = await ctx.db
     .query("discordChannels")
@@ -321,7 +408,24 @@ async function channelRouting(
       .eq("guildId", guildId)
       .eq("available", true))
     .collect();
-  return resolveDiscordChannelRouting(sourceChannelId, channels);
+  const routing = resolveDiscordChannelRouting(sourceChannelId, channels);
+  const source = channels.find((channel) => channel.channelId === sourceChannelId);
+  return preferSource && source?.canSend
+    ? { ...routing, replyChannelId: sourceChannelId }
+    : routing;
+}
+
+function triggerKindForWindow(
+  mode: "messages" | "recheck",
+  windowStart: number,
+  messages: readonly DiscordMessageContext[],
+): DiscordTriggerKind {
+  if (mode === "recheck") return "recheck";
+  return messages.some((message) =>
+    message.sequence >= windowStart && !message.isBot && message.mentionsBot
+  )
+    ? "mention"
+    : "ambient";
 }
 
 function hasRole(channel: Doc<"discordChannels">, role: DiscordChannelRole): boolean {
@@ -372,6 +476,86 @@ async function invalidateRunOutbox(
       await ctx.db.patch(reply._id, { status: "finalized", updatedAt: now });
     }
   }
+}
+
+async function applyChannelRoles(
+  ctx: DiscordWriter,
+  ownerId: string,
+  guildId: string,
+  channel: Doc<"discordChannels">,
+  roles: DiscordChannelRole[],
+  now: number,
+): Promise<void> {
+  const wasMonitored = hasRole(channel, "conversation_monitor");
+  const isMonitored = roles.includes("conversation_monitor");
+  await ctx.db.patch(channel._id, { roles, updatedAt: now });
+  let state = await discordChannelState(ctx, ownerId, channel.channelId);
+  if (!state && isMonitored) {
+    const stateId = await ctx.db.insert("discordChannelStates", {
+      ownerId,
+      guildId,
+      channelId: channel.channelId,
+      generation: 0,
+      status: "idle",
+      latestSequence: 0,
+      triggerThroughSequence: 0,
+      completedThroughSequence: 0,
+      recheckCount: 0,
+      recheckPending: false,
+      consecutiveErrorCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    state = await ctx.db.get(stateId);
+  }
+  if (state && !wasMonitored && isMonitored) {
+    await ctx.db.patch(state._id, {
+      generation: state.generation + 1,
+      status: "idle",
+      triggerThroughSequence: state.latestSequence,
+      completedThroughSequence: state.latestSequence,
+      recheckCount: 0,
+      recheckPending: false,
+      lastRecheckHash: undefined,
+      nextEligibleAt: undefined,
+      lastError: undefined,
+      consecutiveErrorCount: 0,
+      ...clearActiveLoop(),
+      updatedAt: now,
+    });
+  }
+  if (!state || !wasMonitored || isMonitored) return;
+  if (state.activeRunId !== undefined) {
+    const run = await ctx.db
+      .query("discordLoopRuns")
+      .withIndex("by_owner_run", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("runId", state.activeRunId!))
+      .unique();
+    if (run && !["completed", "error", "stale"].includes(run.status)) {
+      await ctx.db.patch(run._id, { status: "stale", completedAt: now, updatedAt: now });
+    }
+    await invalidateRunOutbox(
+      ctx,
+      ownerId,
+      state.activeRunId,
+      "Source channel monitoring was disabled before delivery.",
+      now,
+    );
+  }
+  await ctx.db.patch(state._id, {
+    generation: state.generation + 1,
+    status: "idle",
+    triggerThroughSequence: state.latestSequence,
+    completedThroughSequence: state.latestSequence,
+    recheckCount: 0,
+    recheckPending: false,
+    lastRecheckHash: undefined,
+    nextEligibleAt: undefined,
+    lastError: undefined,
+    ...clearActiveLoop(),
+    updatedAt: now,
+  });
 }
 
 function publicGateway(
@@ -445,11 +629,25 @@ export const getControlPlane = query({
             .eq("guildId", guild.guildId)
             .eq("available", true))
           .collect();
+        const conversationChannelId = channels.find((channel) =>
+          hasRole(channel, "conversation_monitor") && hasRole(channel, "reply_target")
+        )?.channelId;
+        const researchLogChannelId = channels.find((channel) =>
+          hasRole(channel, "research_log")
+        )?.channelId;
+        const routing: DiscordGuildRoutingView = {};
+        if (conversationChannelId !== undefined) {
+          routing.conversationChannelId = conversationChannelId;
+        }
+        if (researchLogChannelId !== undefined) {
+          routing.researchLogChannelId = researchLogChannelId;
+        }
         return {
           guildId: guild.guildId,
           name: guild.name,
           iconUrl: guild.iconUrl,
           permissions: guild.permissions,
+          routing,
           channels: await Promise.all(channels.map(async (channel) => {
             const state = await discordChannelState(ctx, actor.id, channel.channelId);
             const loop = state
@@ -501,59 +699,66 @@ export const setChannelRoles = mutation({
     }
 
     const now = Date.now();
-    const wasMonitored = hasRole(channel, "conversation_monitor");
-    const isMonitored = roles.includes("conversation_monitor");
-    await ctx.db.patch(channel._id, { roles, updatedAt: now });
-    let state = await discordChannelState(ctx, actor.id, channelId);
-    if (!state && isMonitored) {
-      const stateId = await ctx.db.insert("discordChannelStates", {
-        ownerId: actor.id,
-        guildId,
-        channelId,
-        generation: 0,
-        status: "idle",
-        latestSequence: 0,
-        triggerThroughSequence: 0,
-        completedThroughSequence: 0,
-        recheckCount: 0,
-        recheckPending: false,
-        consecutiveErrorCount: 0,
-        createdAt: now,
-        updatedAt: now,
-      });
-      state = await ctx.db.get(stateId);
-    }
-    if (state && wasMonitored && !isMonitored) {
-      if (state.activeRunId !== undefined) {
-        const run = await ctx.db
-          .query("discordLoopRuns")
-          .withIndex("by_owner_run", (index) => index.eq("ownerId", actor.id).eq("runId", state.activeRunId!))
-          .unique();
-        if (run && !["completed", "error", "stale"].includes(run.status)) {
-          await ctx.db.patch(run._id, { status: "stale", completedAt: now, updatedAt: now });
-        }
-        await invalidateRunOutbox(
-          ctx,
-          actor.id,
-          state.activeRunId,
-          "Source channel monitoring was disabled before delivery.",
-          now,
-        );
-      }
-      await ctx.db.patch(state._id, {
-        generation: state.generation + 1,
-        status: "idle",
-        triggerThroughSequence: state.latestSequence,
-        completedThroughSequence: state.latestSequence,
-        recheckCount: 0,
-        recheckPending: false,
-        lastRecheckHash: undefined,
-        lastError: undefined,
-        ...clearActiveLoop(),
-        updatedAt: now,
-      });
-    }
+    await applyChannelRoles(ctx, actor.id, guildId, channel, roles, now);
     return { guildId, channelId, roles, updatedAt: now };
+  },
+});
+
+export const setGuildRouting = mutation({
+  args: {
+    guildId: v.string(),
+    conversationChannelId: v.union(v.string(), v.null()),
+    researchLogChannelId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    const conversationChannelId = args.conversationChannelId === null
+      ? null
+      : requireDiscordId(args.conversationChannelId, "conversationChannelId");
+    const researchLogChannelId = args.researchLogChannelId === null
+      ? null
+      : requireDiscordId(args.researchLogChannelId, "researchLogChannelId");
+    const channels = await ctx.db
+      .query("discordChannels")
+      .withIndex("by_owner_guild_available_name", (index) => index
+        .eq("ownerId", actor.id)
+        .eq("guildId", guildId))
+      .collect();
+    const conversation = conversationChannelId === null ? undefined : channels.find((channel) =>
+      channel.available && channel.channelId === conversationChannelId
+    );
+    const researchLog = researchLogChannelId === null ? undefined : channels.find((channel) =>
+      channel.available && channel.channelId === researchLogChannelId
+    );
+    if (conversationChannelId !== null && !conversation) {
+      throw new Error("Discord conversation channel not found.");
+    }
+    if (researchLogChannelId !== null && !researchLog) {
+      throw new Error("Discord research-log channel not found.");
+    }
+    if (conversation && (!conversation.canView || !conversation.canReadHistory || !conversation.canSend)) {
+      throw new Error("Discord conversation channel permissions are incomplete.");
+    }
+    if (researchLog && (!researchLog.canView || !researchLog.canSend)) {
+      throw new Error("Discord research-log channel permissions are incomplete.");
+    }
+
+    const now = Date.now();
+    for (const channel of channels) {
+      const roles: DiscordChannelRole[] = [];
+      if (channel.channelId === conversationChannelId) {
+        roles.push("conversation_monitor", "reply_target");
+      }
+      if (channel.channelId === researchLogChannelId) roles.push("research_log");
+      await applyChannelRoles(ctx, actor.id, guildId, channel, roles, now);
+    }
+    return {
+      guildId,
+      conversationChannelId,
+      researchLogChannelId,
+      updatedAt: now,
+    };
   },
 });
 
@@ -693,8 +898,21 @@ export const ingestMessage = internalMutation({
     const channelId = requireDiscordId(args.channelId, "channelId");
     const messageId = requireDiscordId(args.messageId, "messageId");
     const channel = await discordChannel(ctx, ownerId, guildId, channelId);
-    if (!channel?.available || !hasRole(channel, "conversation_monitor")) {
+    if (!channel?.available) {
       return { accepted: false as const, reason: "not_monitored" as const };
+    }
+    const now = Date.now();
+    let state = await discordChannelState(ctx, ownerId, channelId);
+    const monitored = hasRole(channel, "conversation_monitor");
+    const directMention = !args.isBot && args.mentionsBot;
+    const activeConversation = state !== null && activeLease(state, now);
+    if (!monitored && !directMention && !activeConversation) {
+      return { accepted: false as const, reason: "not_monitored" as const };
+    }
+    const images = requireDiscordImages(args.images);
+    const content = requireDiscordContent(args.content);
+    if (!content.trim() && images === undefined) {
+      return { accepted: false as const, reason: "empty_message" as const };
     }
     const existing = await ctx.db
       .query("discordMessages")
@@ -708,10 +926,12 @@ export const ingestMessage = internalMutation({
         guildId,
         authorId: args.authorId.trim(),
         authorName: args.authorName.trim(),
-        content: args.content,
+        content,
+        mentionsBot: args.mentionsBot,
         isBot: args.isBot,
         createdAt: args.createdAt,
       };
+      if (images !== undefined) incomingMessage.images = images;
       if (args.replyToMessageId !== undefined) {
         incomingMessage.replyToMessageId = args.replyToMessageId;
       }
@@ -720,8 +940,6 @@ export const ingestMessage = internalMutation({
         return { accepted: false as const, reason: "message_id_conflict" as const };
       }
     }
-    let state = await discordChannelState(ctx, ownerId, channelId);
-    const now = Date.now();
     if (!state) {
       const stateId = await ctx.db.insert("discordChannelStates", {
         ownerId,
@@ -759,32 +977,56 @@ export const ingestMessage = internalMutation({
       sequence: decision.sequence,
       authorId: requireDiscordId(args.authorId, "authorId"),
       authorName: requireDiscordName(args.authorName, "authorName"),
-      content: requireDiscordContent(args.content),
+      content,
+      mentionsBot: args.mentionsBot,
       isBot: args.isBot,
       createdAt: args.createdAt,
       receivedAt: now,
     };
+    if (images !== undefined) messageValue.images = images;
     if (args.replyToMessageId !== undefined) messageValue.replyToMessageId = args.replyToMessageId;
     await ctx.db.insert("discordMessages", messageValue);
     const running = activeLease(state, now);
-    const startsNewChain = !args.isBot
+    const advancesTrigger = !args.isBot && (monitored || directMention);
+    const startsNewChain = advancesTrigger
       && !running
       && state.triggerThroughSequence <= state.completedThroughSequence;
-    const triggerThroughSequence = args.isBot
-      ? state.triggerThroughSequence
-      : decision.sequence;
+    const triggerThroughSequence = advancesTrigger
+      ? decision.sequence
+      : state.triggerThroughSequence;
+    const alreadyPendingMention = advancesTrigger
+      && !directMention
+      && state.triggerThroughSequence > state.completedThroughSequence
+      && await ctx.db
+        .query("discordMessages")
+        .withIndex("by_owner_channel_sequence", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("channelId", channelId)
+          .gte("sequence", state.completedThroughSequence + 1)
+          .lte("sequence", state.triggerThroughSequence))
+        .filter((filter) => filter.eq(filter.field("mentionsBot"), true))
+        .first() !== null;
+    const nextEligibleAt = advancesTrigger
+      ? directMention || alreadyPendingMention
+        ? now
+        : Math.max(
+            now + DISCORD_AMBIENT_DEBOUNCE_MS,
+            (state.lastProcessedAt ?? 0) + DISCORD_AMBIENT_COOLDOWN_MS,
+          )
+      : state.nextEligibleAt;
     const pendingCount = Math.max(0, triggerThroughSequence - state.completedThroughSequence);
     await ctx.db.patch(state._id, {
       latestSequence: decision.sequence,
       triggerThroughSequence,
-      status: !args.isBot && !running
+      nextEligibleAt,
+      status: advancesTrigger && !running
         ? pendingCount > DISCORD_CONTEXT_SIZE ? "catching_up" : "idle"
         : state.status,
       recheckCount: startsNewChain ? 0 : state.recheckCount,
       recheckPending: startsNewChain ? false : state.recheckPending,
       lastRecheckHash: startsNewChain ? undefined : state.lastRecheckHash,
-      lastError: !args.isBot && !running ? undefined : state.lastError,
-      consecutiveErrorCount: !args.isBot && !running
+      lastError: advancesTrigger && !running ? undefined : state.lastError,
+      consecutiveErrorCount: advancesTrigger && !running
         ? 0
         : (state.consecutiveErrorCount ?? 0),
       updatedAt: now,
@@ -801,7 +1043,7 @@ export const ingestMessage = internalMutation({
       accepted: true as const,
       duplicate: false,
       sequence: decision.sequence,
-      shouldSchedule: decision.triggersLoop && !running,
+      shouldSchedule: decision.triggersLoop && directMention && !running,
     };
   },
 });
@@ -821,13 +1063,20 @@ export const claimLoop = internalMutation({
     const workerId = requireDiscordId(args.workerId, "workerId");
     const claimId = requireDiscordId(args.claimId, "claimId");
     const channel = await discordChannel(ctx, ownerId, guildId, channelId);
-    if (!channel?.available || !hasRole(channel, "conversation_monitor")) {
+    if (!channel?.available) {
       return { claimed: false as const, reason: "not_monitored" as const };
     }
-    const routing = await channelRouting(ctx, ownerId, guildId, channelId);
     const state = await discordChannelState(ctx, ownerId, channelId);
     if (!state) return { claimed: false as const, reason: "not_runnable" as const };
     const now = Date.now();
+    const hasPendingMessages = state.triggerThroughSequence > state.completedThroughSequence;
+    if (
+      !hasRole(channel, "conversation_monitor")
+      && !hasPendingMessages
+      && state.activeRunId === undefined
+    ) {
+      return { claimed: false as const, reason: "not_monitored" as const };
+    }
 
     const existingClaim = await ctx.db
       .query("discordLoopRuns")
@@ -847,6 +1096,18 @@ export const claimLoop = internalMutation({
           discordTrailingContextStart(existingClaim.windowEnd),
           existingClaim.windowEnd,
         );
+        const triggerKind = triggerKindForWindow(
+          existingClaim.mode,
+          existingClaim.windowStart,
+          messages,
+        );
+        const routing = await channelRouting(
+          ctx,
+          ownerId,
+          guildId,
+          channelId,
+          triggerKind === "mention",
+        );
         return {
           claimed: true as const,
           idempotent: true,
@@ -859,6 +1120,7 @@ export const claimLoop = internalMutation({
           windowEnd: existingClaim.windowEnd,
           contextHash: existingClaim.contextHash,
           recheckCount: existingClaim.recheckCount,
+          triggerKind,
           ...routing,
           messages,
         };
@@ -892,6 +1154,13 @@ export const claimLoop = internalMutation({
     }, now);
     if (!claim.claimed) return { claimed: false as const, reason: claim.reason };
     const window = claim.window;
+    if (
+      window.mode === "messages"
+      && state.nextEligibleAt !== undefined
+      && state.nextEligibleAt > now
+    ) {
+      return { claimed: false as const, reason: "debouncing" as const };
+    }
 
     if (state.activeRunId !== undefined) {
       const expiredRun = await ctx.db
@@ -916,6 +1185,14 @@ export const claimLoop = internalMutation({
       channelId,
       discordTrailingContextStart(window.end),
       window.end,
+    );
+    const triggerKind = triggerKindForWindow(window.mode, window.start, messages);
+    const routing = await channelRouting(
+      ctx,
+      ownerId,
+      guildId,
+      channelId,
+      triggerKind === "mention",
     );
     const contextHash = discordContextHash(messages);
     const generation = claim.generation;
@@ -975,6 +1252,7 @@ export const claimLoop = internalMutation({
       windowEnd: window.end,
       contextHash,
       recheckCount: state.recheckCount,
+      triggerKind,
       ...routing,
       messages,
     };
@@ -988,10 +1266,10 @@ export const getNewestContext = internalQuery({
     const guildId = requireDiscordId(args.guildId, "guildId");
     const channelId = requireDiscordId(args.channelId, "channelId");
     const channel = await discordChannel(ctx, ownerId, guildId, channelId);
-    if (!channel?.available || !hasRole(channel, "conversation_monitor")) {
-      throw new Error("Discord channel is not monitored.");
-    }
     const state = await discordChannelState(ctx, ownerId, channelId);
+    if (!channel?.available || (!hasRole(channel, "conversation_monitor") && !state)) {
+      throw new Error("Discord channel is not available to the bot.");
+    }
     const messages = await newestContext(ctx, ownerId, channelId);
     return {
       guildId,
@@ -1091,6 +1369,8 @@ export const completeLoop = internalMutation({
     generation: v.number(),
     outcome: v.union(v.literal("completed"), v.literal("error")),
     recheckRequested: v.optional(v.boolean()),
+    consumesThroughSequence: v.optional(v.number()),
+    suppressPendingReplies: v.optional(v.boolean()),
     error: v.optional(v.string()),
     retryable: v.optional(v.boolean()),
   },
@@ -1127,7 +1407,7 @@ export const completeLoop = internalMutation({
     if (!activeLease(state, now) && !hasSentReply) {
       return { accepted: false as const, reason: "lease_expired" as const };
     }
-    if (args.outcome === "completed" && hasPendingReply) {
+    if (args.outcome === "completed" && hasPendingReply && !args.suppressPendingReplies) {
       return { accepted: false as const, reason: "pending_outbox" as const };
     }
     if (args.outcome === "error") {
@@ -1165,16 +1445,39 @@ export const completeLoop = internalMutation({
       };
     }
 
+    const requestedContextThroughSequence = args.consumesThroughSequence
+      ?? state.activeWindowEnd;
+    if (
+      !Number.isSafeInteger(requestedContextThroughSequence)
+      || requestedContextThroughSequence < state.activeWindowEnd
+      || requestedContextThroughSequence > state.latestSequence
+    ) {
+      return { accepted: false as const, reason: "invalid_context_cutoff" as const };
+    }
+    if (args.suppressPendingReplies) {
+      await invalidateRunOutbox(
+        ctx,
+        ownerId,
+        runId,
+        "The final Discord reply was suppressed after the context changed.",
+        now,
+      );
+    }
+    const finalContextThroughSequence = sentFinalReplies.reduce(
+      (throughSequence, reply) => Math.max(
+        throughSequence,
+        reply.consumesThroughSequence ?? state.activeWindowEnd!,
+      ),
+      requestedContextThroughSequence,
+    );
     const completedThroughSequence = state.activeMode === "messages"
-      ? Math.max(state.completedThroughSequence, state.activeWindowEnd)
+      ? Math.max(state.completedThroughSequence, finalContextThroughSequence)
       : state.completedThroughSequence;
     const hasPendingMessages = state.triggerThroughSequence > completedThroughSequence;
     const messages = await newestContext(ctx, ownerId, channelId);
     const newestContextHash = discordContextHash(messages);
     const recheckInput: DiscordRecheckInput = {
-      requested: sentFinalReplies.length > 0
-        ? sentFinalReplies.some((reply) => reply.recheckRequested)
-        : args.recheckRequested ?? false,
+      requested: false,
       recheckCount: state.recheckCount,
       activeContextHash: state.activeContextHash,
       newestContextHash,
@@ -1197,6 +1500,7 @@ export const completeLoop = internalMutation({
       recheckPending,
       lastRecheckHash: recheck.accepted ? newestContextHash : state.lastRecheckHash,
       lastProcessedAt: now,
+      nextEligibleAt: catchingUp ? state.nextEligibleAt : undefined,
       lastError: undefined,
       consecutiveErrorCount: 0,
       ...clearActiveLoop(),
@@ -1243,7 +1547,9 @@ export const enqueueReply = internalMutation({
     idempotencyKey: serviceId,
     replyKind: v.optional(discordReplyKindValidator),
     content: v.string(),
+    chart: v.optional(discordMarketChartValidator),
     replyToMessageId: v.optional(serviceId),
+    consumesThroughSequence: v.optional(v.number()),
     recheckRequested: v.boolean(),
     finalizesLoop: v.boolean(),
   },
@@ -1257,6 +1563,7 @@ export const enqueueReply = internalMutation({
     const replyKind = args.replyKind
       ?? (args.finalizesLoop ? "final" as const : "research_log" as const);
     const content = requireReplyContent(args.content);
+    const chart = requireMarketChart(args.chart);
     const sourceState = await discordChannelState(ctx, ownerId, sourceChannelId);
     if (!sourceState || !isCurrentDiscordGeneration(sourceState, runId, args.generation)) {
       return { accepted: false as const, reason: "stale_generation" as const };
@@ -1279,6 +1586,19 @@ export const enqueueReply = internalMutation({
     if (!validTargetRole) return { accepted: false as const, reason: "invalid_reply_target" as const };
     if ((replyKind === "final") !== args.finalizesLoop) {
       return { accepted: false as const, reason: "invalid_reply_kind" as const };
+    }
+    if (replyKind !== "final" && (chart !== undefined || args.consumesThroughSequence !== undefined)) {
+      return { accepted: false as const, reason: "invalid_reply_attachment" as const };
+    }
+    if (
+      args.consumesThroughSequence !== undefined
+      && (
+        !Number.isSafeInteger(args.consumesThroughSequence)
+        || args.consumesThroughSequence < (sourceState.activeWindowEnd ?? 0)
+        || args.consumesThroughSequence > sourceState.latestSequence
+      )
+    ) {
+      return { accepted: false as const, reason: "invalid_context_cutoff" as const };
     }
     if (!discordReplyKindMatchesFlags(replyKind, args.finalizesLoop, args.recheckRequested)) {
       return { accepted: false as const, reason: "non_final_reply_cannot_recheck" as const };
@@ -1342,9 +1662,11 @@ export const enqueueReply = internalMutation({
         && existing.generation === args.generation
         && existingReplyKind === replyKind
         && existing.content === content
+        && JSON.stringify(existing.chart) === JSON.stringify(chart)
         && existing.recheckRequested === args.recheckRequested
         && existing.finalizesLoop === args.finalizesLoop
-        && existing.replyToMessageId === args.replyToMessageId;
+        && existing.replyToMessageId === args.replyToMessageId
+        && existing.consumesThroughSequence === args.consumesThroughSequence;
       if (!same) return { accepted: false as const, reason: "idempotency_conflict" as const };
       return {
         accepted: true as const,
@@ -1384,6 +1706,10 @@ export const enqueueReply = internalMutation({
       updatedAt: now,
     };
     if (args.replyToMessageId !== undefined) outboxRecord.replyToMessageId = args.replyToMessageId;
+    if (chart !== undefined) outboxRecord.chart = chart;
+    if (args.consumesThroughSequence !== undefined) {
+      outboxRecord.consumesThroughSequence = args.consumesThroughSequence;
+    }
     await ctx.db.insert("discordOutbox", outboxRecord);
     await recordActivity(ctx, ownerId, {
       eventId: `${outboxId}:queued`,
@@ -1406,10 +1732,11 @@ async function ingestAcknowledgedBotReply(
   ctx: DiscordWriter,
   outbox: Doc<"discordOutbox">,
   discordMessageId: string,
+  images: DiscordImageAttachment[] | undefined,
   now: number,
 ): Promise<void> {
   const channel = await discordChannel(ctx, outbox.ownerId, outbox.guildId, outbox.channelId);
-  if (!channel?.available || !hasRole(channel, "conversation_monitor")) return;
+  if (!channel?.available) return;
   const existing = await ctx.db
     .query("discordMessages")
     .withIndex("by_owner_channel_message", (index) => index
@@ -1423,9 +1750,11 @@ async function ingestAcknowledgedBotReply(
       authorId: "discord-bot",
       authorName: "Bot",
       content: outbox.content,
+      mentionsBot: false,
       isBot: true,
       createdAt: now,
     };
+    if (images !== undefined) acknowledgedReply.images = images;
     if (outbox.replyToMessageId !== undefined) {
       acknowledgedReply.replyToMessageId = outbox.replyToMessageId;
     }
@@ -1450,10 +1779,12 @@ async function ingestAcknowledgedBotReply(
     authorId: gateway?.botUserId ?? "discord-bot",
     authorName: gateway?.botUserName ?? "Bot",
     content: outbox.content,
+    mentionsBot: false,
     isBot: true,
     createdAt: now,
     receivedAt: now,
   };
+  if (images !== undefined) messageRecord.images = images;
   if (outbox.replyToMessageId !== undefined) messageRecord.replyToMessageId = outbox.replyToMessageId;
   await ctx.db.insert("discordMessages", messageRecord);
   await ctx.db.patch(state._id, { latestSequence: sequence, updatedAt: now });
@@ -1466,6 +1797,7 @@ export const acknowledgeReply = internalMutation({
     deliveryToken: serviceId,
     status: v.union(v.literal("sent"), v.literal("failed")),
     discordMessageId: v.optional(serviceId),
+    images: v.optional(v.array(discordImageAttachmentValidator)),
     error: v.optional(v.string()),
     retryable: v.optional(v.boolean()),
   },
@@ -1479,6 +1811,7 @@ export const acknowledgeReply = internalMutation({
       .unique();
     if (!outbox) return { accepted: false as const, reason: "outbox_not_found" as const };
     const now = Date.now();
+    const images = requireDiscordImages(args.images);
     if (args.status === "sent") {
       if (!args.discordMessageId) {
         return { accepted: false as const, reason: "discord_message_id_required" as const };
@@ -1507,7 +1840,7 @@ export const acknowledgeReply = internalMutation({
         sentAt: now,
         updatedAt: now,
       });
-      await ingestAcknowledgedBotReply(ctx, outbox, discordMessageId, now);
+      await ingestAcknowledgedBotReply(ctx, outbox, discordMessageId, images, now);
       await recordActivity(ctx, ownerId, {
         eventId: `${outbox.outboxId}:sent`,
         guildId: outbox.sourceGuildId,
@@ -1572,8 +1905,13 @@ export const listRunnable = internalMutation({
         && state.leaseExpiresAt !== undefined
         && state.leaseExpiresAt <= now;
       const retryableError = discordLoopErrorRetryReady(state, now);
+      const debounceReady = state.recheckPending
+        || state.nextEligibleAt === undefined
+        || state.nextEligibleAt <= now
+        || (leaseExpired && state.activeMode === "recheck");
       const runnable = (!state.activeRunId || leaseExpired)
         && (state.status !== "error" || retryableError)
+        && debounceReady
         && (state.triggerThroughSequence > state.completedThroughSequence
           || state.recheckPending
           || (leaseExpired && state.activeMode === "recheck"));
@@ -1588,7 +1926,13 @@ export const listRunnable = internalMutation({
         if (hasSentDiscordFinalizer(runReplies, state.activeRunId, state.generation)) continue;
       }
       const channel = await discordChannel(ctx, ownerId, state.guildId, state.channelId);
-      if (!channel?.available || !hasRole(channel, "conversation_monitor")) continue;
+      if (
+        !channel?.available
+        || (
+          !hasRole(channel, "conversation_monitor")
+          && state.triggerThroughSequence <= state.completedThroughSequence
+        )
+      ) continue;
       if (retryableError && state.consecutiveErrorCount === undefined) {
         await ctx.db.patch(state._id, { consecutiveErrorCount: 1 });
       }
@@ -1657,9 +2001,12 @@ export const listRunnable = internalMutation({
         channelId: reply.channelId,
         runId: reply.runId,
         generation: reply.generation,
+        replyKind: reply.replyKind,
         status: reply.status === "sent" ? "sent" as const : "pending" as const,
         content: reply.content,
+        chart: reply.chart,
         replyToMessageId: reply.replyToMessageId,
+        consumesThroughSequence: reply.consumesThroughSequence,
         recheckRequested: reply.recheckRequested,
         finalizesLoop: reply.finalizesLoop,
         discordMessageId: reply.discordMessageId,

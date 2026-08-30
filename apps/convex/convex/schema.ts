@@ -88,6 +88,30 @@ export const discordReplyKindValidator = v.union(
   v.literal("final"),
 );
 
+export const discordImageAttachmentValidator = v.object({
+  attachmentId: v.string(),
+  url: v.string(),
+  filename: v.string(),
+  mediaType: v.union(
+    v.literal("image/png"),
+    v.literal("image/jpeg"),
+    v.literal("image/webp"),
+    v.literal("image/gif"),
+  ),
+  sizeBytes: v.number(),
+  width: v.optional(v.number()),
+  height: v.optional(v.number()),
+});
+
+export const discordMarketChartValidator = v.object({
+  symbol: v.string(),
+  title: v.optional(v.string()),
+  points: v.array(v.object({
+    timestamp: v.number(),
+    close: v.number(),
+  })),
+});
+
 export const discordActivityEventTypeValidator = v.union(
   v.literal("message_received"),
   v.literal("loop_started"),
@@ -444,6 +468,7 @@ export default defineSchema({
     activeContextHash: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
     lastProcessedAt: v.optional(v.number()),
+    nextEligibleAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
     consecutiveErrorCount: v.optional(v.number()),
     createdAt: v.number(),
@@ -461,6 +486,8 @@ export default defineSchema({
     authorId: v.string(),
     authorName: v.string(),
     content: v.string(),
+    images: v.optional(v.array(discordImageAttachmentValidator)),
+    mentionsBot: v.optional(v.boolean()),
     isBot: v.boolean(),
     replyToMessageId: v.optional(v.string()),
     createdAt: v.number(),
@@ -515,7 +542,9 @@ export default defineSchema({
     generation: v.number(),
     replyKind: v.optional(discordReplyKindValidator),
     content: v.string(),
+    chart: v.optional(discordMarketChartValidator),
     replyToMessageId: v.optional(v.string()),
+    consumesThroughSequence: v.optional(v.number()),
     recheckRequested: v.boolean(),
     finalizesLoop: v.boolean(),
     status: v.union(

@@ -13,31 +13,7 @@ import type {
 import { formatAge } from "../../shared/formatting/values";
 import { discordInstallUrl } from "./discordInstall";
 
-const channelRoles: ReadonlyArray<{
-  role: DiscordChannelRole;
-  label: string;
-  description: string;
-}> = [
-  {
-    role: "conversation_monitor",
-    label: "Conversation monitor",
-    description: "Read new messages and decide when research can help.",
-  },
-  {
-    role: "reply_target",
-    label: "Reply target",
-    description: "Post the concise final response in this channel.",
-  },
-  {
-    role: "research_log",
-    label: "Research log",
-    description: "Post research-loop status without interrupting the chat.",
-  },
-];
-
-const roleOrder = new Map(
-  channelRoles.map(({ role }, index) => [role, index] as const),
-);
+type ServerChannelPurpose = "conversation" | "research";
 
 const gatewayLabels = {
   online: "Connected",
@@ -117,6 +93,59 @@ function roleUnavailableReason(
     return "The bot cannot view this channel.";
   }
   return "The bot needs Send Messages permission.";
+}
+
+function channelSupportsPurpose(
+  purpose: ServerChannelPurpose,
+  guild: DiscordGuildReadModel,
+  channel: DiscordChannelReadModel,
+) {
+  if (purpose === "conversation") {
+    return (
+      roleIsAvailable("conversation_monitor", guild, channel) &&
+      roleIsAvailable("reply_target", guild, channel)
+    );
+  }
+  return roleIsAvailable("research_log", guild, channel);
+}
+
+function purposeUnavailableReason(
+  purpose: ServerChannelPurpose,
+  guild: DiscordGuildReadModel,
+  channel: DiscordChannelReadModel,
+) {
+  if (purpose === "conversation") {
+    if (!roleIsAvailable("conversation_monitor", guild, channel)) {
+      return roleUnavailableReason("conversation_monitor", guild, channel);
+    }
+    return roleUnavailableReason("reply_target", guild, channel);
+  }
+  return roleUnavailableReason("research_log", guild, channel);
+}
+
+function channelForPurpose(
+  purpose: ServerChannelPurpose,
+  guild: DiscordGuildReadModel,
+) {
+  const routedChannelId =
+    purpose === "conversation"
+      ? guild.routing?.conversationChannelId
+      : guild.routing?.researchLogChannelId;
+  if (routedChannelId !== undefined) {
+    return guild.channels.find(
+      (channel) => channel.channelId === routedChannelId,
+    );
+  }
+  if (purpose === "conversation") {
+    return guild.channels.find(
+      (channel) =>
+        channel.roles.includes("conversation_monitor") &&
+        channel.roles.includes("reply_target"),
+    );
+  }
+  return guild.channels.find((channel) =>
+    channel.roles.includes("research_log"),
+  );
 }
 
 function PermissionStatus({
@@ -219,43 +248,101 @@ function GatewayCard({
   );
 }
 
-function ChannelCard({
+function ChannelRouteField({
   guild,
-  channel,
+  purpose,
+  label,
+  description,
+  selectedChannel,
   busy,
-  onSetRoles,
+  onSetPurpose,
 }: {
   guild: DiscordGuildReadModel;
-  channel: DiscordChannelReadModel;
+  purpose: ServerChannelPurpose;
+  label: string;
+  description: string;
+  selectedChannel: DiscordChannelReadModel | undefined;
   busy: boolean;
-  onSetRoles: (
-    guildId: string,
-    channelId: string,
-    roles: DiscordChannelRole[],
+  onSetPurpose: (
+    guild: DiscordGuildReadModel,
+    purpose: ServerChannelPurpose,
+    channelId: string | null,
   ) => Promise<void>;
 }) {
-  const selectedRoles = new Set(channel.roles);
-  const loop = channel.loop;
+  const selectId = `${guild.guildId}-${purpose}-channel`;
+  return (
+    <label className="discord-route-field" htmlFor={selectId}>
+      <span className="discord-route-icon" data-purpose={purpose}>
+        {purpose === "conversation" ? "01" : "02"}
+      </span>
+      <span className="discord-route-copy">
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+      <select
+        id={selectId}
+        aria-label={label}
+        value={selectedChannel?.channelId ?? ""}
+        disabled={busy}
+        onChange={(event) =>
+          void onSetPurpose(guild, purpose, event.target.value || null)
+        }
+      >
+        <option value="">Choose a channel</option>
+        {guild.channels.map((channel) => (
+          <option
+            key={channel.channelId}
+            value={channel.channelId}
+            disabled={
+              !channelSupportsPurpose(purpose, guild, channel) &&
+              channel.channelId !== selectedChannel?.channelId
+            }
+          >
+            #{channel.name}
+          </option>
+        ))}
+      </select>
+      {selectedChannel &&
+        !channelSupportsPurpose(purpose, guild, selectedChannel) && (
+          <small className="discord-route-warning">
+            {purposeUnavailableReason(purpose, guild, selectedChannel)}
+          </small>
+        )}
+    </label>
+  );
+}
 
-  function toggle(role: DiscordChannelRole, checked: boolean) {
-    const next = new Set(channel.roles);
-    if (checked) next.add(role);
-    else next.delete(role);
-    const roles = [...next].sort(
-      (left, right) => (roleOrder.get(left) ?? 0) - (roleOrder.get(right) ?? 0),
-    );
-    return onSetRoles(guild.guildId, channel.channelId, roles);
-  }
+function GuildCard({
+  guild,
+  busyPurpose,
+  onSetPurpose,
+}: {
+  guild: DiscordGuildReadModel;
+  busyPurpose: ServerChannelPurpose | null;
+  onSetPurpose: (
+    guild: DiscordGuildReadModel,
+    purpose: ServerChannelPurpose,
+    channelId: string | null,
+  ) => Promise<void>;
+}) {
+  const conversationChannel = channelForPurpose("conversation", guild);
+  const researchChannel = channelForPurpose("research", guild);
+  const loop = conversationChannel?.loop;
 
   return (
-    <li className="discord-channel-card surface">
-      <div className="discord-channel-heading">
-        <div>
-          <div className="discord-channel-name">
-            <span aria-hidden="true">#</span>
-            <h3>{channel.name}</h3>
+    <article
+      className="discord-guild surface"
+      aria-labelledby={`guild-${guild.guildId}`}
+    >
+      <div className="discord-guild-header">
+        <div className="discord-guild-heading">
+          <span className="discord-guild-mark" aria-hidden="true">
+            {guild.name.slice(0, 1).toUpperCase()}
+          </span>
+          <div>
+            <p className="section-kicker">Server routing</p>
+            <h2 id={`guild-${guild.guildId}`}>{guild.name}</h2>
           </div>
-          <p>{channel.type} channel</p>
         </div>
         {loop && (
           <span className="loop-pill" data-status={loop.status}>
@@ -263,84 +350,10 @@ function ChannelCard({
           </span>
         )}
       </div>
-      {loop && (
-        <div className="loop-summary" aria-label="Agent loop status">
-          <span>
-            {loop.pendingMessageCount === 0
-              ? "No messages waiting"
-              : `${loop.pendingMessageCount} message${loop.pendingMessageCount === 1 ? "" : "s"} waiting`}
-          </span>
-          {loop.lastProcessedAt && (
-            <span>Last reply {formatAge(loop.lastProcessedAt)}</span>
-          )}
-          {loop.error && (
-            <span className="discord-inline-error">{loop.error}</span>
-          )}
-        </div>
-      )}
-      <fieldset className="channel-role-list" disabled={busy}>
-        <legend>Use this channel for</legend>
-        {channelRoles.map(({ role, label, description }) => {
-          const checked = selectedRoles.has(role);
-          const available = roleIsAvailable(role, guild, channel);
-          const disabled = busy || (!available && !checked);
-          return (
-            <label key={role} data-disabled={disabled}>
-              <input
-                type="checkbox"
-                checked={checked}
-                disabled={disabled}
-                onChange={(event) => void toggle(role, event.target.checked)}
-              />
-              <span className="role-check" aria-hidden="true" />
-              <span>
-                <strong>{label}</strong>
-                <small>
-                  {available
-                    ? description
-                    : roleUnavailableReason(role, guild, channel)}
-                </small>
-              </span>
-            </label>
-          );
-        })}
-      </fieldset>
-      {busy && (
-        <p className="channel-save-status" role="status">
-          Saving channel roles…
-        </p>
-      )}
-    </li>
-  );
-}
-
-function GuildCard({
-  guild,
-  busyChannel,
-  onSetRoles,
-}: {
-  guild: DiscordGuildReadModel;
-  busyChannel: string | null;
-  onSetRoles: (
-    guildId: string,
-    channelId: string,
-    roles: DiscordChannelRole[],
-  ) => Promise<void>;
-}) {
-  return (
-    <article
-      className="discord-guild"
-      aria-labelledby={`guild-${guild.guildId}`}
-    >
-      <div className="discord-guild-heading">
-        <span className="discord-guild-mark" aria-hidden="true">
-          {guild.name.slice(0, 1).toUpperCase()}
-        </span>
-        <div>
-          <p className="section-kicker">Server</p>
-          <h2 id={`guild-${guild.guildId}`}>{guild.name}</h2>
-        </div>
-      </div>
+      <p className="discord-guild-description">
+        Keep conversation in one place. Send detailed research progress to a
+        separate log.
+      </p>
       <ul className="discord-permissions" aria-label="Bot permissions">
         <PermissionStatus allowed={guild.permissions.viewChannels}>
           View channels
@@ -356,25 +369,53 @@ function GuildCard({
         </PermissionStatus>
       </ul>
       {guild.channels.length === 0 ? (
-        <div className="discord-empty surface">
+        <div className="discord-empty discord-empty--nested">
           <strong>No usable text channels found.</strong>
           <p>Give the bot permission to view at least one Discord channel.</p>
         </div>
       ) : (
-        <ul
-          className="discord-channel-list"
-          aria-label={`${guild.name} channels`}
-        >
-          {guild.channels.map((channel) => (
-            <ChannelCard
-              key={channel.channelId}
-              guild={guild}
-              channel={channel}
-              busy={busyChannel === `${guild.guildId}:${channel.channelId}`}
-              onSetRoles={onSetRoles}
-            />
-          ))}
-        </ul>
+        <div className="discord-route-list" aria-label="Channel routing">
+          <ChannelRouteField
+            guild={guild}
+            purpose="conversation"
+            label="Conversation channel"
+            description="Trishula reads, acknowledges, and replies here."
+            selectedChannel={conversationChannel}
+            busy={busyPurpose !== null}
+            onSetPurpose={onSetPurpose}
+          />
+          <ChannelRouteField
+            guild={guild}
+            purpose="research"
+            label="Research log channel"
+            description="Long-running research progress stays out of the conversation."
+            selectedChannel={researchChannel}
+            busy={busyPurpose !== null}
+            onSetPurpose={onSetPurpose}
+          />
+        </div>
+      )}
+      {loop && (
+        <div className="loop-summary" aria-label="Agent loop status">
+          <strong>{loopLabels[loop.status]}</strong>
+          <span>
+            {loop.pendingMessageCount === 0
+              ? "No messages waiting"
+              : `${loop.pendingMessageCount} message${loop.pendingMessageCount === 1 ? "" : "s"} waiting`}
+          </span>
+          {loop.lastProcessedAt && (
+            <span>Last reply {formatAge(loop.lastProcessedAt)}</span>
+          )}
+          {loop.error && (
+            <span className="discord-inline-error">{loop.error}</span>
+          )}
+        </div>
+      )}
+      {busyPurpose && (
+        <p className="channel-save-status" role="status">
+          Saving {busyPurpose === "conversation" ? "conversation" : "research"}
+          channel…
+        </p>
       )}
     </article>
   );
@@ -436,17 +477,19 @@ function ActivityFeed({
 export function DiscordControlView({
   applicationId,
   model,
-  onSetChannelRoles,
+  onSetGuildRouting,
 }: {
   applicationId?: string;
   model: DiscordControlPlaneReadModel;
-  onSetChannelRoles: (
+  onSetGuildRouting: (
     guildId: string,
-    channelId: string,
-    roles: DiscordChannelRole[],
+    conversationChannelId: string | null,
+    researchLogChannelId: string | null,
   ) => Promise<void>;
 }) {
-  const [busyChannel, setBusyChannel] = useState<string | null>(null);
+  const [busyPurpose, setBusyPurpose] = useState<ServerChannelPurpose | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [selectedGuildId, setSelectedGuildId] = useState<string | null>(null);
   const selectedGuild =
@@ -458,20 +501,31 @@ export function DiscordControlView({
       )
     : [];
 
-  async function setRoles(
-    guildId: string,
-    channelId: string,
-    roles: DiscordChannelRole[],
+  async function setPurpose(
+    guild: DiscordGuildReadModel,
+    purpose: ServerChannelPurpose,
+    channelId: string | null,
   ) {
-    const key = `${guildId}:${channelId}`;
-    setBusyChannel(key);
+    setBusyPurpose(purpose);
     setError(null);
     try {
-      await onSetChannelRoles(guildId, channelId, roles);
+      const conversationChannelId =
+        purpose === "conversation"
+          ? channelId
+          : (channelForPurpose("conversation", guild)?.channelId ?? null);
+      const researchLogChannelId =
+        purpose === "research"
+          ? channelId
+          : (channelForPurpose("research", guild)?.channelId ?? null);
+      await onSetGuildRouting(
+        guild.guildId,
+        conversationChannelId,
+        researchLogChannelId,
+      );
     } catch {
-      setError("Channel roles could not be saved. Try again.");
+      setError("Server routing could not be saved. Try again.");
     } finally {
-      setBusyChannel(null);
+      setBusyPurpose(null);
     }
   }
 
@@ -480,9 +534,10 @@ export function DiscordControlView({
       <header className="discord-page-heading">
         <div>
           <p className="page-kicker">Discord</p>
-          <h1>Channel control</h1>
+          <h1>Server routing</h1>
           <p>
-            Choose where Trishula listens, replies, and records research work.
+            Give each server one conversation channel and one quiet research
+            log.
           </p>
         </div>
       </header>
@@ -536,8 +591,8 @@ export function DiscordControlView({
               <GuildCard
                 key={selectedGuild.guildId}
                 guild={selectedGuild}
-                busyChannel={busyChannel}
-                onSetRoles={setRoles}
+                busyPurpose={busyPurpose}
+                onSetPurpose={setPurpose}
               />
               <ActivityFeed guild={selectedGuild} events={selectedActivity} />
             </>
@@ -554,7 +609,7 @@ export function DiscordControlPage({
   applicationId?: string;
 }) {
   const model = useQuery(publicApi.discord.getControlPlane, {});
-  const setChannelRoles = useMutation(publicApi.discord.setChannelRoles);
+  const setGuildRouting = useMutation(publicApi.discord.setGuildRouting);
 
   if (model === undefined) {
     return (
@@ -571,8 +626,16 @@ export function DiscordControlPage({
     <DiscordControlView
       applicationId={applicationId}
       model={model}
-      onSetChannelRoles={(guildId, channelId, roles) =>
-        setChannelRoles({ guildId, channelId, roles }).then(() => undefined)
+      onSetGuildRouting={(
+        guildId,
+        conversationChannelId,
+        researchLogChannelId,
+      ) =>
+        setGuildRouting({
+          guildId,
+          conversationChannelId,
+          researchLogChannelId,
+        }).then(() => undefined)
       }
     />
   );

@@ -6,7 +6,7 @@ import type {
   CompleteLoopResult,
   RunIdentity,
 } from "../src/convex/client.js";
-import type { OutboxItem } from "../src/contracts.js";
+import type { OutboxItem, StoredMessage } from "../src/contracts.js";
 import {
   discordNonce,
   messageOptions,
@@ -39,6 +39,7 @@ class FakeConvex implements ConvexOutboxClient {
   acknowledgements: Array<{
     status: "sent" | "failed";
     discordMessageId?: string;
+    images?: StoredMessage["images"];
   }> = [];
   completions: Array<{
     outcome: "completed" | "error";
@@ -51,7 +52,11 @@ class FakeConvex implements ConvexOutboxClient {
 
   async acknowledgeReply(
     _item: Pick<OutboxItem, "outboxId" | "deliveryToken">,
-    result: { status: "sent" | "failed"; discordMessageId?: string },
+    result: {
+      status: "sent" | "failed";
+      discordMessageId?: string;
+      images?: StoredMessage["images"];
+    },
   ): Promise<AcknowledgeResult> {
     this.acknowledgements.push(result);
     return { status: result.status === "sent" ? "sent" : "failed" };
@@ -101,6 +106,25 @@ describe("OutboxDispatcher", () => {
     expect(options.enforceNonce).toBe(true);
   });
 
+  it("renders a bounded market chart into an in-memory Discord attachment", () => {
+    const options = messageOptions(outbox({
+      chart: {
+        symbol: "AMD",
+        points: [
+          { timestamp: 100, close: 10 },
+          { timestamp: 200, close: 12 },
+        ],
+      },
+    }));
+
+    expect(options.files).toHaveLength(1);
+    const file = options.files?.[0];
+    expect(file).toMatchObject({
+      name: "amd-chart.png",
+      description: "AMD close-price chart",
+    });
+  });
+
   it("sends, acknowledges, and then completes a final reply", async () => {
     const send = vi.fn().mockResolvedValue({ id: "999" });
     const channel = {
@@ -128,6 +152,54 @@ describe("OutboxDispatcher", () => {
         options: { recheckRequested: true },
       },
     ]);
+  });
+
+  it("records generated chart attachment metadata in the Convex acknowledgement", async () => {
+    const send = vi.fn().mockResolvedValue({
+      id: "999",
+      attachments: new Map([
+        ["777", {
+          id: "777",
+          url: "https://cdn.discordapp.com/attachments/10/20/amd-chart.png",
+          name: "amd-chart.png",
+          contentType: "image/png",
+          size: 4_096,
+          width: 960,
+          height: 540,
+        }],
+      ]),
+    });
+    const convex = new FakeConvex();
+    const dispatcher = new OutboxDispatcher({
+      client: fakeClient({
+        isSendable: () => true,
+        isDMBased: () => false,
+        guildId: "10",
+        send,
+      }),
+      convex,
+      schedule: vi.fn(),
+    });
+
+    await dispatcher.dispatch([outbox({
+      chart: {
+        symbol: "AMD",
+        points: [
+          { timestamp: 100, close: 10 },
+          { timestamp: 200, close: 12 },
+        ],
+      },
+    })]);
+
+    expect(convex.acknowledgements[0]).toMatchObject({
+      status: "sent",
+      discordMessageId: "999",
+      images: [{
+        attachmentId: "777",
+        filename: "amd-chart.png",
+        mediaType: "image/png",
+      }],
+    });
   });
 
   it("recovers a sent final reply without sending it again", async () => {

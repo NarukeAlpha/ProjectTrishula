@@ -1,4 +1,6 @@
 export const DISCORD_CONTEXT_SIZE = 10;
+export const DISCORD_AMBIENT_DEBOUNCE_MS = 10_000;
+export const DISCORD_AMBIENT_COOLDOWN_MS = 120_000;
 export const DISCORD_GATEWAY_HEARTBEAT_TTL_MS = 60_000;
 export const DISCORD_LOOP_LEASE_MS = 120_000;
 export const DISCORD_LOOP_ERROR_RETRY_DELAY_MS = 30_000;
@@ -15,7 +17,18 @@ export const DISCORD_CHANNEL_ROLES = [
 
 export type DiscordChannelRole = (typeof DISCORD_CHANNEL_ROLES)[number];
 export type DiscordLoopMode = "messages" | "recheck";
+export type DiscordTriggerKind = "ambient" | "mention" | "recheck";
 export type DiscordReplyKind = "acknowledgement" | "research_log" | "final";
+
+export interface DiscordImageAttachment {
+  attachmentId: string;
+  url: string;
+  filename: string;
+  mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  sizeBytes: number;
+  width?: number;
+  height?: number;
+}
 
 export interface DiscordMessageContext {
   messageId: string;
@@ -23,6 +36,8 @@ export interface DiscordMessageContext {
   authorId: string;
   authorName: string;
   content: string;
+  images?: DiscordImageAttachment[];
+  mentionsBot: boolean;
   isBot: boolean;
   replyToMessageId?: string;
   createdAt: number;
@@ -33,6 +48,8 @@ export interface DiscordMessageIdentity {
   authorId: string;
   authorName: string;
   content: string;
+  images?: DiscordImageAttachment[];
+  mentionsBot?: boolean;
   isBot: boolean;
   replyToMessageId?: string;
   createdAt: number;
@@ -66,6 +83,7 @@ export interface DiscordLoopStateSnapshot {
   activeRunId?: string;
   activeClaimId?: string;
   leaseExpiresAt?: number;
+  nextEligibleAt?: number;
 }
 
 export interface DiscordLoopErrorRetrySnapshot {
@@ -235,18 +253,20 @@ export function discordDuplicateMessageMatches(
   existing: DiscordMessageIdentity,
   incoming: DiscordMessageIdentity,
 ): boolean {
-  const commonFieldsMatch = existing.guildId === incoming.guildId
+  const immutableFieldsMatch = existing.guildId === incoming.guildId
     && existing.content === incoming.content
     && existing.isBot === incoming.isBot
     && existing.replyToMessageId === incoming.replyToMessageId;
-  if (!commonFieldsMatch) return false;
+  if (!immutableFieldsMatch) return false;
 
   // A sent acknowledgement records the bot reply before the Discord gateway can
-  // deliver its message-create event. The event is authoritative for author and
-  // timestamp metadata, but the Discord message ID and immutable content already
-  // established the identity of this bot message.
+  // deliver its message-create event. The event is authoritative for author,
+  // timestamp, mention, and generated-attachment metadata, but the Discord
+  // message ID and immutable text already establish this bot message's identity.
   if (existing.isBot) return true;
-  return existing.authorId === incoming.authorId
+  return discordImageIdentity(existing.images) === discordImageIdentity(incoming.images)
+    && (existing.mentionsBot ?? false) === (incoming.mentionsBot ?? false)
+    && existing.authorId === incoming.authorId
     && existing.authorName === incoming.authorName
     && existing.createdAt === incoming.createdAt;
 }
@@ -359,10 +379,24 @@ export function discordContextHash(messages: readonly DiscordMessageContext[]): 
     message.authorId,
     message.authorName,
     message.content,
+    discordImageIdentity(message.images),
+    message.mentionsBot ? 1 : 0,
     message.isBot ? 1 : 0,
     message.replyToMessageId ?? "",
     message.createdAt,
   ]));
+}
+
+function discordImageIdentity(images: readonly DiscordImageAttachment[] | undefined): string {
+  return (images ?? []).map((image) => [
+    image.attachmentId,
+    image.url,
+    image.filename,
+    image.mediaType,
+    image.sizeBytes,
+    image.width ?? "",
+    image.height ?? "",
+  ].join("\u001f")).join("\u001e");
 }
 
 export function discordDeliveryToken(

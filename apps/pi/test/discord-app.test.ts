@@ -9,8 +9,11 @@ import { discordChannel, discordMessages } from "./discord-contracts.test.js";
 
 const serviceSecret = "a-secure-service-secret-with-32-chars";
 const discordSecret = "an-independent-discord-secret-with-32-chars";
-const firstDiscordMessage = discordMessages.at(0);
-if (!firstDiscordMessage) throw new Error("The Discord test fixture requires one message.");
+const firstDiscordMessage = (() => {
+  const message = discordMessages.at(0);
+  if (!message) throw new Error("The Discord test fixture requires one message.");
+  return message;
+})();
 
 function registry(): AppRunRegistry {
   return {
@@ -27,11 +30,14 @@ function agents(): DiscordAgentRunner {
     readiness: vi.fn(() => ({ ready: true })),
     run: vi.fn(async () => ({
       profile: "triage" as const,
-      shouldRespond: true,
-      shouldResearch: true,
+      decision: "research" as const,
+      targetMessageId: firstDiscordMessage.messageId,
       question: "Why did AMD move today?",
+      directReply: null,
+      acknowledgement: "I'll check what moved AMD today.",
       reason: "Time-sensitive asset question.",
       confidence: 0.95,
+      additiveValue: 0.95,
     })),
     dispose: vi.fn(async () => undefined),
   };
@@ -61,20 +67,20 @@ describe("Discord agent HTTP endpoint", () => {
     const discordAgents = agents();
     const response = await request(createApp({ sharedSecret: serviceSecret, discordSharedSecret: discordSecret, executor: new TestExecutor(), registry: registry(), discordAgents }))
       .post("/discord/agents/run")
-      .send({ requestId: "triage_1", profile: "triage", channel: discordChannel, messages: discordMessages });
+      .send({ requestId: "triage_1", profile: "triage", triggerKind: "ambient", channel: discordChannel, messages: discordMessages });
     expect(response.status).toBe(401);
     expect(discordAgents.run).not.toHaveBeenCalled();
   });
 
   it("runs a valid isolated agent profile", async () => {
     const discordAgents = agents();
-    const body = { requestId: "triage_1", profile: "triage" as const, channel: discordChannel, messages: discordMessages };
+    const body = { requestId: "triage_1", profile: "triage" as const, triggerKind: "ambient" as const, channel: discordChannel, messages: discordMessages };
     const response = await request(createApp({ sharedSecret: serviceSecret, discordSharedSecret: discordSecret, executor: new TestExecutor(), registry: registry(), discordAgents }))
       .post("/discord/agents/run")
       .set("authorization", `Bearer ${discordSecret}`)
       .send(body);
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ profile: "triage", shouldResearch: true });
+    expect(response.body).toMatchObject({ profile: "triage", decision: "research" });
     expect(discordAgents.run).toHaveBeenCalledWith(body, expect.any(AbortSignal));
   });
 
@@ -83,7 +89,7 @@ describe("Discord agent HTTP endpoint", () => {
     const response = await request(createApp({ sharedSecret: serviceSecret, discordSharedSecret: discordSecret, executor: new TestExecutor(), registry: registry(), discordAgents }))
       .post("/discord/agents/run")
       .set("authorization", `Bearer ${discordSecret}`)
-      .send({ requestId: "triage_1", profile: "triage", channel: discordChannel, messages: Array.from({ length: 11 }, (_, index) => ({ ...discordMessages[0], messageId: String(index + 1) })) });
+      .send({ requestId: "triage_1", profile: "triage", triggerKind: "ambient", channel: discordChannel, messages: Array.from({ length: 11 }, (_, index) => ({ ...firstDiscordMessage, messageId: String(index + 1) })) });
     expect(response.status).toBe(400);
     expect(discordAgents.run).not.toHaveBeenCalled();
   });
@@ -93,7 +99,7 @@ describe("Discord agent HTTP endpoint", () => {
     const response = await request(createApp({ sharedSecret: serviceSecret, discordSharedSecret: discordSecret, executor: new TestExecutor(), registry: registry(), discordAgents }))
       .post("/discord/agents/run")
       .set("authorization", `Bearer ${serviceSecret}`)
-      .send({ requestId: "triage_1", profile: "triage", channel: discordChannel, messages: discordMessages });
+      .send({ requestId: "triage_1", profile: "triage", triggerKind: "ambient", channel: discordChannel, messages: discordMessages });
     expect(response.status).toBe(401);
     expect(discordAgents.run).not.toHaveBeenCalled();
   });
@@ -108,6 +114,7 @@ describe("Discord agent HTTP endpoint", () => {
     const body = {
       requestId: "triage_job_1",
       profile: "triage" as const,
+      triggerKind: "ambient" as const,
       channel: discordChannel,
       messages: discordMessages,
     };
@@ -127,11 +134,14 @@ describe("Discord agent HTTP endpoint", () => {
     if (!finish) throw new Error("The HTTP job did not start its runner.");
     finish({
       profile: "triage",
-      shouldRespond: true,
-      shouldResearch: true,
+      decision: "research",
+      targetMessageId: firstDiscordMessage.messageId,
       question: "Why did AMD move today?",
+      directReply: null,
+      acknowledgement: "I'll check what moved AMD today.",
       reason: "Time-sensitive asset question.",
       confidence: 0.95,
+      additiveValue: 0.95,
     });
     await vi.waitFor(async () => {
       const completed = await request(app)
@@ -140,7 +150,7 @@ describe("Discord agent HTTP endpoint", () => {
       expect(completed.body).toMatchObject({
         jobId: body.requestId,
         status: "completed",
-        result: { profile: "triage", shouldResearch: true },
+        result: { profile: "triage", decision: "research" },
       });
     });
   });
@@ -151,6 +161,7 @@ describe("Discord agent HTTP endpoint", () => {
     const body = {
       requestId: "triage_job_2",
       profile: "triage" as const,
+      triggerKind: "ambient" as const,
       channel: discordChannel,
       messages: discordMessages,
     };
@@ -187,6 +198,7 @@ describe("Discord agent HTTP endpoint", () => {
     const body = {
       requestId: "triage_job_3",
       profile: "triage" as const,
+      triggerKind: "ambient" as const,
       channel: discordChannel,
       messages: discordMessages,
     };
@@ -218,6 +230,7 @@ describe("Discord agent HTTP endpoint", () => {
     const body = {
       requestId: "triage_job_output_failure",
       profile: "triage" as const,
+      triggerKind: "ambient" as const,
       channel: discordChannel,
       messages: discordMessages,
     };
@@ -256,6 +269,7 @@ describe("Discord agent HTTP endpoint", () => {
     const body = {
       requestId: "triage_job_4",
       profile: "triage" as const,
+      triggerKind: "ambient" as const,
       channel: discordChannel,
       messages: discordMessages,
     };

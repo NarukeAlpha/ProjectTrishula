@@ -28,6 +28,7 @@ const config: DiscordGatewayConfig = {
 const triageRequest: TriageRequest = {
   requestId: "run-1:triage",
   profile: "triage",
+  triggerKind: "mention",
   channel: {
     guildId: "10",
     channelId: "20",
@@ -36,6 +37,7 @@ const triageRequest: TriageRequest = {
   messages: [
     {
       messageId: "100",
+      sequence: 1,
       authorId: "200",
       authorName: "Mira",
       content: "What moved SPY today?",
@@ -47,11 +49,14 @@ const triageRequest: TriageRequest = {
 
 const triageResponse = {
   profile: "triage" as const,
-  shouldRespond: true,
-  shouldResearch: true,
+  decision: "research" as const,
+  targetMessageId: "100",
   question: "What moved SPY today?",
+  directReply: null,
+  acknowledgement: "I'll check what drove SPY today.",
   reason: "The channel asked a current market question.",
   confidence: 0.96,
+  additiveValue: 0.97,
 };
 
 type TestJsonValue =

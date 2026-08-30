@@ -342,6 +342,10 @@ export interface DiscordGuildReadModel {
   name: string;
   iconUrl?: string;
   permissions: DiscordPermissionReadModel;
+  routing?: {
+    conversationChannelId?: string;
+    researchLogChannelId?: string;
+  };
   channels: DiscordChannelReadModel[];
 }
 
@@ -356,4 +360,11 @@ export interface DiscordChannelAssignmentReadModel {
   channelId: string;
   roles: DiscordChannelRole[];
   updatedAt?: number;
+}
+
+export interface DiscordGuildRoutingReadModel {
+  guildId: string;
+  conversationChannelId: string | null;
+  researchLogChannelId: string | null;
+  updatedAt: number;
 }

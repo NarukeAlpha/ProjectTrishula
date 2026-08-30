@@ -1,13 +1,35 @@
 import { createHash } from "node:crypto";
-import type { Client, MessageCreateOptions } from "discord.js";
+import type {
+  AttachmentPayload,
+  Client,
+  MessageCreateOptions,
+} from "discord.js";
 import {
   ConvexDiscordOperationError,
   type AcknowledgeResult,
   type CompleteLoopResult,
   type RunIdentity,
 } from "../convex/client.js";
-import type { ChannelReference, OutboxItem } from "../contracts.js";
+import type {
+  ChannelReference,
+  OutboxItem,
+  StoredMessage,
+} from "../contracts.js";
+import { discordImageAttachments } from "../media/images.js";
+import {
+  MAX_DISCORD_GENERATED_FILE_BYTES,
+  renderMarketChart,
+} from "../media/market-chart.js";
 import { logger } from "../runtime/logger.js";
+
+const MAX_DISCORD_REPLY_FILES = 4;
+const MAX_DISCORD_REPLY_FILE_TOTAL_BYTES = 24 * 1_024 * 1_024;
+
+export interface DiscordReplyFile {
+  attachment: Buffer;
+  name: string;
+  description?: string | undefined;
+}
 
 export interface ConvexOutboxClient {
   renewRunLease(
@@ -19,6 +41,7 @@ export interface ConvexOutboxClient {
     result: {
       status: "sent" | "failed";
       discordMessageId?: string | undefined;
+      images?: StoredMessage["images"];
       error?: string | undefined;
       retryable?: boolean | undefined;
     },
@@ -42,13 +65,55 @@ function discordNonce(outboxId: string): string {
   return createHash("sha256").update(outboxId).digest("hex").slice(0, 24);
 }
 
-function messageOptions(item: OutboxItem): MessageCreateOptions {
+function boundedReplyFiles(files: readonly DiscordReplyFile[]) {
+  if (files.length > MAX_DISCORD_REPLY_FILES) {
+    throw new Error("A Discord reply cannot contain more than four files.");
+  }
+  let totalBytes = 0;
+  return files.map((file) => {
+    if (
+      file.attachment.length === 0 ||
+      file.attachment.length > MAX_DISCORD_GENERATED_FILE_BYTES
+    ) {
+      throw new Error("A Discord reply file exceeded its byte limit.");
+    }
+    if (
+      file.name.length === 0 ||
+      file.name.length > 255 ||
+      file.name.includes("/") ||
+      file.name.includes("\\")
+    ) {
+      throw new Error("A Discord reply file has an invalid name.");
+    }
+    if (file.description !== undefined && file.description.length > 1_024) {
+      throw new Error("A Discord reply file description is too long.");
+    }
+    totalBytes += file.attachment.length;
+    if (totalBytes > MAX_DISCORD_REPLY_FILE_TOTAL_BYTES) {
+      throw new Error("Discord reply files exceeded the total byte limit.");
+    }
+    const payload: AttachmentPayload = {
+      attachment: file.attachment,
+      name: file.name,
+    };
+    if (file.description !== undefined) payload.description = file.description;
+    return payload;
+  });
+}
+
+function messageOptions(
+  item: OutboxItem,
+  files: readonly DiscordReplyFile[] = [],
+): MessageCreateOptions {
+  const chart = item.chart === undefined ? [] : [renderMarketChart(item.chart)];
+  const replyFiles = boundedReplyFiles([...chart, ...files]);
   const options: MessageCreateOptions = {
     content: item.content.slice(0, 2_000),
     allowedMentions: { parse: [] },
     nonce: discordNonce(item.outboxId),
     enforceNonce: true,
   };
+  if (replyFiles.length > 0) options.files = replyFiles;
   if (item.replyToMessageId !== undefined) {
     options.reply = {
       messageReference: item.replyToMessageId,
@@ -108,6 +173,7 @@ export class OutboxDispatcher {
     const active = await this.dependencies.convex.renewRunLease(identity);
     if (!active) return;
     let sentMessageId: string;
+    let sentImages: NonNullable<StoredMessage["images"]> = [];
     try {
       const channel = await this.dependencies.client.channels.fetch(
         item.channelId,
@@ -126,6 +192,7 @@ export class OutboxDispatcher {
       }
       const sent = await channel.send(messageOptions(item));
       sentMessageId = sent.id;
+      sentImages = discordImageAttachments(sent.attachments?.values() ?? []);
     } catch (error) {
       const message =
         error instanceof Error
@@ -136,10 +203,14 @@ export class OutboxDispatcher {
     }
 
     try {
-      await this.dependencies.convex.acknowledgeReply(item, {
-        status: "sent",
-        discordMessageId: sentMessageId,
-      });
+      const acknowledgement = sentImages.length > 0
+        ? {
+            status: "sent" as const,
+            discordMessageId: sentMessageId,
+            images: sentImages,
+          }
+        : { status: "sent" as const, discordMessageId: sentMessageId };
+      await this.dependencies.convex.acknowledgeReply(item, acknowledgement);
     } catch {
       logger.error("Discord reply was sent but its acknowledgement failed.", {
         channelId: item.channelId,

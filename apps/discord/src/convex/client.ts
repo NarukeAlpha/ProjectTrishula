@@ -4,6 +4,7 @@ import {
   agentMessageSchema,
   convexMessageSchema,
   discoveredGuildSchema,
+  marketChartSpecSchema,
   snowflakeSchema,
   stableIdSchema,
   storedMessageSchema,
@@ -78,6 +79,7 @@ const rawClaimResponseSchema = z.discriminatedUnion("claimed", [
       windowEnd: z.number().int().positive(),
       contextHash: z.string().trim().min(1).max(256),
       recheckCount: z.number().int().min(0).max(3),
+      triggerKind: z.enum(["ambient", "mention", "recheck"]),
       replyChannelId: snowflakeSchema,
       researchLogChannelId: snowflakeSchema.optional(),
       messages: z.array(convexMessageSchema).min(1).max(10),
@@ -142,7 +144,9 @@ const outboxItemSchema = z
     replyKind: z.enum(["acknowledgement", "research_log", "final"]).optional(),
     status: z.enum(["pending", "sent"]),
     content: z.string().trim().min(1).max(2_000),
+    chart: marketChartSpecSchema.optional(),
     replyToMessageId: snowflakeSchema.optional(),
+    consumesThroughSequence: z.number().int().nonnegative().optional(),
     recheckRequested: z.boolean(),
     finalizesLoop: z.boolean(),
     discordMessageId: snowflakeSchema.optional(),
@@ -236,6 +240,8 @@ export interface CompleteLoopResult {
 
 export interface CompleteLoopOptions {
   recheckRequested?: boolean;
+  consumesThroughSequence?: number;
+  suppressPendingReplies?: boolean;
   error?: string;
   retryable?: boolean;
 }
@@ -245,7 +251,9 @@ export interface EnqueueReplyInput extends RunIdentity {
   idempotencyKey: string;
   replyKind: ReplyKind;
   content: string;
+  chart?: OutboxItem["chart"];
   replyToMessageId?: string | undefined;
+  consumesThroughSequence?: number | undefined;
   recheckRequested: boolean;
   finalizesLoop: boolean;
 }
@@ -273,14 +281,21 @@ export class ConvexDiscordOperationError extends Error {
 function toAgentMessage(
   message: z.infer<typeof convexMessageSchema>,
 ): AgentMessage {
-  return agentMessageSchema.parse({
+  const result: z.input<typeof agentMessageSchema> = {
     messageId: message.messageId,
+    sequence: message.sequence,
     authorId: message.authorId,
     authorName: message.authorName.slice(0, 100),
     content: message.content.slice(0, 4_000),
+    mentionsBot: message.mentionsBot,
     createdAt: new Date(message.createdAt).toISOString(),
     isBot: message.isBot,
-  });
+  };
+  if (message.images !== undefined) result.images = message.images;
+  if (message.replyToMessageId !== undefined) {
+    result.replyToMessageId = message.replyToMessageId;
+  }
+  return agentMessageSchema.parse(result);
 }
 
 export class ConvexDiscordClient {
@@ -363,6 +378,7 @@ export class ConvexDiscordClient {
       windowEnd: result.windowEnd,
       contextHash: result.contextHash,
       recheckCount: result.recheckCount,
+      triggerKind: result.triggerKind,
       replyChannelId: result.replyChannelId,
       messages: result.messages.map(toAgentMessage),
     };
@@ -496,7 +512,9 @@ export class ConvexDiscordClient {
         idempotencyKey: input.idempotencyKey,
         replyKind: input.replyKind,
         content: input.content,
+        chart: input.chart,
         replyToMessageId: input.replyToMessageId,
+        consumesThroughSequence: input.consumesThroughSequence,
         recheckRequested: input.recheckRequested,
         finalizesLoop: input.finalizesLoop,
       },
@@ -526,6 +544,7 @@ export class ConvexDiscordClient {
     result: {
       status: "sent" | "failed";
       discordMessageId?: string | undefined;
+      images?: StoredMessage["images"];
       error?: string | undefined;
       retryable?: boolean | undefined;
     },

@@ -70,6 +70,15 @@ const demoDiscord: DiscordControlPlaneReadModel = {
             pendingMessageCount: 0,
           },
         },
+        {
+          channelId: "demo-research-log",
+          name: "research-log",
+          type: "text",
+          canView: true,
+          canSend: true,
+          canReadHistory: true,
+          roles: ["research_log"],
+        },
       ],
     },
   ],
@@ -271,7 +280,7 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
               <DiscordControlView
                 applicationId={config.discordApplicationId}
                 model={demoDiscord}
-                onSetChannelRoles={() => Promise.resolve()}
+                onSetGuildRouting={() => Promise.resolve()}
               />
             }
           />

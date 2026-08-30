@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { ConvexDiscordOperationError } from "../convex/client.js";
 import type {
+  CompleteLoopOptions,
   CompleteLoopResult,
   EnqueueReplyInput,
   NewestContext,
   RunIdentity,
 } from "../convex/client.js";
 import type {
-  AcknowledgeRequest,
-  AcknowledgeResponse,
+  AgentMessage,
   ChannelReference,
   ClaimLoopResponse,
   LoopStage,
@@ -48,7 +48,7 @@ export interface ConvexLoopClient {
   completeLoop(
     identity: RunIdentity,
     outcome: "completed" | "error",
-    options?: { recheckRequested?: boolean; error?: string; retryable?: boolean },
+    options?: CompleteLoopOptions,
     signal?: AbortSignal,
   ): Promise<CompleteLoopResult>;
   enqueueReply(input: EnqueueReplyInput, signal?: AbortSignal): Promise<void>;
@@ -56,10 +56,6 @@ export interface ConvexLoopClient {
 
 export interface PiLoopClient {
   triage(input: TriageRequest, signal?: AbortSignal): Promise<TriageResponse>;
-  acknowledge(
-    input: AcknowledgeRequest,
-    signal?: AbortSignal,
-  ): Promise<AcknowledgeResponse>;
   research(
     input: ResearchRequest,
     signal?: AbortSignal,
@@ -95,11 +91,70 @@ function researchLogContent(research: ResearchResponse): string {
   );
 }
 
-function newestHumanMessageId(messages: readonly {
-  messageId: string;
-  isBot: boolean;
-}[]): string | undefined {
-  return messages.findLast((message) => !message.isBot)?.messageId;
+function isExplicitTrigger(
+  message: AgentMessage,
+  messages: readonly AgentMessage[],
+): boolean {
+  if (message.isBot) return false;
+  if (message.mentionsBot) return true;
+  return (
+    message.replyToMessageId !== undefined &&
+    messages.some(
+      (candidate) =>
+        candidate.isBot && candidate.messageId === message.replyToMessageId,
+    )
+  );
+}
+
+interface ReplyContext {
+  messages: AgentMessage[];
+  consumesThroughSequence: number;
+}
+
+function replyContext(
+  newest: NewestContext,
+  claimedMessages: readonly AgentMessage[],
+  claimedWindowEnd: number,
+): ReplyContext {
+  const firstNewest = newest.messages.at(0);
+  if (
+    firstNewest !== undefined &&
+    firstNewest.sequence > claimedWindowEnd + 1
+  ) {
+    return {
+      messages: [...claimedMessages],
+      consumesThroughSequence: claimedWindowEnd,
+    };
+  }
+  const firstNewExplicit = newest.messages.find(
+    (message) =>
+      message.sequence > claimedWindowEnd &&
+      isExplicitTrigger(message, newest.messages),
+  );
+  const consumesThroughSequence =
+    firstNewExplicit === undefined
+      ? newest.throughSequence
+      : firstNewExplicit.sequence - 1;
+  const messages = newest.messages.filter(
+    (message) => message.sequence <= consumesThroughSequence,
+  );
+  return {
+    messages: messages.length > 0 ? messages : [...claimedMessages],
+    consumesThroughSequence,
+  };
+}
+
+function targetMessage(
+  targetMessageId: string | null,
+  messages: readonly AgentMessage[],
+): AgentMessage {
+  const target = messages.find(
+    (message) => message.messageId === targetMessageId && !message.isBot,
+  );
+  if (target === undefined) {
+    throw new Error("Triage selected an invalid Discord target message.");
+  }
+  return target;
 }
 
 export class ChannelLoopOrchestrator {
@@ -179,6 +234,7 @@ export class ChannelLoopOrchestrator {
         {
           requestId: `${claim.runId}:triage`,
           profile: "triage",
+          triggerKind: claim.triggerKind,
           channel: {
             guildId: claim.guildId,
             channelId: claim.channelId,
@@ -192,60 +248,84 @@ export class ChannelLoopOrchestrator {
         channelId: channel.channelId,
         guildId: channel.guildId,
         loopId: claim.runId,
-        shouldRespond: triage.shouldRespond,
-        shouldResearch: triage.shouldResearch,
+        triggerKind: claim.triggerKind,
+        decision: triage.decision,
         confidence: triage.confidence,
+        additiveValue: triage.additiveValue,
+        reason: triage.reason,
         durationMs: Date.now() - triageStartedAt,
       });
 
-      if (!triage.shouldRespond) {
+      if (triage.decision === "silent") {
         const result = await this.dependencies.convex.completeLoop(
           identity,
           "completed",
-          { recheckRequested: false },
+          {
+            recheckRequested: false,
+            consumesThroughSequence: claim.windowEnd,
+          },
           controller.signal,
         );
-        logger.info("Discord channel loop completed without a reply.", {
+        logger.info("Discord channel response suppressed.", {
           channelId: channel.channelId,
           guildId: channel.guildId,
           loopId: claim.runId,
+          triggerKind: claim.triggerKind,
+          reason: triage.reason,
         });
         return result.status === "catching_up";
       }
-      if (triage.question === null)
+      const target = targetMessage(triage.targetMessageId, claim.messages);
+      if (triage.question === null) {
         throw new Error("Triage did not provide a normalized question.");
+      }
 
-      if (claim.mode === "messages") {
+      if (triage.decision === "direct") {
+        if (triage.directReply === null) {
+          throw new Error("Triage did not provide a direct Discord reply.");
+        }
+        const directReply: EnqueueReplyInput = {
+          ...identity,
+          targetChannelId: claim.replyChannelId,
+          idempotencyKey: `${claim.runId}:reply`,
+          replyKind: "final",
+          content: triage.directReply,
+          consumesThroughSequence: claim.windowEnd,
+          recheckRequested: false,
+          finalizesLoop: true,
+        };
+        if (claim.replyChannelId === claim.channelId) {
+          directReply.replyToMessageId = target.messageId;
+        }
+        await this.dependencies.convex.enqueueReply(
+          directReply,
+          controller.signal,
+        );
+        logger.info("Discord direct reply queued.", {
+          channelId: channel.channelId,
+          guildId: channel.guildId,
+          loopId: claim.runId,
+          triggerKind: claim.triggerKind,
+          messageId: target.messageId,
+          reason: triage.reason,
+        });
+        return false;
+      }
+
+      if (triage.acknowledgement !== null) {
         try {
           await changeStage("acknowledging");
-          const acknowledgement = await this.dependencies.pi.acknowledge(
-            {
-              requestId: `${claim.runId}:ack`,
-              profile: "acknowledge",
-              channel: {
-                guildId: claim.guildId,
-                channelId: claim.channelId,
-                channelName: claim.channelName,
-              },
-              messages: claim.messages,
-              question: triage.question,
-              reason: triage.reason,
-            },
-            controller.signal,
-          );
           const acknowledgementReply: EnqueueReplyInput = {
             ...identity,
             targetChannelId: claim.replyChannelId,
-            idempotencyKey: `ack:${claim.channelId}:${claim.windowEnd}`,
+            idempotencyKey: `ack:${claim.channelId}:${target.messageId}`,
             replyKind: "acknowledgement",
-            content: acknowledgement.acknowledgement,
+            content: triage.acknowledgement,
             recheckRequested: false,
             finalizesLoop: false,
           };
           if (claim.replyChannelId === claim.channelId) {
-            acknowledgementReply.replyToMessageId = newestHumanMessageId(
-              claim.messages,
-            );
+            acknowledgementReply.replyToMessageId = target.messageId;
           }
           await this.dependencies.convex.enqueueReply(
             acknowledgementReply,
@@ -255,7 +335,8 @@ export class ChannelLoopOrchestrator {
             channelId: channel.channelId,
             guildId: channel.guildId,
             loopId: claim.runId,
-            messageId: newestHumanMessageId(claim.messages),
+            triggerKind: claim.triggerKind,
+            messageId: target.messageId,
             replyKind: "acknowledgement",
           });
         } catch (error) {
@@ -263,63 +344,64 @@ export class ChannelLoopOrchestrator {
             channelId: channel.channelId,
             guildId: channel.guildId,
             loopId: claim.runId,
-            code: error instanceof ConvexDiscordOperationError
-              ? error.code
-              : error instanceof PiAgentOperationError
+            code:
+              error instanceof ConvexDiscordOperationError
                 ? error.code
-              : error instanceof Error
-                ? error.name
-                : "unknown_error",
+                : error instanceof PiAgentOperationError
+                  ? error.code
+                  : error instanceof Error
+                    ? error.name
+                    : "unknown_error",
           });
         }
       }
 
-      let research: ResearchResponse | null = null;
-      if (triage.shouldResearch) {
-        await changeStage("researching");
-        const researchStartedAt = Date.now();
-        research = await this.dependencies.pi.research(
-          {
-            requestId: `${claim.runId}:research`,
-            profile: "research",
-            channel: {
-              guildId: claim.guildId,
-              channelId: claim.channelId,
-              channelName: claim.channelName,
-            },
-            messages: claim.messages,
-            question: triage.question,
+      await changeStage("researching");
+      const researchStartedAt = Date.now();
+      const research = await this.dependencies.pi.research(
+        {
+          requestId: `${claim.runId}:research`,
+          profile: "research",
+          channel: {
+            guildId: claim.guildId,
+            channelId: claim.channelId,
+            channelName: claim.channelName,
           },
-          controller.signal,
-        );
-        logger.info("Discord channel research completed.", {
-          channelId: channel.channelId,
-          guildId: channel.guildId,
-          loopId: claim.runId,
-          durationMs: Date.now() - researchStartedAt,
-        });
-      }
+          messages: claim.messages,
+          question: triage.question,
+        },
+        controller.signal,
+      );
+      logger.info("Discord channel research completed.", {
+        channelId: channel.channelId,
+        guildId: channel.guildId,
+        loopId: claim.runId,
+        triggerKind: claim.triggerKind,
+        durationMs: Date.now() - researchStartedAt,
+      });
 
       await changeStage("catching_up");
       const newest = await this.dependencies.convex.newestContext(
         channel,
         controller.signal,
       );
+      const context = replyContext(newest, claim.messages, claim.windowEnd);
       await changeStage("drafting");
       const replyStartedAt = Date.now();
       const reply = await this.dependencies.pi.reply(
         {
           requestId: `${claim.runId}:reply`,
           profile: "reply",
+          triggerKind: claim.triggerKind,
+          targetMessageId: target.messageId,
           channel: {
             guildId: claim.guildId,
             channelId: claim.channelId,
             channelName: claim.channelName,
           },
-          messages: newest.messages,
+          messages: context.messages,
           question: triage.question,
           research,
-          loopDepth: claim.recheckCount,
         },
         controller.signal,
       );
@@ -327,10 +409,38 @@ export class ChannelLoopOrchestrator {
         channelId: channel.channelId,
         guildId: channel.guildId,
         loopId: claim.runId,
+        triggerKind: claim.triggerKind,
+        action: reply.action,
+        reason: reply.reason,
         durationMs: Date.now() - replyStartedAt,
       });
 
-      if (research !== null && claim.researchLogChannelId !== undefined) {
+      if (reply.action === "suppress") {
+        const result = await this.dependencies.convex.completeLoop(
+          identity,
+          "completed",
+          {
+            recheckRequested: false,
+            consumesThroughSequence: context.consumesThroughSequence,
+            suppressPendingReplies: true,
+          },
+          controller.signal,
+        );
+        logger.info("Discord researched reply suppressed.", {
+          channelId: channel.channelId,
+          guildId: channel.guildId,
+          loopId: claim.runId,
+          triggerKind: claim.triggerKind,
+          messageId: target.messageId,
+          reason: reply.reason,
+        });
+        return result.status === "catching_up";
+      }
+      if (reply.reply === null) {
+        throw new Error("The Discord reply writer returned no reply.");
+      }
+
+      if (claim.researchLogChannelId !== undefined) {
         await this.dependencies.convex.enqueueReply(
           {
             ...identity,
@@ -351,11 +461,13 @@ export class ChannelLoopOrchestrator {
         idempotencyKey: `${claim.runId}:reply`,
         replyKind: "final",
         content: reply.reply,
-        recheckRequested: reply.recheck,
+        consumesThroughSequence: context.consumesThroughSequence,
+        recheckRequested: false,
         finalizesLoop: true,
       };
+      if (reply.chart !== undefined) finalReply.chart = reply.chart;
       if (claim.replyChannelId === claim.channelId) {
-        finalReply.replyToMessageId = newestHumanMessageId(newest.messages);
+        finalReply.replyToMessageId = target.messageId;
       }
       await this.dependencies.convex.enqueueReply(
         finalReply,
@@ -365,6 +477,9 @@ export class ChannelLoopOrchestrator {
         channelId: channel.channelId,
         guildId: channel.guildId,
         loopId: claim.runId,
+        triggerKind: claim.triggerKind,
+        messageId: target.messageId,
+        reason: reply.reason,
         replyKind: "final",
       });
       return false;
@@ -374,15 +489,18 @@ export class ChannelLoopOrchestrator {
           ? `Pi ${error.profile} failed: ${error.code}.`
           : error instanceof ConvexDiscordOperationError
             ? `Convex Discord ${error.operation} failed: ${error.code}.`
-          : "Discord agent loop failed.";
+            : "Discord agent loop failed.";
       try {
         await this.dependencies.convex.completeLoop(identity, "error", {
           error: message,
-          retryable: error instanceof PiAgentOperationError
-            ? error.retryable
-            : error instanceof ConvexDiscordOperationError
-              ? error.status === 408 || error.status === 429 || error.status >= 500
-              : true,
+          retryable:
+            error instanceof PiAgentOperationError
+              ? error.retryable
+              : error instanceof ConvexDiscordOperationError
+                ? error.status === 408 ||
+                  error.status === 429 ||
+                  error.status >= 500
+                : true,
         });
       } catch {
         logger.error("Could not record the Discord loop failure.", {
@@ -395,13 +513,14 @@ export class ChannelLoopOrchestrator {
         channelId: channel.channelId,
         guildId: channel.guildId,
         loopId: claim.runId,
-        code: error instanceof PiAgentOperationError
-          ? error.code
-          : error instanceof ConvexDiscordOperationError
+        code:
+          error instanceof PiAgentOperationError
             ? error.code
-            : error instanceof Error
-              ? error.name
-              : "unknown_error",
+            : error instanceof ConvexDiscordOperationError
+              ? error.code
+              : error instanceof Error
+                ? error.name
+                : "unknown_error",
       });
       return false;
     } finally {
@@ -411,4 +530,4 @@ export class ChannelLoopOrchestrator {
   }
 }
 
-export { channelKey, newestHumanMessageId, researchLogContent };
+export { channelKey, isExplicitTrigger, replyContext, researchLogContent };
