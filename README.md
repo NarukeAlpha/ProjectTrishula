@@ -8,7 +8,7 @@ The current POC does research and writes concise Discord replies. It does not pl
 
 - `apps/web`: WorkOS-protected Chat and Discord channel settings.
 - `apps/convex`: chat data, Discord channel assignments, durable loop leases, message windows, runs, and outbox state.
-- `apps/pi`: existing chat execution plus isolated Luna triage, Sol research, and Luna reply sessions.
+- `apps/pi`: existing chat execution plus isolated Luna triage, Sol research, and Luna reply sessions. Discord stages use `xhigh` reasoning on the priority service tier.
 - `apps/discord`: Discord Gateway connection, restart reconciliation, loop coordination, and outbox delivery.
 - `infra/railway/convex-backend`: self-hosted Convex backend.
 - `infra/railway/convex-dashboard`: self-hosted Convex dashboard.

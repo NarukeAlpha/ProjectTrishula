@@ -31,16 +31,19 @@ export const DISCORD_AGENT_PROFILES = {
   triage: {
     modelId: "gpt-5.6-luna",
     thinkingLevel: "xhigh",
+    serviceTier: "priority",
     toolNames: [] as const,
   },
   research: {
     modelId: "gpt-5.6-sol",
     thinkingLevel: "xhigh",
+    serviceTier: "priority",
     toolNames: RESEARCH_TOOL_NAMES,
   },
   reply: {
     modelId: "gpt-5.6-luna",
     thinkingLevel: "xhigh",
+    serviceTier: "priority",
     toolNames: [] as const,
   },
 } as const;
@@ -306,6 +309,11 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
       sessionManager: SessionManager.inMemory(IN_MEMORY_RUNTIME_CWD),
       settingsManager,
     });
+    const standardStream = session.agent.streamFunction;
+    session.agent.streamFunction = (activeModel, context, options) => {
+      const priorityOptions = { ...options, serviceTier: profile.serviceTier };
+      return standardStream(activeModel, context, priorityOptions);
+    };
     const activeToolNames = session.getActiveToolNames().sort();
     const expectedToolNames = [...profile.toolNames].sort();
     if (activeToolNames.join("\0") !== expectedToolNames.join("\0")) {

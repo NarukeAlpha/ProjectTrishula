@@ -6,15 +6,26 @@ import {
 } from "../src/discord/runner.js";
 
 describe("Discord Pi agent profiles", () => {
-  it("pins Luna, Sol, xhigh, and the approved tool boundaries", () => {
+  it("pins Luna, Sol, xhigh, priority service, and the approved tool boundaries", () => {
     expect(DISCORD_AGENT_PROFILES).toEqual({
-      triage: { modelId: "gpt-5.6-luna", thinkingLevel: "xhigh", toolNames: [] },
+      triage: {
+        modelId: "gpt-5.6-luna",
+        thinkingLevel: "xhigh",
+        serviceTier: "priority",
+        toolNames: [],
+      },
       research: {
         modelId: "gpt-5.6-sol",
         thinkingLevel: "xhigh",
+        serviceTier: "priority",
         toolNames: ["public_web_search", "public_web_fetch", "public_market_data"],
       },
-      reply: { modelId: "gpt-5.6-luna", thinkingLevel: "xhigh", toolNames: [] },
+      reply: {
+        modelId: "gpt-5.6-luna",
+        thinkingLevel: "xhigh",
+        serviceTier: "priority",
+        toolNames: [],
+      },
     });
   });
 
