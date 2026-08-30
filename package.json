@@ -15,10 +15,12 @@
     "check:pi": "npm run typecheck --prefix apps/pi && npm test --prefix apps/pi && npm run build --prefix apps/pi",
     "check:discord": "npm run typecheck --prefix apps/discord && npm test --prefix apps/discord && npm run build --prefix apps/discord",
     "check:railway": "bash scripts/railway/validate.sh",
+    "railway:plan": "railway config plan",
     "check": "npm run lint && npm run check:convex && npm run check:pi && npm run check:discord && npm run check:web && npm run check:railway"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.80.0",
-    "oxlint": "1.80.0"
+    "oxlint": "1.80.0",
+    "railway": "3.10.0"
   }
 }

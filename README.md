@@ -65,3 +65,5 @@ Pi:
 - `PI_SOL_MODEL=gpt-5.6-sol`
 
 The existing web, WorkOS, Convex, and Pi variables remain required. See [deployment notes](docs/DEPLOYMENT.md).
+
+Railway infrastructure settings are declared in `.railway/railway.ts`. Run `npm run railway:plan` before applying a change.

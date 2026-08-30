@@ -1,6 +1,7 @@
 FROM ghcr.io/get-convex/convex-backend:c6f2ffdaaa651fbdb9146a9dc1cd0057de343054 AS convex-tools
 
-FROM node:24.18.0-bookworm-slim AS runtime
+# The pinned Convex key generator is linked against glibc 2.38 or newer.
+FROM node:24.18.0-trixie-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY apps/convex/package.json apps/convex/package-lock.json ./

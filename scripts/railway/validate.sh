@@ -14,20 +14,8 @@ for script in "$SCRIPT_DIR"/*.sh; do
   bash -n "$script"
 done
 
-for config in \
-  "$REPO_ROOT/apps/web/railway.json" \
-  "$REPO_ROOT/apps/pi/railway.json" \
-  "$REPO_ROOT/apps/discord/railway.json" \
-  "$REPO_ROOT/infra/railway/convex-backend/railway.json" \
-  "$REPO_ROOT/infra/railway/convex-dashboard/railway.json" \
-  "$REPO_ROOT/infra/railway/convex-functions/railway.json"; do
-  jq -e . "$config" >/dev/null || {
-    printf 'Invalid JSON configuration: %s\n' "$config" >&2
-    exit 1
-  }
-done
-
 for file in \
+  .railway/railway.ts \
   apps/web/Dockerfile \
   apps/pi/Dockerfile \
   apps/discord/Dockerfile \
@@ -45,10 +33,6 @@ done
 
 grep -Fq 'service source connect' "$SCRIPT_DIR/connect-github.sh" || {
   printf 'connect-github.sh does not connect GitHub service sources.\n' >&2
-  exit 1
-}
-grep -Fq 'source.rootDirectory' "$SCRIPT_DIR/connect-github.sh" || {
-  printf 'connect-github.sh does not configure monorepo roots.\n' >&2
   exit 1
 }
 grep -Fq 'convex-generate-key' "$REPO_ROOT/infra/railway/convex-functions/deploy-functions.sh" || {
@@ -75,21 +59,14 @@ grep -Fq 'DISCORD_GATEWAY_SHARED_SECRET=${{convex-backend.DISCORD_GATEWAY_SHARED
 }
 
 first_source_connection="$({ grep -n '^connect_source ' "$SCRIPT_DIR/connect-github.sh" || true; } | head -n 1 | cut -d: -f1)"
-last_source_connection="$({ grep -n '^connect_source ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
 last_service_creation="$({ grep -n '^ensure_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
 last_variable_configuration="$({ grep -n '^railway variable set ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
-first_service_configuration="$({ grep -n '^configure_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | head -n 1 | cut -d: -f1)"
-last_service_configuration="$({ grep -n '^configure_service ' "$SCRIPT_DIR/connect-github.sh" || true; } | tail -n 1 | cut -d: -f1)"
 if [ -z "$first_source_connection" ] \
-  || [ -z "$last_source_connection" ] \
   || [ -z "$last_service_creation" ] \
   || [ -z "$last_variable_configuration" ] \
-  || [ -z "$first_service_configuration" ] \
-  || [ -z "$last_service_configuration" ] \
   || [ "$last_service_creation" -ge "$last_variable_configuration" ] \
-  || [ "$first_source_connection" -le "$last_variable_configuration" ] \
-  || [ "$first_service_configuration" -le "$last_source_connection" ]; then
-  printf 'GitHub sources must connect after variables and before final service settings.\n' >&2
+  || [ "$first_source_connection" -le "$last_variable_configuration" ]; then
+  printf 'GitHub sources must connect after services and variables exist.\n' >&2
   exit 1
 fi
 
@@ -98,47 +75,66 @@ fi
   exit 1
 }
 
-[ "$(grep -c '^configure_service ' "$SCRIPT_DIR/connect-github.sh")" -eq 6 ] || {
-  printf 'Every Project Trishula code service must configure its Railway deployment once.\n' >&2
+iac="$REPO_ROOT/.railway/railway.ts"
+
+[ "$(grep -c 'builder: "DOCKERFILE"' "$iac")" -eq 6 ] || {
+  printf 'Every code service must use the Dockerfile builder in Railway IaC.\n' >&2
   exit 1
 }
 
-for service_config_path in \
-  build.builder \
-  build.dockerfilePath \
-  build.watchPatterns \
-  deploy.restartPolicyType \
-  deploy.restartPolicyMaxRetries; do
-  grep -Fq -- "--service-config \"\$id\" $service_config_path" "$SCRIPT_DIR/connect-github.sh" || {
-    printf 'Direct Railway service configuration is missing: %s\n' "$service_config_path" >&2
+for expected_root in \
+  '/apps/web' \
+  '/apps/pi' \
+  '/apps/discord' \
+  '/infra/railway/convex-backend' \
+  '/infra/railway/convex-dashboard' \
+  '/'; do
+  grep -Fq "projectTrishula(\"$expected_root\")" "$iac" || {
+    printf 'Missing Railway IaC root directory: %s\n' "$expected_root" >&2
     exit 1
   }
 done
 
-grep -Fq -- '--service-config "$id" deploy.healthcheckPath' "$SCRIPT_DIR/connect-github.sh" \
-  && grep -Fq -- '--service-config "$id" deploy.healthcheckTimeout' "$SCRIPT_DIR/connect-github.sh" || {
-  printf 'Direct Railway healthcheck configuration is incomplete.\n' >&2
-  exit 1
-}
-
-expected_service_configurations=(
-  "configure_service web \"\$web_id\" /apps/web '[\"/apps/web/**\"]' Dockerfile /healthz 30 3"
-  "configure_service pi \"\$pi_id\" /apps/pi '[\"/apps/pi/**\"]' Dockerfile /health 30 5"
-  "configure_service discord \"\$discord_id\" /apps/discord '[\"/apps/discord/**\"]' Dockerfile /health 120 10"
-  "configure_service convex-backend \"\$backend_id\" /infra/railway/convex-backend '[\"/infra/railway/convex-backend/**\"]' Dockerfile /version 300 10"
-  "configure_service convex-dashboard \"\$dashboard_id\" /infra/railway/convex-dashboard '[\"/infra/railway/convex-dashboard/**\"]' Dockerfile '' '' 5"
-  "configure_service convex-functions \"\$functions_id\" / '[\"/apps/convex/**\",\"/infra/railway/convex-functions/**\"]' infra/railway/convex-functions/Dockerfile /health 300 3"
-)
-for expected_configuration in "${expected_service_configurations[@]}"; do
-  grep -Fqx -- "$expected_configuration" "$SCRIPT_DIR/connect-github.sh" || {
-    printf 'Railway service configuration does not match the checked-in deployment contract.\n' >&2
+for expected_watch_path in \
+  '/apps/web/**' \
+  '/apps/pi/**' \
+  '/apps/discord/**' \
+  '/apps/convex/**' \
+  '/infra/railway/convex-backend/**' \
+  '/infra/railway/convex-dashboard/**' \
+  '/infra/railway/convex-functions/**'; do
+  grep -Fq "\"$expected_watch_path\"" "$iac" || {
+    printf 'Missing Railway IaC watch path: %s\n' "$expected_watch_path" >&2
     exit 1
   }
 done
+
+for legacy_config in \
+  apps/web/railway.json \
+  apps/pi/railway.json \
+  apps/discord/railway.json \
+  infra/railway/convex-backend/railway.json \
+  infra/railway/convex-dashboard/railway.json \
+  infra/railway/convex-functions/railway.json; do
+  [ ! -e "$REPO_ROOT/$legacy_config" ] || {
+    printf 'Legacy Railway config conflicts with .railway/railway.ts: %s\n' "$legacy_config" >&2
+    exit 1
+  }
+done
+
+grep -Fq 'DISCORD_BOT_TOKEN: preserve()' "$iac" || {
+  printf 'Railway IaC must preserve a dashboard-managed Discord token.\n' >&2
+  exit 1
+}
 
 grep -Fq 'npm ci --include=dev' "$REPO_ROOT/infra/railway/convex-functions/Dockerfile" || {
   printf 'The Convex function deployer must install TypeScript for deploy-time typechecking.\n' >&2
   exit 1
 }
 
-printf 'Railway GitHub source, service JSON, Dockerfile, and Convex deployer checks passed.\n'
+grep -Fq 'node:24.18.0-trixie-slim' "$REPO_ROOT/infra/railway/convex-functions/Dockerfile" || {
+  printf 'The Convex key generator requires the Trixie glibc runtime.\n' >&2
+  exit 1
+}
+
+printf 'Railway GitHub source, IaC, Dockerfile, and Convex deployer checks passed.\n'

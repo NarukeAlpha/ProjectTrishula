@@ -1,12 +1,16 @@
 # Railway GitHub deployment
 
-`connect-github.sh` connects every code service to `NarukeAlpha/ProjectTrishula` on `master`, sets its monorepo root and watch path, and configures non-secret service references. Railway then builds matching services after each GitHub push.
+`connect-github.sh` creates any missing code service, configures safe variable references, and connects every code service to `NarukeAlpha/ProjectTrishula` on `master`. The canonical roots, Dockerfile builders, watch paths, health checks, and restart policies live in `.railway/railway.ts`.
 
 Run it after the repository has been pushed:
 
 ```sh
 bash scripts/railway/connect-github.sh
+railway config plan
+railway config apply
 ```
+
+Review the plan before applying it. The checked-in IaC preserves existing Railway variables without putting their values in Git. Railway then builds only the services whose watch paths match each GitHub push.
 
 The script leaves `DISCORD_BOT_TOKEN` unset. Add that value in the Railway Discord service. It also changes Pi to `BROKER_MODE=mock` and keeps live trading disabled.
 
