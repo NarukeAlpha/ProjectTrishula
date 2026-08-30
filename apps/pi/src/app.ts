@@ -12,8 +12,9 @@ import {
 } from "./http/schemas.js";
 import type { TradingBroker } from "./broker/types.js";
 import { isBoundActor } from "./identity/actor-binding.js";
-import { discordAgentRequestSchema } from "./discord/contracts.js";
+import { discordAgentJobParamsSchema, discordAgentRequestSchema } from "./discord/contracts.js";
 import type { DiscordAgentRunner } from "./discord/runner.js";
+import type { DiscordAgentJobRegistry } from "./discord/jobs.js";
 
 export interface AppDependencies {
   sharedSecret: string;
@@ -23,6 +24,7 @@ export interface AppDependencies {
   broker?: TradingBroker;
   boundActorId?: string;
   discordAgents?: DiscordAgentRunner;
+  discordAgentJobs?: DiscordAgentJobRegistry;
 }
 
 export interface AppRunRegistry {
@@ -82,6 +84,63 @@ export function createApp(dependencies: AppDependencies): express.Express {
     } finally {
       request.off("aborted", abort);
     }
+  });
+
+  app.post("/discord/agents/jobs", authenticateDiscord, json, (request, response) => {
+    if (!dependencies.discordAgents?.readiness().ready || !dependencies.discordAgentJobs) {
+      response.status(503).json({ error: "discord_agents_not_ready" });
+      return;
+    }
+    const parsed = discordAgentRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ error: "invalid_discord_agent_request" });
+      return;
+    }
+    const submission = dependencies.discordAgentJobs.submit(parsed.data);
+    if (submission.type === "conflict") {
+      response.status(409).json({ error: "discord_agent_job_conflict" });
+      return;
+    }
+    if (submission.type === "capacity") {
+      response.setHeader("Retry-After", "1");
+      response.status(429).json({ error: "discord_agent_job_capacity" });
+      return;
+    }
+    if (submission.type === "not_accepting") {
+      response.status(503).json({ error: "discord_agents_not_ready" });
+      return;
+    }
+    response.status(submission.job.status === "running" ? 202 : 200).json({
+      jobId: submission.job.jobId,
+      status: submission.job.status,
+    });
+  });
+
+  app.get("/discord/agents/jobs/:jobId", authenticateDiscord, (request, response) => {
+    const params = discordAgentJobParamsSchema.safeParse(request.params);
+    if (!params.success || !dependencies.discordAgentJobs) {
+      response.status(404).json({ error: "discord_agent_job_not_found" });
+      return;
+    }
+    const job = dependencies.discordAgentJobs.get(params.data.jobId);
+    if (!job) {
+      response.status(404).json({ error: "discord_agent_job_not_found" });
+      return;
+    }
+    response.json(job);
+  });
+
+  app.delete("/discord/agents/jobs/:jobId", authenticateDiscord, (request, response) => {
+    const params = discordAgentJobParamsSchema.safeParse(request.params);
+    if (
+      !params.success ||
+      !dependencies.discordAgentJobs ||
+      dependencies.discordAgentJobs.cancel(params.data.jobId) === "not_found"
+    ) {
+      response.status(404).json({ error: "discord_agent_job_not_found" });
+      return;
+    }
+    response.json({ jobId: params.data.jobId, status: "cancelled" });
   });
 
   app.post("/runs", authenticate, json, (request, response) => {

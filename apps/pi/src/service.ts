@@ -9,6 +9,7 @@ import { SessionCoordinator } from "./execution/session-coordinator.js";
 import type { TradingBroker } from "./broker/types.js";
 import { createTradingBroker } from "./broker/trading-broker.js";
 import type { DiscordAgentRunner } from "./discord/runner.js";
+import { DiscordAgentJobRegistry } from "./discord/jobs.js";
 
 export interface RunningExecutionService {
   server: Server;
@@ -51,6 +52,9 @@ export async function startExecutionService(
     batchBytes: config.batchBytes,
     logger,
   });
+  const discordAgentJobs = discordAgents
+    ? new DiscordAgentJobRegistry({ runner: discordAgents, logger })
+    : undefined;
   const appDependencies: AppDependencies = {
     sharedSecret: config.sharedSecret,
     discordSharedSecret: config.discordSharedSecret,
@@ -58,7 +62,10 @@ export async function startExecutionService(
     registry,
     broker,
   };
-  if (discordAgents) appDependencies.discordAgents = discordAgents;
+  if (discordAgents && discordAgentJobs) {
+    appDependencies.discordAgents = discordAgents;
+    appDependencies.discordAgentJobs = discordAgentJobs;
+  }
   const app = createApp(config.boundActorId
     ? { ...appDependencies, boundActorId: config.boundActorId }
     : appDependencies);
@@ -78,6 +85,7 @@ export async function startExecutionService(
         logger.info("execution_service_shutdown_started");
         const closed = new Promise<void>((resolve) => server.close(() => resolve()));
         const work = (async () => {
+          await discordAgentJobs?.dispose();
           await registry.shutdown();
           await registry.waitForIdle();
           await sessions.dispose();

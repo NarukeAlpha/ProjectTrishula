@@ -8,7 +8,10 @@ uses a separate agent-only secret. The browser never calls Pi directly.
 
 - `GET /health` reports Pi and Discord-agent readiness.
 - `POST /runs` keeps the existing asynchronous execution contract.
-- `POST /discord/agents/run` runs one isolated Discord agent profile and returns strict JSON.
+- `POST /discord/agents/jobs` validates and starts one isolated Discord agent job without holding the HTTP connection open.
+- `GET /discord/agents/jobs/:jobId` returns the job status and its strict result after completion.
+- `DELETE /discord/agents/jobs/:jobId` cancels a running job.
+- `POST /discord/agents/run` keeps the earlier synchronous contract for rolling deployment compatibility.
 - `POST /runs/:runId/cancel` accepts `{ "commandId": "...", "runId": "...", "actorId": "..." }`. The body `runId` must match the path.
 - `POST /connections/robinhood/start` accepts `{ "actorId": "..." }`.
 - `POST /connections/robinhood/complete` accepts `{ "actorId": "...", "code": "...", "state": "..." }`.
@@ -16,7 +19,7 @@ uses a separate agent-only secret. The browser never calls Pi directly.
 - `POST /portfolio/refresh` accepts `{ "actorId": "..." }`.
 - `POST /orders/execute` accepts `{ "actorId": "...", "proposalId": "...", "fingerprint": "..." }`.
 
-`POST /discord/agents/run` requires
+All `/discord/agents/*` routes require
 `Authorization: Bearer <PI_DISCORD_SHARED_SECRET>`. Other POST routes require
 `Authorization: Bearer <SERVICE_SHARED_SECRET>`. The two secrets must differ.
 In production, every actor-bearing request must match `BOUND_ACTOR_ID`. A
@@ -27,7 +30,7 @@ generic MCP proxy and never returns credentials or OAuth tokens.
 
 ## Discord agent profiles
 
-The Discord gateway calls `POST /discord/agents/run` with one of four
+The Discord gateway submits `POST /discord/agents/jobs` with one of four
 profiles. Shared Zod request and response contracts are in
 `src/discord/contracts.ts`.
 
@@ -38,7 +41,12 @@ profiles. Shared Zod request and response contracts are in
 | `research` | `gpt-5.6-sol` | `xhigh` | Public web search, public HTTPS fetch, and public market data |
 | `reply` | `gpt-5.6-luna` | `xhigh` | None |
 
-Each call creates a new in-memory session and disposes it after the response.
+Each job creates a new in-memory session and disposes it after the agent exits.
+The job registry uses `requestId` as its idempotency key. A reused ID with
+different validated input returns a conflict. Completed and failed jobs expire
+after 15 minutes. The registry accepts at most eight active jobs and 256 live
+or retained jobs. It stops any job that runs longer than nine minutes.
+Shutdown stops intake, aborts running jobs, and waits for their session cleanup.
 No Discord profile can use the brokerage, order, shell, filesystem, or code
 execution tools. Research results include exact source URLs, fetch freshness,
 findings, and uncertainty. The service rejects source URLs that were not

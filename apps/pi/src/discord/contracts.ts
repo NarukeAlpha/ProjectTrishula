@@ -122,6 +122,8 @@ export const discordAgentResponseSchema = z.discriminatedUnion("profile", [
   discordReplyResponseSchema,
 ]);
 
+export const discordAgentJobParamsSchema = z.object({ jobId: stableId }).strict();
+
 export type DiscordAgentRequest = z.infer<typeof discordAgentRequestSchema>;
 export type DiscordAgentResponse = z.infer<typeof discordAgentResponseSchema>;
 export type DiscordTriageRequest = z.infer<typeof discordTriageRequestSchema>;
