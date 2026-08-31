@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   completedDiscordAssistantText,
+  createDiscordResearchTools,
   DISCORD_AGENT_PROFILES,
   generateDiscordAgentOutput,
   parseDiscordAgentOutput,
@@ -46,6 +47,7 @@ describe("Discord Pi agent profiles", () => {
           "public_web_search",
           "public_web_fetch",
           "public_market_data",
+          "generate_market_chart",
         ],
       },
       reply: {
@@ -54,6 +56,104 @@ describe("Discord Pi agent profiles", () => {
         serviceTier: "priority",
         toolNames: [],
       },
+    });
+  });
+
+  it("separates market evidence from dynamic chart generation", async () => {
+    const captureChart = vi.fn();
+    const tools = createDiscordResearchTools(new Set(), captureChart);
+    const marketTool = tools.find((tool) => tool.name === "public_market_data");
+    const chartTool = tools.find((tool) => tool.name === "generate_market_chart");
+    if (!marketTool || !chartTool) throw new Error("Expected research tools.");
+
+    const marketParameterSchema = JSON.stringify(marketTool.parameters);
+    expect(marketParameterSchema).toContain('"symbols"');
+    expect(marketParameterSchema).not.toContain('"includeChart"');
+    expect(chartTool.parameters).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        symbol: { maxLength: 20 },
+        includeVolume: {},
+      },
+    });
+
+    // SAFETY: These exact literals deliberately exercise execute-level mutual exclusion after schema validation.
+    const conflictingParameters = {
+      symbol: "AMD",
+      interval: "1D",
+      range: "1M",
+    } as never;
+    // SAFETY: This branch returns before it reads the extension context.
+    const unusedContext = {} as never;
+    const result = await chartTool.execute(
+      "chart_conflict",
+      conflictingParameters,
+      undefined,
+      undefined,
+      unusedContext,
+    );
+    expect(result).toMatchObject({ isError: true, details: { ok: false } });
+    expect(captureChart).not.toHaveBeenCalled();
+  });
+
+  it("captures a provider-ready chart only when the chart tool succeeds", async () => {
+    const captureChart = vi.fn();
+    const tools = createDiscordResearchTools(new Set(), captureChart, {
+      readMarketData: async () => [
+        {
+          symbol: "AMD",
+          sourceUrl:
+            "https://query1.finance.yahoo.com/v8/finance/chart/AMD?range=5d&interval=1d",
+          fetchedAt: "2026-08-31T00:00:00.000Z",
+          meta: {
+            symbol: "AMD",
+            exchangeName: "NMS",
+            instrumentType: "EQUITY",
+          },
+          timestamps: [100, 200],
+          quotes: { close: [10, 12] },
+        },
+      ],
+    });
+    const chartTool = tools.find((tool) => tool.name === "generate_market_chart");
+    if (!chartTool) throw new Error("Expected the chart tool.");
+    // SAFETY: This exact symbol satisfies the chart tool's bounded symbol schema.
+    const parameters = { symbol: "AMD" } as never;
+    // SAFETY: The chart tool does not read the extension context.
+    const unusedContext = {} as never;
+
+    const result = await chartTool.execute(
+      "chart_success",
+      parameters,
+      undefined,
+      undefined,
+      unusedContext,
+    );
+
+    expect(captureChart).toHaveBeenCalledOnce();
+    expect(captureChart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbol: "AMD",
+        tradingViewSymbol: "NASDAQ:AMD",
+        interval: "1D",
+      }),
+    );
+    expect(result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            chartQueued: true,
+            symbol: "AMD",
+            tradingViewSymbol: "NASDAQ:AMD",
+            interval: "1D",
+            range: null,
+            style: null,
+            includeVolume: true,
+          }),
+        },
+      ],
+      details: { ok: true },
     });
   });
 
@@ -252,7 +352,7 @@ describe("Discord Pi agent profiles", () => {
     expect(generate.mock.calls).toEqual([["initial"]]);
   });
 
-  it("uses only a chart captured from the public market-data tool", async () => {
+  it("uses only a chart captured from the dedicated chart tool", async () => {
     const chart = {
       symbol: "AMD",
       title: "AMD close price",
