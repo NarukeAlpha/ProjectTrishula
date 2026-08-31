@@ -21,7 +21,9 @@ Create a bot in the Discord Developer Portal. On its Bot page, enable Message Co
 - Read Message History
 - Send Messages
 
-Set `DISCORD_BOT_TOKEN` only on the Railway Discord service. Set the public application ID as `PUBLIC_DISCORD_APPLICATION_ID` on the Railway web service. The website uses it to create a callback-free server-install link.
+Set `DISCORD_BOT_TOKEN` and `CHART_IMG_API_KEY` only on the Railway Discord service. Set the public application ID as `PUBLIC_DISCORD_APPLICATION_ID` on the Railway web service. The website uses it to create a callback-free server-install link.
+
+The Pi agent creates a validated chart request through its `generate_market_chart` tool. Convex stores that request with the final outbox record. The Discord service calls CHART-IMG and validates the PNG before upload. A missing key, provider error, or invalid image does not block the text reply.
 
 The current Gateway integration does not need `DISCORD_CLIENT_SECRET`. A client secret is needed only for a future server-side Discord OAuth token exchange. The supplied application public key is also unused because this service does not expose an HTTP Interactions endpoint.
 

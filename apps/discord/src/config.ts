@@ -16,6 +16,13 @@ const environmentSchema = z
     HOST: z.string().trim().min(1).default("0.0.0.0"),
     PORT: positiveInteger.max(65_535).default(8080),
     DISCORD_BOT_TOKEN: z.string().trim().min(20).optional(),
+    CHART_IMG_API_KEY: z
+      .string()
+      .trim()
+      .min(20)
+      .max(256)
+      .regex(/^[A-Za-z0-9_-]+$/)
+      .optional(),
     DISCORD_OWNER_ID: stableId,
     CONVEX_DISCORD_SHARED_SECRET: z.string().min(32),
     PI_DISCORD_SHARED_SECRET: z.string().min(32),
@@ -62,6 +69,7 @@ export interface DiscordGatewayConfig {
   host: string;
   port: number;
   discordBotToken: string | undefined;
+  chartImgApiKey: string | undefined;
   discordOwnerId: string;
   convexSharedSecret: string;
   piSharedSecret: string;
@@ -124,6 +132,7 @@ export function loadConfig(
     host: value.HOST,
     port: value.PORT,
     discordBotToken: value.DISCORD_BOT_TOKEN,
+    chartImgApiKey: value.CHART_IMG_API_KEY,
     discordOwnerId: value.DISCORD_OWNER_ID,
     convexSharedSecret: value.CONVEX_DISCORD_SHARED_SECRET,
     piSharedSecret: value.PI_DISCORD_SHARED_SECRET,

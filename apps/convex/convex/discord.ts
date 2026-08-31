@@ -262,17 +262,76 @@ function requireReplyContent(value: string): string {
   return normalized;
 }
 
+const MARKET_CHART_INTERVALS = [
+  "1m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h",
+  "4h", "6h", "8h", "12h", "1D", "2D", "3D", "1W", "1M", "3M", "6M",
+  "1Y",
+] as const;
+const MARKET_CHART_RANGES = [
+  "1D", "5D", "1M", "3M", "6M", "1Y", "5Y", "ALL", "DTD", "WTD", "MTD",
+  "YTD",
+] as const;
+const MARKET_CHART_STYLES = ["candle", "line", "area"] as const;
+type MarketChartInterval = (typeof MARKET_CHART_INTERVALS)[number];
+type MarketChartRange = (typeof MARKET_CHART_RANGES)[number];
+type MarketChartStyle = (typeof MARKET_CHART_STYLES)[number];
+
+interface NormalizedMarketChart {
+  symbol: string;
+  title?: string;
+  points: Array<{ timestamp: number; close: number }>;
+  tradingViewSymbol?: string;
+  interval?: MarketChartInterval;
+  range?: MarketChartRange;
+  style?: MarketChartStyle;
+  includeVolume?: boolean;
+}
+
 function requireMarketChart(chart: {
   symbol: string;
   title?: string;
   points: Array<{ timestamp: number; close: number }>;
+  tradingViewSymbol?: string;
+  interval?: MarketChartInterval;
+  range?: MarketChartRange;
+  style?: MarketChartStyle;
+  includeVolume?: boolean;
 } | undefined) {
   if (chart === undefined) return undefined;
   const symbol = chart.symbol.trim().toUpperCase();
   const title = chart.title?.trim();
+  const tradingViewSymbol = chart.tradingViewSymbol?.trim().toUpperCase();
   if (
     !/^[A-Z0-9.^=-]{1,20}$/.test(symbol)
     || (title !== undefined && (!title || title.length > 64))
+    || (
+      tradingViewSymbol !== undefined
+      && !/^[A-Z0-9._!^-]{1,24}:[A-Z0-9._!^=-]{1,32}$/.test(
+        tradingViewSymbol,
+      )
+    )
+    || (
+      chart.interval !== undefined
+      && !MARKET_CHART_INTERVALS.includes(chart.interval)
+    )
+    || (
+      chart.range !== undefined
+      && !MARKET_CHART_RANGES.includes(chart.range)
+    )
+    || (
+      chart.style !== undefined
+      && !MARKET_CHART_STYLES.includes(chart.style)
+    )
+    || (chart.interval !== undefined && chart.range !== undefined)
+    || (
+      tradingViewSymbol === undefined
+      && (
+        chart.interval !== undefined
+        || chart.range !== undefined
+        || chart.style !== undefined
+        || chart.includeVolume !== undefined
+      )
+    )
     || chart.points.length < 2
     || chart.points.length > 240
     || chart.points.some((point, index) => {
@@ -287,7 +346,18 @@ function requireMarketChart(chart: {
     throw new Error("Discord market chart is invalid.");
   }
   const points = chart.points.map((point) => ({ ...point }));
-  return title === undefined ? { symbol, points } : { symbol, title, points };
+  const result: NormalizedMarketChart = { symbol, points };
+  if (title !== undefined) result.title = title;
+  if (tradingViewSymbol !== undefined) {
+    result.tradingViewSymbol = tradingViewSymbol;
+  }
+  if (chart.interval !== undefined) result.interval = chart.interval;
+  if (chart.range !== undefined) result.range = chart.range;
+  if (chart.style !== undefined) result.style = chart.style;
+  if (chart.includeVolume !== undefined) {
+    result.includeVolume = chart.includeVolume;
+  }
+  return result;
 }
 
 async function recordActivity(

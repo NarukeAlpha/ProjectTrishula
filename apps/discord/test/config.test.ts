@@ -18,12 +18,22 @@ describe("loadConfig", () => {
     expect(config.convexSiteUrl).toBe("https://convex.example.com/http");
     expect(config.piServiceUrl).toBe("http://pi.railway.internal:8080");
     expect(config.discordBotToken).toBeUndefined();
+    expect(config.chartImgApiKey).toBeUndefined();
     expect(config.convexSharedSecret).toBe(
       baseEnvironment.CONVEX_DISCORD_SHARED_SECRET,
     );
     expect(config.piSharedSecret).toBe(
       baseEnvironment.PI_DISCORD_SHARED_SECRET,
     );
+  });
+
+  it("loads a CHART-IMG key without exposing it through an error", () => {
+    const key = "chart-img-key-with-more-than-twenty-characters";
+    const config = loadConfig({ ...baseEnvironment, CHART_IMG_API_KEY: key });
+    expect(config.chartImgApiKey).toBe(key);
+    expect(() =>
+      loadConfig({ ...baseEnvironment, CHART_IMG_API_KEY: "bad key" }),
+    ).toThrow("CHART_IMG_API_KEY");
   });
 
   it("requires the Convex HTTP action prefix", () => {

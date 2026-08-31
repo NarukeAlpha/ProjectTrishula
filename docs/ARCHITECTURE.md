@@ -4,11 +4,11 @@
 
 The browser authenticates with WorkOS and calls public Convex functions. It never receives service credentials, the Discord token, or Pi Codex OAuth data.
 
-The Discord gateway is a private Railway service. It holds `DISCORD_BOT_TOKEN` and connects to the Discord Gateway. It uses `CONVEX_DISCORD_SHARED_SECRET` for the Convex Discord endpoint and a separate `PI_DISCORD_SHARED_SECRET` for Pi's agent-only endpoint. Neither credential can authenticate brokerage, credential-vault, run, or order routes.
+The Discord gateway is a private Railway service. It holds `DISCORD_BOT_TOKEN` and `CHART_IMG_API_KEY`. It connects to the Discord Gateway and fetches generated chart PNGs. It uses `CONVEX_DISCORD_SHARED_SECRET` for the Convex Discord endpoint and a separate `PI_DISCORD_SHARED_SECRET` for Pi's agent-only endpoint. Neither credential can authenticate brokerage, credential-vault, run, or order routes.
 
 Convex is the source of truth for channel assignments, messages, processing watermarks, fenced leases, loop runs, recheck limits, and the Discord outbox. The gateway keeps a local active-channel set only to reduce duplicate calls. That set is not a lock.
 
-Pi reads Codex OAuth from its mounted `PI_AUTH_PATH`. It creates a fresh session for each Discord stage. Triage and reply have no tools. Research receives only bounded public research tools. The Discord pipeline has no brokerage or order tools.
+Pi reads Codex OAuth from its mounted `PI_AUTH_PATH`. It creates a fresh session for each Discord stage. Triage and reply have no tools. Research receives only bounded public research tools. Its `generate_market_chart` tool selects a validated symbol and fixed chart controls. It does not receive the CHART-IMG key or rendered image. The Discord pipeline has no brokerage or order tools.
 
 Discord submits each Pi stage as an idempotent asynchronous job and polls with short private-network requests. Pi keeps bounded terminal results long enough for the gateway to collect them. If Pi restarts before completion, the gateway can submit the same request ID again. This avoids holding one HTTP response open for a long Sol research pass.
 

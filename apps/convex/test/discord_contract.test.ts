@@ -162,6 +162,43 @@ describe("Discord gateway HTTP contract", () => {
     }).success).toBe(false);
   });
 
+  it("accepts trusted provider charts and rejects conflicting time controls", () => {
+    const request = {
+      operation: "enqueueReply",
+      actorId: "user_01HWORKOSALLOWED",
+      sourceChannelId: "123",
+      guildId: "456",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      idempotencyKey: "run_1:reply",
+      replyKind: "final",
+      content: "Here is the chart.",
+      chart: {
+        symbol: "GC=F",
+        tradingViewSymbol: "COMEX:GC1!",
+        interval: "1D",
+        style: "candle",
+        includeVolume: true,
+        points: [
+          { timestamp: 100, close: 4_400 },
+          { timestamp: 200, close: 4_450 },
+        ],
+      },
+      recheckRequested: false,
+      finalizesLoop: true,
+    };
+    expect(discordGatewayRequestSchema.safeParse(request).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      ...request,
+      chart: { ...request.chart, range: "1M" },
+    }).success).toBe(false);
+    expect(discordGatewayRequestSchema.safeParse({
+      ...request,
+      chart: { ...request.chart, tradingViewSymbol: "GC=F" },
+    }).success).toBe(false);
+  });
+
   it("allows an outbox worker to renew a lease without changing the stage", () => {
     expect(discordGatewayRequestSchema.safeParse({
       operation: "heartbeat",

@@ -46,6 +46,7 @@ export default defineRailway(() => {
     },
     replicas: { "us-east4-eqdc4a": 1 },
     env: {
+      CHART_IMG_API_KEY: preserve(),
       CONVEX_DISCORD_SHARED_SECRET: preserve(),
       CONVEX_SITE_URL: preserve(),
       DISCORD_BOT_TOKEN: preserve(),

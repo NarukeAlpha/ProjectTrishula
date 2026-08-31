@@ -4,11 +4,12 @@ This Railway service holds the Discord bot token and the live Gateway connection
 
 Pi agent calls use short, authenticated job requests. The gateway submits a stage, polls its job status, and retries transient poll failures. A minute-scale Sol run does not depend on one long-lived HTTP response.
 
-The service never sends the Discord token or Pi Codex OAuth data to the browser or Convex. Convex records fixed activity events for the web control page, but it does not copy message text, model prompts, credentials, or hidden reasoning into that feed.
+The service never sends the Discord token, CHART-IMG key, or Pi Codex OAuth data to the browser or Convex. Convex records fixed activity events for the web control page, but it does not copy message text, model prompts, credentials, or hidden reasoning into that feed.
 
 ## Required Railway variables
 
 - `DISCORD_BOT_TOKEN`: Discord bot token. The health server can start without it. Add it to connect the bot.
+- `CHART_IMG_API_KEY`: CHART-IMG API key for generated market-chart attachments. If it is absent or the provider fails, the gateway sends the text reply without an image.
 - `DISCORD_OWNER_ID`: WorkOS user ID that owns the Discord channel configuration.
 - `CONVEX_DISCORD_SHARED_SECRET`: Dedicated secret for the Convex Discord HTTP action.
 - `PI_DISCORD_SHARED_SECRET`: Dedicated secret for the Pi Discord agent endpoint.

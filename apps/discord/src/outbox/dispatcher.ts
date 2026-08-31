@@ -15,11 +15,12 @@ import type {
   OutboxItem,
   StoredMessage,
 } from "../contracts.js";
-import { discordImageAttachments } from "../media/images.js";
 import {
-  MAX_DISCORD_GENERATED_FILE_BYTES,
-  renderMarketChart,
-} from "../media/market-chart.js";
+  ChartImageError,
+  type MarketChartRenderer,
+} from "../media/chart-img.js";
+import { discordImageAttachments } from "../media/images.js";
+import { MAX_DISCORD_GENERATED_FILE_BYTES } from "../media/market-chart.js";
 import { logger } from "../runtime/logger.js";
 
 const MAX_DISCORD_REPLY_FILES = 4;
@@ -29,6 +30,14 @@ export interface DiscordReplyFile {
   attachment: Buffer;
   name: string;
   description?: string | undefined;
+}
+
+interface ChartFailureLogFields {
+  [key: string]: string | number | boolean | undefined;
+  channelId: string;
+  outboxId: string;
+  code: string;
+  status?: number;
 }
 
 export interface ConvexOutboxClient {
@@ -59,6 +68,7 @@ export interface OutboxDispatcherDependencies {
   client: Client;
   convex: ConvexOutboxClient;
   schedule: (channel: ChannelReference) => void;
+  chartImages?: MarketChartRenderer;
 }
 
 function discordNonce(outboxId: string): string {
@@ -105,8 +115,7 @@ function messageOptions(
   item: OutboxItem,
   files: readonly DiscordReplyFile[] = [],
 ): MessageCreateOptions {
-  const chart = item.chart === undefined ? [] : [renderMarketChart(item.chart)];
-  const replyFiles = boundedReplyFiles([...chart, ...files]);
+  const replyFiles = boundedReplyFiles(files);
   const options: MessageCreateOptions = {
     content: item.content.slice(0, 2_000),
     allowedMentions: { parse: [] },
@@ -190,7 +199,44 @@ export class OutboxDispatcher {
         );
         return;
       }
-      const sent = await channel.send(messageOptions(item));
+      const files: DiscordReplyFile[] = [];
+      if (item.chart !== undefined) {
+        const chartImages = this.dependencies.chartImages;
+        if (chartImages === undefined) {
+          logger.warn("Discord chart attachment was skipped.", {
+            channelId: item.channelId,
+            outboxId: item.outboxId,
+            code: "chart_provider_not_configured",
+          });
+        } else {
+          try {
+            files.push(await chartImages.render(item.chart));
+            logger.info("Discord chart attachment prepared.", {
+              channelId: item.channelId,
+              outboxId: item.outboxId,
+              code: "chart_attachment_ready",
+            });
+          } catch (error) {
+            const fields: ChartFailureLogFields = {
+              channelId: item.channelId,
+              outboxId: item.outboxId,
+              code:
+                error instanceof ChartImageError
+                  ? error.code
+                  : "chart_provider_error",
+            };
+            if (
+              error instanceof ChartImageError &&
+              error.status !== undefined
+            ) {
+              fields.status = error.status;
+            }
+            logger.warn("Discord chart attachment was skipped.", fields);
+          }
+        }
+        if (!(await this.dependencies.convex.renewRunLease(identity))) return;
+      }
+      const sent = await channel.send(messageOptions(item, files));
       sentMessageId = sent.id;
       sentImages = discordImageAttachments(sent.attachments?.values() ?? []);
     } catch (error) {

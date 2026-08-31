@@ -53,6 +53,7 @@ Keep secrets in Railway. Do not commit them.
 Discord gateway:
 
 - `DISCORD_BOT_TOKEN`
+- `CHART_IMG_API_KEY` (used only by the Discord service to fetch generated PNG attachments)
 - `DISCORD_OWNER_ID` (set from the bound WorkOS user)
 - `CONVEX_DISCORD_SHARED_SECRET`
 - `PI_DISCORD_SHARED_SECRET`
@@ -72,6 +73,8 @@ Pi:
 - `PI_AUTH_PATH=/data/auth.json`
 - `PI_LUNA_MODEL=gpt-5.6-luna`
 - `PI_SOL_MODEL=gpt-5.6-sol`
+
+The Pi research agent has a bounded `generate_market_chart` tool. It chooses a supported symbol and chart controls, but it does not receive the CHART-IMG key or image bytes. The Discord service materializes the validated request and attaches the PNG.
 
 The existing web, WorkOS, Convex, and Pi variables remain required. See [deployment notes](docs/DEPLOYMENT.md).
 

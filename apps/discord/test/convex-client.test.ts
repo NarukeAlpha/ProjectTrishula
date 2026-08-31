@@ -10,6 +10,7 @@ const config: DiscordGatewayConfig = {
   host: "127.0.0.1",
   port: 8_080,
   discordBotToken: undefined,
+  chartImgApiKey: undefined,
   discordOwnerId: "owner-1",
   convexSharedSecret: "c".repeat(32),
   piSharedSecret: "p".repeat(32),

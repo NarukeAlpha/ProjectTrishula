@@ -7,8 +7,12 @@ import {
   DiscordGateway,
   type DiscordGatewayHealth,
 } from "./discord/gateway.js";
+import { ChartImgClient } from "./media/chart-img.js";
 import { ChannelLoopOrchestrator } from "./orchestrator/channel-loop.js";
-import { OutboxDispatcher } from "./outbox/dispatcher.js";
+import {
+  OutboxDispatcher,
+  type OutboxDispatcherDependencies,
+} from "./outbox/dispatcher.js";
 import { PiAgentClient } from "./pi/client.js";
 import { logger } from "./runtime/logger.js";
 
@@ -57,11 +61,22 @@ export class DiscordGatewayService {
       convex: this.convex,
       orchestrator: this.orchestrator,
     });
-    this.outbox = new OutboxDispatcher({
+    const chartImages =
+      config.chartImgApiKey === undefined
+        ? undefined
+        : new ChartImgClient({
+            apiKey: config.chartImgApiKey,
+            timeoutMs: Math.min(config.requestTimeoutMs, 20_000),
+          });
+    const outboxDependencies: OutboxDispatcherDependencies = {
       client: this.gateway.client,
       convex: this.convex,
       schedule: (channel) => this.orchestrator.schedule(channel),
-    });
+    };
+    if (chartImages !== undefined) {
+      outboxDependencies.chartImages = chartImages;
+    }
+    this.outbox = new OutboxDispatcher(outboxDependencies);
     this.app = this.createHttpApp();
   }
 

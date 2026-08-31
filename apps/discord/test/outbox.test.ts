@@ -8,6 +8,10 @@ import type {
 } from "../src/convex/client.js";
 import type { OutboxItem, StoredMessage } from "../src/contracts.js";
 import {
+  ChartImageError,
+  type MarketChartRenderer,
+} from "../src/media/chart-img.js";
+import {
   discordNonce,
   messageOptions,
   OutboxDispatcher,
@@ -34,6 +38,29 @@ function outbox(overrides: Partial<OutboxItem> = {}): OutboxItem {
     ...overrides,
   };
 }
+
+const providerChart = {
+  symbol: "AMD",
+  points: [
+    { timestamp: 100, close: 10 },
+    { timestamp: 200, close: 12 },
+  ],
+  tradingViewSymbol: "NASDAQ:AMD",
+  interval: "1D" as const,
+};
+
+function chartRenderer(
+  result: Awaited<ReturnType<MarketChartRenderer["render"]>>,
+): MarketChartRenderer {
+  return { render: vi.fn(async () => result) };
+}
+
+const renderedChart = {
+  attachment: Buffer.from([137, 80, 78, 71]),
+  name: "amd-chart.png",
+  description: "AMD market chart",
+  contentType: "image/png" as const,
+};
 
 class FakeConvex implements ConvexOutboxClient {
   acknowledgements: Array<{
@@ -106,22 +133,16 @@ describe("OutboxDispatcher", () => {
     expect(options.enforceNonce).toBe(true);
   });
 
-  it("renders a bounded market chart into an in-memory Discord attachment", () => {
-    const options = messageOptions(outbox({
-      chart: {
-        symbol: "AMD",
-        points: [
-          { timestamp: 100, close: 10 },
-          { timestamp: 200, close: 12 },
-        ],
-      },
-    }));
+  it("adds a bounded chart file after the provider resolves it", () => {
+    const options = messageOptions(outbox({ chart: providerChart }), [
+      renderedChart,
+    ]);
 
     expect(options.files).toHaveLength(1);
     const file = options.files?.[0];
     expect(file).toMatchObject({
       name: "amd-chart.png",
-      description: "AMD close-price chart",
+      description: "AMD market chart",
     });
   });
 
@@ -179,16 +200,11 @@ describe("OutboxDispatcher", () => {
       }),
       convex,
       schedule: vi.fn(),
+      chartImages: chartRenderer(renderedChart),
     });
 
     await dispatcher.dispatch([outbox({
-      chart: {
-        symbol: "AMD",
-        points: [
-          { timestamp: 100, close: 10 },
-          { timestamp: 200, close: 12 },
-        ],
-      },
+      chart: providerChart,
     })]);
 
     expect(convex.acknowledgements[0]).toMatchObject({
@@ -200,6 +216,41 @@ describe("OutboxDispatcher", () => {
         mediaType: "image/png",
       }],
     });
+    expect(send.mock.calls[0]?.[0].files).toHaveLength(1);
+  });
+
+  it("sends the text once when CHART-IMG rejects the chart", async () => {
+    const send = vi.fn().mockResolvedValue({ id: "999" });
+    const convex = new FakeConvex();
+    const chartImages: MarketChartRenderer = {
+      render: vi.fn(async () => {
+        throw new ChartImageError(
+          "provider_http_error",
+          "CHART-IMG returned HTTP 429.",
+          429,
+        );
+      }),
+    };
+    const dispatcher = new OutboxDispatcher({
+      client: fakeClient({
+        isSendable: () => true,
+        isDMBased: () => false,
+        guildId: "10",
+        send,
+      }),
+      convex,
+      schedule: vi.fn(),
+      chartImages,
+    });
+
+    await dispatcher.dispatch([outbox({ chart: providerChart })]);
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0].files).toBeUndefined();
+    expect(convex.acknowledgements).toEqual([
+      { status: "sent", discordMessageId: "999" },
+    ]);
+    expect(convex.completions).toHaveLength(1);
   });
 
   it("recovers a sent final reply without sending it again", async () => {

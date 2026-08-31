@@ -51,6 +51,19 @@ const discordMarketChart = z.object({
     timestamp,
     close: z.number().finite().nonnegative(),
   }).strict()).min(2).max(240),
+  tradingViewSymbol: z.string().trim().min(3).max(64)
+    .regex(/^[A-Z0-9._!^-]{1,24}:[A-Z0-9._!^=-]{1,32}$/).optional(),
+  interval: z.enum([
+    "1m", "3m", "5m", "10m", "15m", "30m", "45m", "1h", "2h", "3h",
+    "4h", "6h", "8h", "12h", "1D", "2D", "3D", "1W", "1M", "3M",
+    "6M", "1Y",
+  ]).optional(),
+  range: z.enum([
+    "1D", "5D", "1M", "3M", "6M", "1Y", "5Y", "ALL", "DTD", "WTD",
+    "MTD", "YTD",
+  ]).optional(),
+  style: z.enum(["candle", "line", "area"]).optional(),
+  includeVolume: z.boolean().optional(),
 }).strict().superRefine((chart, context) => {
   for (let index = 1; index < chart.points.length; index += 1) {
     const previous = chart.points[index - 1];
@@ -62,6 +75,28 @@ const discordMarketChart = z.object({
         message: "Chart timestamps must increase.",
       });
     }
+  }
+  if (chart.interval !== undefined && chart.range !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["range"],
+      message: "Choose a chart interval or range, not both.",
+    });
+  }
+  if (
+    chart.tradingViewSymbol === undefined
+    && (
+      chart.interval !== undefined
+      || chart.range !== undefined
+      || chart.style !== undefined
+      || chart.includeVolume !== undefined
+    )
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["tradingViewSymbol"],
+      message: "Provider chart options require a TradingView symbol.",
+    });
   }
 });
 const permissions = z.object({
