@@ -18,6 +18,7 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as lib_canonical_json from "../lib/canonical_json.js";
 import type * as lib_data from "../lib/data.js";
 import type * as lib_discord_contract from "../lib/discord_contract.js";
+import type * as lib_discord_conversation from "../lib/discord_conversation.js";
 import type * as lib_discord_state from "../lib/discord_state.js";
 import type * as lib_execution from "../lib/execution.js";
 import type * as lib_invariants from "../lib/invariants.js";
@@ -48,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   "lib/canonical_json": typeof lib_canonical_json;
   "lib/data": typeof lib_data;
   "lib/discord_contract": typeof lib_discord_contract;
+  "lib/discord_conversation": typeof lib_discord_conversation;
   "lib/discord_state": typeof lib_discord_state;
   "lib/execution": typeof lib_execution;
   "lib/invariants": typeof lib_invariants;

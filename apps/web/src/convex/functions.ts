@@ -5,6 +5,8 @@ import type {
   CommandReadModel,
   DiscordChannelAssignmentReadModel,
   DiscordChannelRole,
+  DiscordConversationPrivacyDeletionReadModel,
+  DiscordConversationResetReadModel,
   DiscordControlPlaneReadModel,
   DiscordGuildRoutingReadModel,
   MessageReadModel,
@@ -111,6 +113,22 @@ export const publicApi = {
       },
       DiscordGuildRoutingReadModel
     >("discord:setGuildRouting"),
+    resetGuildConversation: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        confirmGuildId: string;
+      },
+      DiscordConversationResetReadModel
+    >("discord:resetGuildConversation"),
+    deleteGuildConversationPrivacyData: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        confirmGuildId: string;
+      },
+      DiscordConversationPrivacyDeletionReadModel
+    >("discord:deleteGuildConversationPrivacyData"),
   },
   trading: {
     getDashboard: makeFunctionReference<

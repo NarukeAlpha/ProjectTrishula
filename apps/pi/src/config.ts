@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { discordCompactionThreshold } from "./discord/compaction.js";
 
 const positiveInteger = z.coerce.number().int().positive();
 const stableActorId = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
@@ -21,6 +22,38 @@ const environmentSchema = z.object({
   PI_CREDENTIAL_ENCRYPTION_KEY: z.string().trim().min(32).optional(),
   PI_CREDENTIAL_KEY_VERSION: positiveInteger.max(1_000_000).default(1),
   PI_MODEL: z.string().trim().min(1).default("gpt-5.6-terra"),
+  TRISHULA_LUNA_MODEL: z.literal("gpt-5.6-luna").default("gpt-5.6-luna"),
+  TRISHULA_LUNA_REASONING_EFFORT: z.literal("xhigh").default("xhigh"),
+  TRISHULA_LUNA_SERVICE_TIER: z.literal("priority").default("priority"),
+  TRISHULA_SOL_MODEL: z.literal("gpt-5.6-sol").default("gpt-5.6-sol"),
+  TRISHULA_SOL_REASONING_EFFORT: z.literal("ultra").default("ultra"),
+  TRISHULA_SOL_SERVICE_TIER: z.literal("priority").default("priority"),
+  TRISHULA_PERSONALITY_VERSION: z.literal("trishula-discord-v1").default("trishula-discord-v1"),
+  TRISHULA_LUNA_PROFILE_VERSION: z.literal("luna-frontman-v1").default("luna-frontman-v1"),
+  TRISHULA_SOL_PROFILE_VERSION: z.literal("sol-research-v1").default("sol-research-v1"),
+  TRISHULA_MODEL_CONTEXT_WINDOW: positiveInteger.min(64_000).default(400_000),
+  TRISHULA_LUNA_MAX_OUTPUT_TOKENS: positiveInteger.max(32_000).default(8_000),
+  TRISHULA_SOL_MAX_OUTPUT_TOKENS: positiveInteger.max(64_000).default(16_000),
+  TRISHULA_RESEARCH_PACKET_TOKEN_TARGET: positiveInteger.max(8_000).default(2_500),
+  TRISHULA_RESEARCH_PACKET_MAX_BYTES: positiveInteger.refine((value) => value === 16_384)
+    .default(16_384),
+  TRISHULA_RECENT_TAIL_TOKEN_BUDGET: positiveInteger.refine((value) => value === 20_000)
+    .default(20_000),
+  TRISHULA_MAX_AUTONOMOUS_RECHECKS: positiveInteger.refine((value) => value === 2)
+    .default(2),
+  TRISHULA_AMBIENT_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.85),
+  TRISHULA_AMBIENT_MIN_ADDITIVE_VALUE: z.coerce.number().min(0).max(1).default(0.9),
+  TRISHULA_HOT_SESSION_IDLE_MS: positiveInteger.max(24 * 60 * 60 * 1_000).default(60 * 60 * 1_000),
+  TRISHULA_DURABLE_CONVERSATIONS_ENABLED: z.enum(["true", "false"]).default("true")
+    .transform((value) => value === "true"),
+  TRISHULA_HOT_SESSION_REUSE_ENABLED: z.enum(["true", "false"]).default("true")
+    .transform((value) => value === "true"),
+  // Portable checkpoint generation stays off until its execution and storage gates pass.
+  TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: z.literal("false").default("false")
+    .transform((): false => false),
+  // Native opaque compaction is locked off until the Pi 0.84.1 Codex OAuth spike passes.
+  TRISHULA_NATIVE_COMPACTION_ENABLED: z.literal("false").default("false")
+    .transform((): false => false),
   BROKER_MODE: z.enum(["mock", "robinhood"]).default("mock"),
   ROBINHOOD_OAUTH_REDIRECT_URI: z.string().url().optional(),
   ROBINHOOD_OAUTH_CLIENT_ID: z.string().trim().min(1).optional(),
@@ -45,6 +78,31 @@ export interface AppConfig {
   piCredentialEncryptionKey: string | undefined;
   piCredentialKeyVersion: number;
   piModel: string;
+  trishulaLunaModel: "gpt-5.6-luna";
+  trishulaLunaReasoningEffort: "xhigh";
+  trishulaLunaServiceTier: "priority";
+  trishulaSolModel: "gpt-5.6-sol";
+  trishulaSolReasoningEffort: "ultra";
+  trishulaSolServiceTier: "priority";
+  trishulaPersonalityVersion: "trishula-discord-v1";
+  trishulaLunaProfileVersion: "luna-frontman-v1";
+  trishulaSolProfileVersion: "sol-research-v1";
+  trishulaModelContextWindow: number;
+  trishulaLunaMaxOutputTokens: number;
+  trishulaSolMaxOutputTokens: number;
+  trishulaResearchPacketTokenTarget: number;
+  trishulaResearchPacketMaxBytes: number;
+  trishulaRecentTailTokenBudget: number;
+  trishulaMaxAutonomousRechecks: number;
+  trishulaAmbientMinConfidence: number;
+  trishulaAmbientMinAdditiveValue: number;
+  trishulaCompactionReserve: number;
+  trishulaCompactionThreshold: number;
+  trishulaHotSessionIdleMs: number;
+  trishulaDurableConversationsEnabled: boolean;
+  trishulaHotSessionReuseEnabled: boolean;
+  trishulaPortableCheckpointsEnabled: false;
+  trishulaNativeCompactionEnabled: false;
   brokerMode: "mock" | "robinhood";
   robinhoodOAuthRedirectUri: string;
   robinhoodOAuthClientId?: string;
@@ -93,6 +151,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     throw new Error("ROBINHOOD_OAUTH_REDIRECT_URI must use the CONVEX_SITE_URL origin.");
   }
 
+  const compaction = discordCompactionThreshold({
+    contextWindow: value.TRISHULA_MODEL_CONTEXT_WINDOW,
+    maxOutputTokens: value.TRISHULA_LUNA_MAX_OUTPUT_TOKENS,
+    maxResearchHandoffTokens: value.TRISHULA_RESEARCH_PACKET_TOKEN_TARGET,
+  });
   const config: AppConfig = {
     environment: value.NODE_ENV,
     host: value.HOST,
@@ -111,6 +174,31 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     piCredentialEncryptionKey: value.PI_CREDENTIAL_ENCRYPTION_KEY,
     piCredentialKeyVersion: value.PI_CREDENTIAL_KEY_VERSION,
     piModel: value.PI_MODEL,
+    trishulaLunaModel: value.TRISHULA_LUNA_MODEL,
+    trishulaLunaReasoningEffort: value.TRISHULA_LUNA_REASONING_EFFORT,
+    trishulaLunaServiceTier: value.TRISHULA_LUNA_SERVICE_TIER,
+    trishulaSolModel: value.TRISHULA_SOL_MODEL,
+    trishulaSolReasoningEffort: value.TRISHULA_SOL_REASONING_EFFORT,
+    trishulaSolServiceTier: value.TRISHULA_SOL_SERVICE_TIER,
+    trishulaPersonalityVersion: value.TRISHULA_PERSONALITY_VERSION,
+    trishulaLunaProfileVersion: value.TRISHULA_LUNA_PROFILE_VERSION,
+    trishulaSolProfileVersion: value.TRISHULA_SOL_PROFILE_VERSION,
+    trishulaModelContextWindow: value.TRISHULA_MODEL_CONTEXT_WINDOW,
+    trishulaLunaMaxOutputTokens: value.TRISHULA_LUNA_MAX_OUTPUT_TOKENS,
+    trishulaSolMaxOutputTokens: value.TRISHULA_SOL_MAX_OUTPUT_TOKENS,
+    trishulaResearchPacketTokenTarget: value.TRISHULA_RESEARCH_PACKET_TOKEN_TARGET,
+    trishulaResearchPacketMaxBytes: value.TRISHULA_RESEARCH_PACKET_MAX_BYTES,
+    trishulaRecentTailTokenBudget: value.TRISHULA_RECENT_TAIL_TOKEN_BUDGET,
+    trishulaMaxAutonomousRechecks: value.TRISHULA_MAX_AUTONOMOUS_RECHECKS,
+    trishulaAmbientMinConfidence: value.TRISHULA_AMBIENT_MIN_CONFIDENCE,
+    trishulaAmbientMinAdditiveValue: value.TRISHULA_AMBIENT_MIN_ADDITIVE_VALUE,
+    trishulaCompactionReserve: compaction.reserve,
+    trishulaCompactionThreshold: compaction.threshold,
+    trishulaHotSessionIdleMs: value.TRISHULA_HOT_SESSION_IDLE_MS,
+    trishulaDurableConversationsEnabled: value.TRISHULA_DURABLE_CONVERSATIONS_ENABLED,
+    trishulaHotSessionReuseEnabled: value.TRISHULA_HOT_SESSION_REUSE_ENABLED,
+    trishulaPortableCheckpointsEnabled: value.TRISHULA_PORTABLE_CHECKPOINTS_ENABLED,
+    trishulaNativeCompactionEnabled: value.TRISHULA_NATIVE_COMPACTION_ENABLED,
     brokerMode: value.BROKER_MODE,
     robinhoodOAuthRedirectUri,
     liveTradingEnabled: value.LIVE_TRADING_ENABLED,

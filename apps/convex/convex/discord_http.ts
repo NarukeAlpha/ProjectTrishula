@@ -73,7 +73,50 @@ export const discordGateway = httpAction(async (ctx, request) => {
       }
       case "newestContext": {
         const { operation, ...args } = body;
-        return success(operation, await ctx.runQuery(internal.discord.getNewestContext, args));
+        return success(operation, await ctx.runMutation(
+          internal.discord.getNewestContext,
+          withoutUndefined(args),
+        ));
+      }
+      case "recordFrontmanPlan": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordFrontmanPlan,
+          args,
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "recordResearchStarted": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordResearchStarted,
+          args,
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "recordResearchResult": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordResearchResult,
+          withoutUndefined(args),
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "recordFrontmanResume": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordFrontmanResume,
+          withoutUndefined(args),
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
       }
       case "completeLoop": {
         const { operation, ...args } = body;
@@ -94,6 +137,13 @@ export const discordGateway = httpAction(async (ctx, request) => {
       case "enqueueReply": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(internal.discord.enqueueReply, withoutUndefined(args));
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "beginReplyDelivery": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(internal.discord.beginReplyDelivery, args);
         return result.accepted
           ? success(operation, result)
           : json({ ok: false, operation, error: result.reason }, 409);

@@ -11,43 +11,148 @@ Project Trishula uses the existing Railway project and production environment. E
 | convex-dashboard | `/infra/railway/convex-dashboard` |
 | convex-functions | `/` |
 
-`.railway/railway.ts` is the one source of truth for these roots, Dockerfile builders, watch paths, health checks, restart policies, existing resources, and preserved variable names. Railway watch paths are scoped to each service. A change under `apps/discord` does not rebuild the web service.
+`.railway/railway.ts` is the source of truth for roots, Dockerfile builders, watch paths, health checks, restart policies, resources, and preserved variable names. Railway watch paths are service-scoped.
 
 ## Discord setup
 
-Create a bot in the Discord Developer Portal. On its Bot page, enable Message Content Intent. Invite it to the server with these channel permissions:
+Create a bot in the Discord Developer Portal. On its Bot page, enable Message Content Intent. Invite it with these channel permissions:
 
 - View Channel
 - Read Message History
 - Send Messages
 
-Set `DISCORD_BOT_TOKEN` and `CHART_IMG_API_KEY` only on the Railway Discord service. Set the public application ID as `PUBLIC_DISCORD_APPLICATION_ID` on the Railway web service. The website uses it to create a callback-free server-install link.
+Set `DISCORD_BOT_TOKEN` and `CHART_IMG_API_KEY` only on the Discord service. Set `PUBLIC_DISCORD_APPLICATION_ID` on the web service. The website uses the public application ID to create a callback-free server-install link.
 
-The Pi agent creates a validated chart request through its `generate_market_chart` tool. Convex stores that request with the final outbox record. The Discord service calls CHART-IMG and validates the PNG before upload. A missing key, provider error, or invalid image does not block the text reply.
+The Pi worker creates a validated chart request through `generate_market_chart`. Convex stores the trusted request with the final outbox record. The Discord service calls CHART-IMG and validates the PNG before upload. A missing key, provider error, or invalid image does not block a valid text reply.
 
-The current Gateway integration does not need `DISCORD_CLIENT_SECRET`. A client secret is needed only for a future server-side Discord OAuth token exchange. The supplied application public key is also unused because this service does not expose an HTTP Interactions endpoint.
+The Gateway integration does not use `DISCORD_CLIENT_SECRET`. A client secret is needed only for a future server-side Discord OAuth exchange. The application public key is also unused because this service has no HTTP Interactions endpoint.
 
-After the bot connects, the website lists each server where it is installed. Select a server, then assign conversation monitors, reply targets, and optional research logs for that server.
+After the bot connects, select one conversation channel and an optional research-log channel for each server. The two roles cannot use the same channel. Changing the conversation channel preserves the guild's logical conversation and fences the old route.
 
 ## Pi authentication
 
-Pi uses Codex OAuth stored on its existing Railway volume at `PI_AUTH_PATH`. Do not put the OAuth file in Git or a Railway variable. The Discord gateway receives only structured agent results.
+Pi uses Codex OAuth stored on the Railway volume at `PI_AUTH_PATH`. Do not put the OAuth file in Git or a Railway variable. The Discord gateway receives only structured agent results.
 
-## GitHub builds
-
-Railway's source must point to `NarukeAlpha/ProjectTrishula`, branch `master`, for each code service. A push to that branch starts builds when the service watch path matches the changed files.
-
-Preview and apply the infrastructure settings after the first push:
+Build the Pi service and start the device-code flow from a Railway SSH shell:
 
 ```sh
-railway config plan
+npm run build
+CODEX_AUTH_MODE=device_code npm run auth:codex
+```
+
+The process writes the OAuth record directly to `/data/auth.json` when `PI_AUTH_PATH=/data/auth.json`. Do not copy it into source, a variable, chat, or logs.
+
+## Required service variables
+
+Keep all secrets in Railway. Do not use `--show-values` in plan output.
+
+Discord service:
+
+| Variable | Required value or purpose |
+| --- | --- |
+| `DISCORD_BOT_TOKEN` | Discord bot credential |
+| `CHART_IMG_API_KEY` | Chart rendering credential |
+| `DISCORD_OWNER_ID` | Bound WorkOS owner ID |
+| `CONVEX_DISCORD_SHARED_SECRET` | Discord-to-Convex credential |
+| `PI_DISCORD_SHARED_SECRET` | Discord-to-Pi credential; independent from other secrets |
+| `CONVEX_SITE_URL` | Convex HTTP Actions base ending in `/http` |
+| `PI_SERVICE_URL` | Private Pi URL, normally `http://pi.railway.internal:8080` |
+| `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` | `true` for the durable path |
+
+Pi service:
+
+| Variable | Required value or purpose |
+| --- | --- |
+| `SERVICE_SHARED_SECRET` | Web-chat internal credential |
+| `PI_DISCORD_SHARED_SECRET` | Discord-only credential; must differ from `SERVICE_SHARED_SECRET` |
+| `CONVEX_SITE_URL` | Exact Convex HTTP Actions prefix ending in `/http` |
+| `BOUND_ACTOR_ID` | Exact production WorkOS subject |
+| `PI_AUTH_PATH` | `/data/auth.json` on the mounted volume |
+| `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` | `true`; align with the Discord service |
+| `TRISHULA_HOT_SESSION_REUSE_ENABLED` | `true` initially; can be disabled independently |
+| `TRISHULA_NATIVE_COMPACTION_ENABLED` | `false` only |
+| `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` | `false` only |
+
+The runtime supplies defaults for the locked profile values below. Set them explicitly only when deployment visibility is useful. Any different locked literal fails startup.
+
+| Variable | Accepted/default value |
+| --- | --- |
+| `TRISHULA_LUNA_MODEL` | `gpt-5.6-luna` |
+| `TRISHULA_LUNA_REASONING_EFFORT` | `xhigh` |
+| `TRISHULA_LUNA_SERVICE_TIER` | `priority` |
+| `TRISHULA_LUNA_PROFILE_VERSION` | `luna-frontman-v1` |
+| `TRISHULA_LUNA_MAX_OUTPUT_TOKENS` | `8000` |
+| `TRISHULA_SOL_MODEL` | `gpt-5.6-sol` |
+| `TRISHULA_SOL_REASONING_EFFORT` | `ultra` |
+| `TRISHULA_SOL_SERVICE_TIER` | `priority` |
+| `TRISHULA_SOL_PROFILE_VERSION` | `sol-research-v1` |
+| `TRISHULA_SOL_MAX_OUTPUT_TOKENS` | `16000` |
+| `TRISHULA_PERSONALITY_VERSION` | `trishula-discord-v1` |
+| `TRISHULA_MODEL_CONTEXT_WINDOW` | `400000` |
+| `TRISHULA_RESEARCH_PACKET_TOKEN_TARGET` | `2500` |
+| `TRISHULA_RESEARCH_PACKET_MAX_BYTES` | `16384` only |
+| `TRISHULA_RECENT_TAIL_TOKEN_BUDGET` | `20000` only |
+| `TRISHULA_MAX_AUTONOMOUS_RECHECKS` | `2` only |
+| `TRISHULA_AMBIENT_MIN_CONFIDENCE` | `0.85` |
+| `TRISHULA_AMBIENT_MIN_ADDITIVE_VALUE` | `0.9` |
+| `TRISHULA_HOT_SESSION_IDLE_MS` | `3600000` |
+
+The visible provider tuples are Luna `gpt-5.6-luna` / `xhigh` / `priority` and Sol `gpt-5.6-sol` / `ultra` / `priority`. Pi maps its harness `max` level to the provider's locked Sol `ultra` value.
+
+## Rollout order
+
+Deploy the durable contract in this order:
+
+1. **Convex**: deploy schema, generated API, HTTP operations, guild conversation state, persisted turn stages, privacy controls, and outbox reconciliation first. Existing services must remain compatible while the new functions become available.
+2. **Pi**: deploy the locked frontman and Sol contracts, durable Luna reconstruction, content limits, and hard-false compaction controls. Verify `/health` and Codex OAuth before continuing.
+3. **Discord**: deploy the durable orchestrator and set `TRISHULA_DURABLE_CONVERSATIONS_ENABLED=true` only after Convex and Pi accept the new contracts.
+4. **Web**: deploy the server conversation status, reset, and privacy-deletion controls after the backend mutations are live.
+
+Do not deploy Discord before its required Convex operations and Pi profiles. That order can turn an explicit request into a partial stage with no safe recovery.
+
+## GitHub builds and Railway IaC
+
+Railway's source must point to `NarukeAlpha/ProjectTrishula`, branch `master`, for each code service. A push starts builds only when the service watch path matches the changed files.
+
+Preview infrastructure settings after the first push:
+
+```sh
+npm run railway:plan
+```
+
+The command requires the local Railway CLI to be authenticated and linked to the intended project and environment. If it reports that no project is linked, stop. Do not link or apply to an inferred target.
+
+Apply only after the plan contains the expected updates:
+
+```sh
 railway config apply
 ```
 
-The plan must contain only the expected updates before you apply it. The apply creates the code services and connects each GitHub source. Do not use `--show-values` or commit a literal secret to `.railway/railway.ts`.
-
 Railway omits its default `ON_FAILURE` restart policy and default 10-retry limit from exported configuration. The IaC file declares only non-default retry limits so repeated plans remain stable.
 
-Then run `bash scripts/railway/connect-github.sh` once. The script first requires a zero-drift IaC plan. It configures Railway references, generates missing service credentials through standard input, and starts fresh source deployments for the affected services. It does not set `DISCORD_BOT_TOKEN`.
+Then run `bash scripts/railway/connect-github.sh` once when GitHub sources still need connection. The script requires a zero-drift IaC plan. It configures Railway references, accepts generated service credentials through standard input, and starts fresh source deployments for affected services. It does not set `DISCORD_BOT_TOKEN`.
 
-Install and authenticate the Railway CLI before you use either command. The `railway` npm package in this repository supplies the typed IaC SDK; it is not the CLI executable.
+The `railway` npm package in this repository is the typed IaC SDK. It is not the Railway CLI executable.
+
+## Live gates and rollback
+
+Local type checks, tests, builds, and IaC validation do not prove production readiness. Do not claim go-live until live evidence covers:
+
+- the intended Convex deployment and generated functions;
+- Pi Codex OAuth access to both exact locked model tuples and the priority service tier;
+- a real Discord 2,000-code-point boundary, 320-code-point acknowledgment, mass-mention suppression, nonce deduplication, and uncertain-send reconciliation;
+- Pi, Discord, and Convex restarts at plan, acknowledgment, Sol, resume, and delivery boundaries without duplicate visible messages;
+- reset and privacy deletion while work or delivery is active;
+- the selected Convex backend's encryption-at-rest control, key-rotation policy, and backup deletion or cryptographic-erasure deadline;
+- cross-guild isolation, activity-feed redaction, explicit failure closure, source grounding, and newest-context suppression;
+- one shadow guild and one noncritical pilot with recorded latency, token, cost, ambient-chatter, and naturalness results.
+
+Keep native opaque compaction off. Its Pi `0.84.1` Codex OAuth compatibility, continuation, restart, privacy, and measurement spike is incomplete. Keep portable automatic checkpoints off. The repository has checkpoint contracts, bounded storage, expiry, and deletion plumbing, but it does not have an enabled execution path or verified storage-encryption evidence. The stored protection label is `platform_default_unverified`.
+
+Rollback controls are independent:
+
+- Disable Pi hot-session reuse without losing durable Convex history.
+- Disable the durable Discord gateway path to return to the compatibility runner without deleting canonical data.
+- Keep both compaction flags at their only accepted value, `false`.
+
+Do not delete canonical conversation records during rollback. Investigate any `delivery_uncertain` or `needs_reconciliation` record before another final delivery for that guild.

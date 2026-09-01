@@ -99,13 +99,8 @@ function storedMessage(
   message: Message,
   ownBotUserId?: string,
 ): StoredMessage | null {
-  if (
-    !message.inGuild() ||
-    message.webhookId ||
-    message.author.id === ownBotUserId
-  )
-    return null;
-  const content = message.content.trim().slice(0, 4_000);
+  if (!message.inGuild() || message.webhookId) return null;
+  const content = message.content.trim();
   const images = discordImageAttachments(message.attachments.values());
   if (!content && images.length === 0) return null;
   const payload: StoredMessage = {
@@ -113,11 +108,10 @@ function storedMessage(
     channelId: message.channelId,
     messageId: message.id,
     authorId: message.author.id,
-    authorName: (
+    authorName:
       message.member?.displayName ||
       message.author.globalName ||
-      message.author.username
-    ).slice(0, 200),
+      message.author.username,
     content,
     mentionsBot:
       ownBotUserId !== undefined
@@ -131,6 +125,9 @@ function storedMessage(
   if (images.length > 0) payload.images = images;
   if (message.reference?.messageId !== undefined) {
     payload.replyToMessageId = message.reference.messageId;
+  }
+  if (message.nonce !== null && message.nonce !== undefined) {
+    payload.nonce = String(message.nonce);
   }
   return payload;
 }

@@ -55,6 +55,7 @@ export class DiscordGatewayService {
       pi,
       workerId: this.workerId,
       heartbeatIntervalMs: config.leaseHeartbeatIntervalMs,
+      durableConversationsEnabled: config.durableConversationsEnabled,
     });
     this.gateway = new DiscordGateway({
       config,

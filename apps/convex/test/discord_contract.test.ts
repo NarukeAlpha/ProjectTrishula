@@ -87,6 +87,89 @@ describe("Discord gateway HTTP contract", () => {
     }).success).toBe(false);
   });
 
+  it("records the uncertain boundary before a Discord send", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "beginReplyDelivery",
+      actorId: "user_01HWORKOSALLOWED",
+      outboxId: "outbox_1",
+      deliveryToken: "delivery_1",
+    }).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "acknowledgeReply",
+      actorId: "user_01HWORKOSALLOWED",
+      outboxId: "outbox_1",
+      deliveryToken: "delivery_1",
+      status: "uncertain",
+    }).success).toBe(true);
+  });
+
+  it("PERS-008 persists every durable frontman stage behind the full fence", () => {
+    const common = {
+      actorId: "user_01HWORKOSALLOWED",
+      guildId: "123",
+      fence: {
+        sourceChannelId: "456",
+        runId: "run_1",
+        channelGeneration: 2,
+        conversationId: "discord:123",
+        epoch: 1,
+        conversationGeneration: 3,
+        routingGeneration: 4,
+        turnId: "turn_1",
+        conversationLeaseToken: "lease_1",
+      },
+    };
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "recordFrontmanPlan",
+      ...common,
+      requestId: "run_1:frontman-plan",
+      action: "research",
+      reasonCode: "explicit_needs_freshness",
+      payload: JSON.stringify({ action: "research" }),
+    }).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "recordResearchStarted",
+      ...common,
+      requestId: "run_1:sol:1",
+      normalizedRequest: JSON.stringify({ question: "What changed?" }),
+      inputContextHash: "a".repeat(64),
+      pass: 1,
+    }).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "recordResearchResult",
+      ...common,
+      requestId: "run_1:sol:1",
+      failureCode: "provider_unavailable",
+      failureDetail: "Public research was unavailable.",
+      failureRetryable: true,
+      sourceUrls: [],
+      serializedBytes: 0,
+      estimatedTokens: 0,
+      tokenEstimatorVersion: "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1",
+    }).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "recordFrontmanResume",
+      ...common,
+      requestId: "run_1:frontman-resume:1",
+      action: "send",
+      payload: JSON.stringify({ action: "send" }),
+      acknowledgementDelivery: "sent",
+      replyHash: "b".repeat(64),
+      eligibleThroughSequence: 5,
+      eligibleHumanRevision: 2,
+      eligibleContextHash: "c".repeat(64),
+    }).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "recordFrontmanPlan",
+      ...common,
+      fence: { ...common.fence, epoch: undefined },
+      requestId: "run_1:frontman-plan",
+      action: "research",
+      reasonCode: "explicit_needs_freshness",
+      payload: "{}",
+    }).success).toBe(false);
+  });
+
   it("accepts generated image metadata on a sent acknowledgement", () => {
     expect(discordGatewayRequestSchema.safeParse({
       operation: "acknowledgeReply",
@@ -135,6 +218,61 @@ describe("Discord gateway HTTP contract", () => {
       content: "Working on it.",
       recheckRequested: false,
       finalizesLoop: false,
+    }).success).toBe(false);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "enqueueReply",
+      actorId: "user_01HWORKOSALLOWED",
+      sourceChannelId: "123",
+      guildId: "456",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      idempotencyKey: "run_1:ack-oversize",
+      replyKind: "acknowledgement",
+      content: "😀".repeat(321),
+      recheckRequested: false,
+      finalizesLoop: false,
+    }).success).toBe(false);
+  });
+
+  it("uses a Unicode-aware 2,000-character boundary and a complete fence", () => {
+    const request = {
+      operation: "enqueueReply",
+      actorId: "user_01HWORKOSALLOWED",
+      sourceChannelId: "123",
+      guildId: "456",
+      channelId: "123",
+      runId: "run_1",
+      generation: 1,
+      conversation: {
+        conversationId: "discord:456",
+        epoch: 1,
+        generation: 2,
+        routingGeneration: 1,
+        turnId: "turn_1",
+        leaseToken: "lease_1",
+        eligibleHumanRevision: 3,
+      },
+      idempotencyKey: "run_1:reply",
+      replyKind: "final",
+      content: "😀".repeat(2_000),
+      recheckRequested: false,
+      finalizesLoop: true,
+    } as const;
+    expect(discordGatewayRequestSchema.safeParse(request).success).toBe(true);
+    const normalized = discordGatewayRequestSchema.parse({
+      ...request,
+      content: `  ${"😀".repeat(2_000)}  `,
+    });
+    expect(normalized.operation === "enqueueReply" ? normalized.content : null)
+      .toBe("😀".repeat(2_000));
+    expect(discordGatewayRequestSchema.safeParse({
+      ...request,
+      content: "😀".repeat(2_001),
+    }).success).toBe(false);
+    expect(discordGatewayRequestSchema.safeParse({
+      ...request,
+      conversation: { ...request.conversation, epoch: undefined },
     }).success).toBe(false);
   });
 

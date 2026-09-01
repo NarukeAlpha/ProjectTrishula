@@ -337,6 +337,25 @@ export interface DiscordChannelReadModel {
   loop?: DiscordLoopReadModel;
 }
 
+export interface DiscordModelProfileReadModel {
+  model: string;
+  reasoningEffort: string;
+  serviceTier: string;
+}
+
+export interface DiscordConversationStatusReadModel {
+  conversationId: string;
+  epoch: number;
+  revision: number;
+  humanRevision: number;
+  personalityVersion: string;
+  models: {
+    luna: DiscordModelProfileReadModel;
+    sol: DiscordModelProfileReadModel;
+  };
+  lastSuccessfulActivityAt?: number;
+}
+
 export interface DiscordGuildReadModel {
   guildId: string;
   name: string;
@@ -346,6 +365,7 @@ export interface DiscordGuildReadModel {
     conversationChannelId?: string;
     researchLogChannelId?: string;
   };
+  conversation?: DiscordConversationStatusReadModel;
   channels: DiscordChannelReadModel[];
 }
 
@@ -366,5 +386,25 @@ export interface DiscordGuildRoutingReadModel {
   guildId: string;
   conversationChannelId: string | null;
   researchLogChannelId: string | null;
+  conversationId?: string;
+  epoch?: number;
+  routingGeneration?: number;
   updatedAt: number;
+}
+
+export interface DiscordConversationResetReadModel {
+  guildId: string;
+  conversationId: string;
+  epoch: number;
+  generation: number;
+  routingGeneration: number;
+  resetAt: number;
+}
+
+export interface DiscordConversationPrivacyDeletionReadModel {
+  guildId: string;
+  conversationId: string;
+  deletedRecords: number;
+  epoch: number;
+  deletedAt: number;
 }

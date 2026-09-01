@@ -5,6 +5,8 @@ import type {
   DiscordActivityReadModel,
   DiscordChannelReadModel,
   DiscordChannelRole,
+  DiscordConversationPrivacyDeletionReadModel,
+  DiscordConversationResetReadModel,
   DiscordControlPlaneReadModel,
   DiscordGatewayStatus,
   DiscordGuildReadModel,
@@ -254,6 +256,7 @@ function ChannelRouteField({
   label,
   description,
   selectedChannel,
+  otherSelectedChannelId,
   busy,
   onSetPurpose,
 }: {
@@ -262,6 +265,7 @@ function ChannelRouteField({
   label: string;
   description: string;
   selectedChannel: DiscordChannelReadModel | undefined;
+  otherSelectedChannelId: string | undefined;
   busy: boolean;
   onSetPurpose: (
     guild: DiscordGuildReadModel,
@@ -294,8 +298,10 @@ function ChannelRouteField({
             key={channel.channelId}
             value={channel.channelId}
             disabled={
-              !channelSupportsPurpose(purpose, guild, channel) &&
-              channel.channelId !== selectedChannel?.channelId
+              (channel.channelId === otherSelectedChannelId &&
+                channel.channelId !== selectedChannel?.channelId) ||
+              (!channelSupportsPurpose(purpose, guild, channel) &&
+                channel.channelId !== selectedChannel?.channelId)
             }
           >
             #{channel.name}
@@ -381,6 +387,7 @@ function GuildCard({
             label="Conversation channel"
             description="Trishula reads, acknowledges, and replies here."
             selectedChannel={conversationChannel}
+            otherSelectedChannelId={researchChannel?.channelId}
             busy={busyPurpose !== null}
             onSetPurpose={onSetPurpose}
           />
@@ -390,11 +397,16 @@ function GuildCard({
             label="Research log channel"
             description="Long-running research progress stays out of the conversation."
             selectedChannel={researchChannel}
+            otherSelectedChannelId={conversationChannel?.channelId}
             busy={busyPurpose !== null}
             onSetPurpose={onSetPurpose}
           />
         </div>
       )}
+      <p className="discord-memory-note">
+        Changing the conversation channel keeps this server&apos;s Trishula
+        memory and current epoch.
+      </p>
       {loop && (
         <div className="loop-summary" aria-label="Agent loop status">
           <strong>{loopLabels[loop.status]}</strong>
@@ -418,6 +430,359 @@ function GuildCard({
         </p>
       )}
     </article>
+  );
+}
+
+function modelProfileLabel({
+  model,
+  reasoningEffort,
+  serviceTier,
+}: {
+  model: string;
+  reasoningEffort: string;
+  serviceTier: string;
+}) {
+  return `${model} · ${reasoningEffort} · ${serviceTier}`;
+}
+
+function resetConfirmationText(guildName: string) {
+  return `Reset Trishula memory for ${guildName}`;
+}
+
+function privacyDeletionConfirmationText(guildName: string) {
+  return `Delete retained Trishula data for ${guildName}`;
+}
+
+function ConversationResetControl({
+  guild,
+  onResetGuildConversation,
+}: {
+  guild: DiscordGuildReadModel;
+  onResetGuildConversation: (
+    guildId: string,
+  ) => Promise<DiscordConversationResetReadModel>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetEpoch, setResetEpoch] = useState<number | null>(null);
+  const requiredConfirmation = resetConfirmationText(guild.name);
+
+  async function resetMemory() {
+    if (confirmation !== requiredConfirmation) return;
+
+    setResetting(true);
+    setResetError(null);
+    setResetEpoch(null);
+    try {
+      const result = await onResetGuildConversation(guild.guildId);
+      setResetEpoch(result.epoch);
+      setConfirmation("");
+      setConfirming(false);
+    } catch {
+      setResetError("Trishula memory could not be reset. Try again.");
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  return (
+    <div className="discord-reset-panel">
+      <div>
+        <p className="section-kicker">Owner control</p>
+        <h3>Reset Trishula memory for this server</h3>
+        <p>
+          Reset starts a clean epoch for {guild.name}. It cancels active work
+          and makes prior Trishula context unavailable. It does not delete
+          Discord messages or audit records.
+        </p>
+      </div>
+      {!confirming ? (
+        <button
+          className="discord-reset-action"
+          type="button"
+          aria-expanded="false"
+          onClick={() => {
+            setConfirming(true);
+            setResetError(null);
+            setResetEpoch(null);
+          }}
+        >
+          Reset server memory
+        </button>
+      ) : (
+        <form
+          className="discord-reset-confirmation"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void resetMemory();
+          }}
+        >
+          <label htmlFor={`reset-confirmation-${guild.guildId}`}>
+            <span>
+              Type <strong>{requiredConfirmation}</strong> to confirm the server
+              and effect.
+            </span>
+            <input
+              id={`reset-confirmation-${guild.guildId}`}
+              aria-label="Reset confirmation"
+              autoComplete="off"
+              spellCheck={false}
+              value={confirmation}
+              disabled={resetting}
+              onChange={(event) => setConfirmation(event.target.value)}
+            />
+          </label>
+          <div className="discord-reset-actions">
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={resetting}
+              onClick={() => {
+                setConfirming(false);
+                setConfirmation("");
+                setResetError(null);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="discord-reset-action"
+              type="submit"
+              disabled={resetting || confirmation !== requiredConfirmation}
+            >
+              {resetting ? "Resetting…" : "Start clean epoch"}
+            </button>
+          </div>
+        </form>
+      )}
+      {resetError && (
+        <p className="discord-inline-error" role="alert">
+          {resetError}
+        </p>
+      )}
+      {resetEpoch !== null && (
+        <p className="discord-reset-success" role="status">
+          Trishula memory was reset for {guild.name}. Epoch {resetEpoch} is
+          active.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ConversationPrivacyControl({
+  guild,
+  onDeleteGuildConversationPrivacyData,
+}: {
+  guild: DiscordGuildReadModel;
+  onDeleteGuildConversationPrivacyData: (
+    guildId: string,
+  ) => Promise<DiscordConversationPrivacyDeletionReadModel>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deletionError, setDeletionError] = useState<string | null>(null);
+  const [deletedRecords, setDeletedRecords] = useState<number | null>(null);
+  const requiredConfirmation = privacyDeletionConfirmationText(guild.name);
+
+  async function deletePrivacyData() {
+    if (confirmation !== requiredConfirmation) return;
+
+    setDeleting(true);
+    setDeletionError(null);
+    setDeletedRecords(null);
+    try {
+      const result = await onDeleteGuildConversationPrivacyData(guild.guildId);
+      setDeletedRecords(result.deletedRecords);
+      setConfirmation("");
+      setConfirming(false);
+    } catch {
+      setDeletionError(
+        "Retained Trishula data could not be deleted. Try again.",
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="discord-reset-panel discord-privacy-panel">
+      <div>
+        <p className="section-kicker">Privacy control</p>
+        <h3>Delete retained Trishula data for this server</h3>
+        <p>
+          This fences active work and deletes retained source messages,
+          canonical history, research artifacts, checkpoints, outbox content,
+          and derived indexes for {guild.name}. It does not delete messages from
+          Discord. This action cannot be undone.
+        </p>
+      </div>
+      {!confirming ? (
+        <button
+          className="discord-reset-action discord-delete-action"
+          type="button"
+          aria-expanded="false"
+          onClick={() => {
+            setConfirming(true);
+            setDeletionError(null);
+            setDeletedRecords(null);
+          }}
+        >
+          Delete retained data
+        </button>
+      ) : (
+        <form
+          className="discord-reset-confirmation"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void deletePrivacyData();
+          }}
+        >
+          <label htmlFor={`privacy-confirmation-${guild.guildId}`}>
+            <span>
+              Type <strong>{requiredConfirmation}</strong> to confirm the server
+              and permanent deletion.
+            </span>
+            <input
+              id={`privacy-confirmation-${guild.guildId}`}
+              aria-label="Privacy deletion confirmation"
+              autoComplete="off"
+              spellCheck={false}
+              value={confirmation}
+              disabled={deleting}
+              onChange={(event) => setConfirmation(event.target.value)}
+            />
+          </label>
+          <div className="discord-reset-actions">
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={deleting}
+              onClick={() => {
+                setConfirming(false);
+                setConfirmation("");
+                setDeletionError(null);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="discord-reset-action discord-delete-action"
+              type="submit"
+              disabled={deleting || confirmation !== requiredConfirmation}
+            >
+              {deleting ? "Deleting…" : "Delete retained data"}
+            </button>
+          </div>
+        </form>
+      )}
+      {deletionError && (
+        <p className="discord-inline-error" role="alert">
+          {deletionError}
+        </p>
+      )}
+      {deletedRecords !== null && (
+        <p className="discord-reset-success" role="status">
+          Retained Trishula data was deleted for {guild.name}. Removed{" "}
+          {deletedRecords} records.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ConversationStatusCard({
+  guild,
+  onResetGuildConversation,
+  onDeleteGuildConversationPrivacyData,
+}: {
+  guild: DiscordGuildReadModel;
+  onResetGuildConversation: (
+    guildId: string,
+  ) => Promise<DiscordConversationResetReadModel>;
+  onDeleteGuildConversationPrivacyData?: (
+    guildId: string,
+  ) => Promise<DiscordConversationPrivacyDeletionReadModel>;
+}) {
+  const conversation = guild.conversation;
+
+  return (
+    <section
+      className="discord-conversation-status surface"
+      aria-labelledby={`conversation-status-${guild.guildId}`}
+    >
+      <div className="discord-section-heading">
+        <div>
+          <p className="section-kicker">Server memory</p>
+          <h2 id={`conversation-status-${guild.guildId}`}>
+            Conversation status
+          </h2>
+        </div>
+        {conversation && (
+          <span className="loop-pill">Epoch {conversation.epoch}</span>
+        )}
+      </div>
+      {conversation === undefined ? (
+        <p className="discord-conversation-empty">
+          Conversation status will appear after Trishula initializes this
+          server&apos;s durable memory.
+        </p>
+      ) : (
+        <>
+          <dl className="discord-conversation-facts">
+            <div>
+              <dt>Epoch</dt>
+              <dd>{conversation.epoch}</dd>
+            </div>
+            <div>
+              <dt>Revision</dt>
+              <dd>{conversation.revision}</dd>
+            </div>
+            <div>
+              <dt>Human revision</dt>
+              <dd>{conversation.humanRevision}</dd>
+            </div>
+            <div>
+              <dt>Personality</dt>
+              <dd>{conversation.personalityVersion}</dd>
+            </div>
+            <div>
+              <dt>Last successful activity</dt>
+              <dd>
+                {conversation.lastSuccessfulActivityAt === undefined
+                  ? "No successful activity yet"
+                  : formatAge(conversation.lastSuccessfulActivityAt)}
+              </dd>
+            </div>
+          </dl>
+          <div className="discord-model-profiles" aria-label="Model profiles">
+            <div>
+              <span>Luna frontman</span>
+              <code>{modelProfileLabel(conversation.models.luna)}</code>
+            </div>
+            <div>
+              <span>Sol research</span>
+              <code>{modelProfileLabel(conversation.models.sol)}</code>
+            </div>
+          </div>
+          <ConversationResetControl
+            guild={guild}
+            onResetGuildConversation={onResetGuildConversation}
+          />
+          {onDeleteGuildConversationPrivacyData !== undefined && (
+            <ConversationPrivacyControl
+              guild={guild}
+              onDeleteGuildConversationPrivacyData={
+                onDeleteGuildConversationPrivacyData
+              }
+            />
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -478,6 +843,8 @@ export function DiscordControlView({
   applicationId,
   model,
   onSetGuildRouting,
+  onResetGuildConversation,
+  onDeleteGuildConversationPrivacyData,
 }: {
   applicationId?: string;
   model: DiscordControlPlaneReadModel;
@@ -486,6 +853,12 @@ export function DiscordControlView({
     conversationChannelId: string | null,
     researchLogChannelId: string | null,
   ) => Promise<void>;
+  onResetGuildConversation: (
+    guildId: string,
+  ) => Promise<DiscordConversationResetReadModel>;
+  onDeleteGuildConversationPrivacyData?: (
+    guildId: string,
+  ) => Promise<DiscordConversationPrivacyDeletionReadModel>;
 }) {
   const [busyPurpose, setBusyPurpose] = useState<ServerChannelPurpose | null>(
     null,
@@ -517,6 +890,13 @@ export function DiscordControlView({
         purpose === "research"
           ? channelId
           : (channelForPurpose("research", guild)?.channelId ?? null);
+      if (
+        conversationChannelId !== null &&
+        conversationChannelId === researchLogChannelId
+      ) {
+        setError("Conversation and research log channels must be different.");
+        return;
+      }
       await onSetGuildRouting(
         guild.guildId,
         conversationChannelId,
@@ -536,8 +916,8 @@ export function DiscordControlView({
           <p className="page-kicker">Discord</p>
           <h1>Server routing</h1>
           <p>
-            Give each server one conversation channel and one quiet research
-            log.
+            Manage each server&apos;s conversation channel, quiet research log,
+            and durable Trishula memory.
           </p>
         </div>
       </header>
@@ -594,6 +974,14 @@ export function DiscordControlView({
                 busyPurpose={busyPurpose}
                 onSetPurpose={setPurpose}
               />
+              <ConversationStatusCard
+                key={`${selectedGuild.guildId}-conversation`}
+                guild={selectedGuild}
+                onResetGuildConversation={onResetGuildConversation}
+                onDeleteGuildConversationPrivacyData={
+                  onDeleteGuildConversationPrivacyData
+                }
+              />
               <ActivityFeed guild={selectedGuild} events={selectedActivity} />
             </>
           )}
@@ -610,6 +998,12 @@ export function DiscordControlPage({
 }) {
   const model = useQuery(publicApi.discord.getControlPlane, {});
   const setGuildRouting = useMutation(publicApi.discord.setGuildRouting);
+  const resetGuildConversation = useMutation(
+    publicApi.discord.resetGuildConversation,
+  );
+  const deleteGuildConversationPrivacyData = useMutation(
+    publicApi.discord.deleteGuildConversationPrivacyData,
+  );
 
   if (model === undefined) {
     return (
@@ -636,6 +1030,12 @@ export function DiscordControlPage({
           conversationChannelId,
           researchLogChannelId,
         }).then(() => undefined)
+      }
+      onResetGuildConversation={(guildId) =>
+        resetGuildConversation({ guildId, confirmGuildId: guildId })
+      }
+      onDeleteGuildConversationPrivacyData={(guildId) =>
+        deleteGuildConversationPrivacyData({ guildId, confirmGuildId: guildId })
       }
     />
   );

@@ -1,12 +1,18 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DiscordControlPlaneReadModel } from "../../convex/types";
+import type {
+  DiscordConversationPrivacyDeletionReadModel,
+  DiscordConversationResetReadModel,
+  DiscordControlPlaneReadModel,
+} from "../../convex/types";
 import { DiscordControlView } from "./DiscordControlPage";
 import { discordInstallUrl } from "./discordInstall";
 
@@ -29,6 +35,26 @@ function controlPlane(
           sendMessages: true,
           readMessageHistory: true,
           messageContent: true,
+        },
+        conversation: {
+          conversationId: "discord:guild_1",
+          epoch: 3,
+          revision: 17,
+          humanRevision: 11,
+          personalityVersion: "trishula-discord-v1",
+          models: {
+            luna: {
+              model: "gpt-5.6-luna",
+              reasoningEffort: "xhigh",
+              serviceTier: "priority",
+            },
+            sol: {
+              model: "gpt-5.6-sol",
+              reasoningEffort: "ultra",
+              serviceTier: "priority",
+            },
+          },
+          lastSuccessfulActivityAt: Date.now() - 60_000,
         },
         channels: [
           {
@@ -61,6 +87,17 @@ function controlPlane(
   };
 }
 
+function resetGuildConversation(guildId: string) {
+  return Promise.resolve({
+    guildId,
+    conversationId: `discord:${guildId}`,
+    epoch: 4,
+    generation: 8,
+    routingGeneration: 3,
+    resetAt: Date.now(),
+  });
+}
+
 afterEach(cleanup);
 
 describe("Discord control surface", () => {
@@ -74,6 +111,7 @@ describe("Discord control surface", () => {
         applicationId="1114379702015111228"
         model={controlPlane()}
         onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
@@ -84,7 +122,11 @@ describe("Discord control surface", () => {
 
   it("shows exactly two server-level routes instead of channel cards", () => {
     render(
-      <DiscordControlView model={controlPlane()} onSetGuildRouting={vi.fn()} />,
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
     );
 
     expect(
@@ -108,37 +150,47 @@ describe("Discord control surface", () => {
     firstChannel.roles = ["conversation_monitor"];
     secondChannel.roles = ["reply_target", "research_log"];
 
-    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
 
     expect(
       screen.getByRole("combobox", { name: "Conversation channel" }),
     ).toHaveValue("");
   });
 
-  it("moves a server route and preserves the other purpose", async () => {
+  it("rejects one channel assigned to both server roles", async () => {
     const onSetGuildRouting = vi.fn().mockResolvedValue(undefined);
     render(
       <DiscordControlView
         model={controlPlane()}
         onSetGuildRouting={onSetGuildRouting}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
     expect(screen.getByText("12 messages waiting")).toBeVisible();
+    expect(
+      screen
+        .getByRole("combobox", { name: "Research log channel" })
+        .querySelector('option[value="channel_1"]'),
+    ).toBeDisabled();
 
     fireEvent.change(
       screen.getByRole("combobox", { name: "Research log channel" }),
       { target: { value: "channel_1" } },
     );
 
-    await waitFor(() => {
-      expect(onSetGuildRouting).toHaveBeenCalledOnce();
-      expect(onSetGuildRouting).toHaveBeenCalledWith(
-        "guild_1",
-        "channel_1",
-        "channel_1",
-      );
-    });
+    expect(
+      await screen.findByText(
+        "Conversation and research log channels must be different.",
+      ),
+    ).toBeVisible();
+    expect(onSetGuildRouting).not.toHaveBeenCalled();
   });
 
   it("selects and updates one server at a time", async () => {
@@ -176,6 +228,7 @@ describe("Discord control surface", () => {
       <DiscordControlView
         model={model}
         onSetGuildRouting={onSetGuildRouting}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
@@ -255,7 +308,13 @@ describe("Discord control surface", () => {
       ],
     });
 
-    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
 
     expect(screen.getByText("Acknowledgment sent")).toBeVisible();
     expect(screen.queryByText("Writing reply")).not.toBeInTheDocument();
@@ -266,6 +325,171 @@ describe("Discord control surface", () => {
 
     expect(screen.getByText("Writing reply")).toBeVisible();
     expect(screen.queryByText("Acknowledgment sent")).not.toBeInTheDocument();
+  });
+
+  it("shows content-free conversation status and confirms a memory reset", async () => {
+    let resolveReset:
+      | ((result: DiscordConversationResetReadModel) => void)
+      | undefined;
+    const resetPending = new Promise<DiscordConversationResetReadModel>(
+      (resolve) => {
+        resolveReset = resolve;
+      },
+    );
+    const onResetGuildConversation = vi.fn(() => resetPending);
+
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={onResetGuildConversation}
+      />,
+    );
+
+    const statusHeading = screen.getByRole("heading", {
+      name: "Conversation status",
+    });
+    const status = statusHeading.closest("section");
+    if (!status) throw new Error("The conversation status card is missing.");
+
+    expect(within(status).getByText("17")).toBeVisible();
+    expect(within(status).getByText("11")).toBeVisible();
+    expect(within(status).getByText("trishula-discord-v1")).toBeVisible();
+    expect(
+      within(status).getByText("gpt-5.6-luna · xhigh · priority"),
+    ).toBeVisible();
+    expect(
+      within(status).getByText("gpt-5.6-sol · ultra · priority"),
+    ).toBeVisible();
+    expect(
+      within(status).queryByText("discord:guild_1"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(status).getByRole("button", { name: "Reset server memory" }),
+    );
+
+    expect(
+      within(status).getByText(
+        /It does not delete Discord messages or audit records\./,
+      ),
+    ).toBeVisible();
+    const confirmation = within(status).getByRole("textbox", {
+      name: "Reset confirmation",
+    });
+    const submit = within(status).getByRole("button", {
+      name: "Start clean epoch",
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(confirmation, {
+      target: { value: "Reset Trishula memory for another server" },
+    });
+    expect(submit).toBeDisabled();
+    fireEvent.change(confirmation, {
+      target: { value: "Reset Trishula memory for Market Desk" },
+    });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    expect(onResetGuildConversation).toHaveBeenCalledOnce();
+    expect(onResetGuildConversation).toHaveBeenCalledWith("guild_1");
+    expect(
+      within(status).queryByText(/Epoch 4 is active\./),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveReset?.({
+        guildId: "guild_1",
+        conversationId: "discord:guild_1",
+        epoch: 4,
+        generation: 8,
+        routingGeneration: 3,
+        resetAt: Date.now(),
+      });
+    });
+
+    expect(
+      within(status).getByText(
+        "Trishula memory was reset for Market Desk. Epoch 4 is active.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("keeps privacy deletion separate and requires the exact server confirmation", async () => {
+    const onDeleteGuildConversationPrivacyData = vi
+      .fn<
+        (
+          guildId: string,
+        ) => Promise<DiscordConversationPrivacyDeletionReadModel>
+      >()
+      .mockResolvedValue({
+        guildId: "guild_1",
+        conversationId: "discord:guild_1",
+        deletedRecords: 42,
+        epoch: 4,
+        deletedAt: Date.now(),
+      });
+
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+        onDeleteGuildConversationPrivacyData={
+          onDeleteGuildConversationPrivacyData
+        }
+      />,
+    );
+
+    const statusHeading = screen.getByRole("heading", {
+      name: "Conversation status",
+    });
+    const status = statusHeading.closest("section");
+    if (!status) throw new Error("The conversation status card is missing.");
+
+    expect(
+      within(status).getByText(/It does not delete messages from Discord\./),
+    ).toBeVisible();
+    expect(
+      within(status).getByText(
+        /It does not delete Discord messages or audit records\./,
+      ),
+    ).toBeVisible();
+
+    fireEvent.click(
+      within(status).getByRole("button", { name: "Delete retained data" }),
+    );
+
+    const confirmation = within(status).getByRole("textbox", {
+      name: "Privacy deletion confirmation",
+    });
+    const submit = within(status).getByRole("button", {
+      name: "Delete retained data",
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(confirmation, {
+      target: { value: "Delete retained Trishula data for another server" },
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(confirmation, {
+      target: { value: "Delete retained Trishula data for Market Desk" },
+    });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(onDeleteGuildConversationPrivacyData).toHaveBeenCalledWith(
+        "guild_1",
+      ),
+    );
+    expect(
+      within(status).getByText(
+        "Retained Trishula data was deleted for Market Desk. Removed 42 records.",
+      ),
+    ).toBeVisible();
   });
 
   it("shows a disconnected gateway and blocks unavailable channel routes", () => {
@@ -296,7 +520,13 @@ describe("Discord control surface", () => {
       ],
     });
 
-    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
 
     expect(screen.getByText("The Discord gateway is offline.")).toBeVisible();
     const conversation = screen.getByRole("combobox", {
@@ -327,6 +557,7 @@ describe("Discord control surface", () => {
           guilds: [],
         }}
         onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
@@ -344,12 +575,13 @@ describe("Discord control surface", () => {
       <DiscordControlView
         model={controlPlane()}
         onSetGuildRouting={() => Promise.reject(new Error("unavailable"))}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
     fireEvent.change(
       screen.getByRole("combobox", { name: "Research log channel" }),
-      { target: { value: "channel_1" } },
+      { target: { value: "" } },
     );
 
     expect(
