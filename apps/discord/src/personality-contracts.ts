@@ -203,7 +203,7 @@ export const researchPacketSchema = z.object({
     evidence: z.string().trim().min(1).max(800),
     sourceIds: z.array(stableIdSchema).min(1).max(6),
     kind: z.enum(["fact", "inference"]),
-  }).strict()).max(8),
+  }).strict()).min(1).max(8),
   sources: z.array(z.object({
     id: stableIdSchema,
     title: z.string().trim().min(1).max(300),
@@ -212,7 +212,7 @@ export const researchPacketSchema = z.object({
     publishedAt: isoDateTime.optional(),
     accessedAt: isoDateTime,
     primary: z.boolean(),
-  }).strict()).max(12),
+  }).strict()).min(1).max(12),
   uncertainties: z.array(z.string().trim().min(1).max(800)).max(6),
   trustedChart: z.object({
     artifactId: stableIdSchema,
@@ -227,13 +227,6 @@ export const researchPacketSchema = z.object({
       code: "custom",
       path: ["sources"],
       message: "Research source IDs must be unique.",
-    });
-  }
-  if (packet.freshness.status === "current" && packet.sources.length === 0) {
-    context.addIssue({
-      code: "custom",
-      path: ["sources"],
-      message: "Current research requires at least one source.",
     });
   }
   for (const [findingIndex, finding] of packet.findings.entries()) {

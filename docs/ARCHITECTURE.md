@@ -64,7 +64,7 @@ Internal plan and research events remain durable only for recovery and audit. Th
 
 Convex creates an idempotent outbox record before a turn completes. Each record persists a stable Discord nonce and payload hash before the first send. The gateway sends the exact payload with `enforce_nonce: true` and `allowedMentions.parse` empty.
 
-The gateway marks a record sent only after Discord returns a message ID. A timeout after possible acceptance enters `delivery_uncertain`. Gateway events and bounded Discord history can reconcile a matching channel, bot author, nonce, and payload hash. If the nonce window may have expired and delivery cannot be proved, the record enters `needs_reconciliation` and blocks a competing finalizer. The gateway does not blindly resend it.
+The gateway marks a record sent only after Discord returns a message ID. A timeout after possible acceptance enters `delivery_uncertain`. Gateway events and bounded Discord history can reconcile a matching channel, bot author, nonce, and payload hash. If the nonce window may have expired and delivery cannot be proved, the record enters `needs_reconciliation`, emits a content-free operator alert, and blocks a competing finalizer. The gateway does not blindly resend it.
 
 Final and clarifying messages allow at most 2,000 Unicode code points. Research acknowledgments allow at most 320. Pi, gateway contracts, Convex, and the dispatcher normalize and count content consistently. Oversize model output gets one bounded repair and then fails closed. Delivery never silently slices content.
 
@@ -72,7 +72,7 @@ Final and clarifying messages allow at most 2,000 Unicode code points. Research 
 
 An owner-authorized reset preserves the logical conversation ID and increments its epoch and fencing generations. It cancels the active old-epoch turn, invalidates checkpoint and hot-session reuse, and cancels unsent old-epoch outbox work. A message that Discord may already have accepted reconciles only into the old epoch's audit state. Reset does not delete source Discord messages.
 
-Privacy deletion is separate. It first fences active guild and channel state. It then removes retained canonical events, turns, research artifacts, checkpoint data, source-message lookup data, outbox content, and derived tail indexes for that guild. Wrong-owner requests fail without changing data.
+Privacy deletion is separate. It first refuses deletion while a Discord delivery remains uncertain, then fences active guild and channel state. It removes retained canonical events, turns, research artifacts, checkpoint data, source-message lookup data, outbox content, and derived tail indexes for that guild. The conversation retains only a deletion timestamp and a synthetic Discord snowflake cursor, which prevents gateway reconciliation from importing pre-deletion history again. Wrong-owner requests fail without changing data.
 
 ## Compaction status
 

@@ -486,6 +486,7 @@ export const researchPacketSchema = z
           })
           .strict(),
       )
+      .min(1)
       .max(8),
     sources: z
       .array(
@@ -501,6 +502,7 @@ export const researchPacketSchema = z
           })
           .strict(),
       )
+      .min(1)
       .max(12),
     uncertainties: z.array(z.string().trim().min(1).max(800)).max(6),
     trustedChart: z
@@ -521,13 +523,6 @@ export const researchPacketSchema = z
         code: "custom",
         path: ["sources"],
         message: "Research source IDs must be unique.",
-      });
-    }
-    if (packet.freshness.status === "current" && packet.sources.length === 0) {
-      context.addIssue({
-        code: "custom",
-        path: ["sources"],
-        message: "Current research requires at least one source.",
       });
     }
     for (const [findingIndex, finding] of packet.findings.entries()) {

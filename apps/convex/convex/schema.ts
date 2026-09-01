@@ -164,6 +164,8 @@ export const discordActivityEventTypeValidator = v.union(
   v.literal("reply_queued"),
   v.literal("reply_sent"),
   v.literal("reply_failed"),
+  v.literal("delivery_uncertain"),
+  v.literal("delivery_reconciliation_required"),
   v.literal("loop_completed"),
   v.literal("loop_failed"),
 );
@@ -602,6 +604,8 @@ export default defineSchema({
     solReasoningEffort: v.string(),
     solServiceTier: v.string(),
     migrationWatermarkSequence: v.number(),
+    privacyDeletedAt: v.optional(v.number()),
+    privacyReconciliationAfterMessageId: v.optional(v.string()),
     lastSuccessfulActivityAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),

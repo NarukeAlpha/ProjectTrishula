@@ -290,6 +290,8 @@ export type DiscordActivityEventType =
   | "reply_queued"
   | "reply_sent"
   | "reply_failed"
+  | "delivery_uncertain"
+  | "delivery_reconciliation_required"
   | "loop_completed"
   | "loop_failed";
 

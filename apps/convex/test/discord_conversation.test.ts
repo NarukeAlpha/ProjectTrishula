@@ -5,6 +5,8 @@ import {
   DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
   discordConversationId,
   discordConversationLeaseToken,
+  discordPrivacyDeletionBlocked,
+  discordSnowflakeUpperBound,
   discordUnicodeLength,
   isCurrentDiscordConversationFence,
   portableCheckpointRestorable,
@@ -74,6 +76,31 @@ describe("Discord canonical conversation invariants", () => {
     const first = discordConversationLeaseToken("discord:123", 0, 1, "turn", "worker");
     expect(first).toBe(discordConversationLeaseToken("discord:123", 0, 1, "turn", "worker"));
     expect(first).not.toBe(discordConversationLeaseToken("discord:456", 0, 1, "turn", "worker"));
+  });
+
+  it("creates a Discord history cursor after every message in the deletion millisecond", () => {
+    const timestamp = 1_788_200_000_123;
+    const cursor = BigInt(discordSnowflakeUpperBound(timestamp));
+    expect(Number((cursor >> 22n) + 1_420_070_400_000n)).toBe(timestamp);
+    expect(cursor & ((1n << 22n) - 1n)).toBe((1n << 22n) - 1n);
+  });
+
+  it("blocks privacy deletion while a guild delivery outcome is unresolved", () => {
+    expect(discordPrivacyDeletionBlocked("123", [{
+      guildId: "123",
+      sourceGuildId: "123",
+      status: "delivery_uncertain",
+    }])).toBe(true);
+    expect(discordPrivacyDeletionBlocked("123", [{
+      guildId: "456",
+      sourceGuildId: "456",
+      status: "needs_reconciliation",
+    }])).toBe(false);
+    expect(discordPrivacyDeletionBlocked("123", [{
+      guildId: "123",
+      sourceGuildId: "123",
+      status: "pending",
+    }])).toBe(false);
   });
 
   it("uses the shared Unicode character boundary without truncation", () => {

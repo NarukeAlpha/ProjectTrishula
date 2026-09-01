@@ -57,6 +57,17 @@ describe("bounded Sol evidence handoff", () => {
     }), { evidenceUrls: new Set(["https://ir.amd.com/filing"]) })).toThrow();
   });
 
+  it("fails closed when a limited or unknown packet has no evidence", () => {
+    for (const status of ["limited", "unknown"] as const) {
+      expect(() => validateResearchPacket(packet({
+        freshness: { status, detail: "No source could be verified." },
+        summary: "XYZ is trading at 999.",
+        findings: [],
+        sources: [],
+      }), { evidenceUrls: new Set() })).toThrow();
+    }
+  });
+
   it("rejects an untrusted chart reference and a packet over the hard byte limit", () => {
     expect(() => validateResearchPacket(packet({
       trustedChart: {

@@ -129,6 +129,12 @@ describe("durable personality contracts", () => {
     expect(researchPacketSchema.safeParse({ ...packet, sources: [] }).success).toBe(false);
     expect(researchPacketSchema.safeParse({
       ...packet,
+      freshness: { status: "unknown", detail: "No source could be verified." },
+      findings: [],
+      sources: [],
+    }).success).toBe(false);
+    expect(researchPacketSchema.safeParse({
+      ...packet,
       findings: [{ ...packet.findings[0], sourceIds: ["missing_source"] }],
     }).success).toBe(false);
   });

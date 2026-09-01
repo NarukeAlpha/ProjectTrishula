@@ -155,4 +155,4 @@ Rollback controls are independent:
 - Disable the durable Discord gateway path to return to the compatibility runner without deleting canonical data.
 - Keep both compaction flags at their only accepted value, `false`.
 
-Do not delete canonical conversation records during rollback. Investigate any `delivery_uncertain` or `needs_reconciliation` record before another final delivery for that guild.
+Do not delete canonical conversation records during rollback. The activity feed reports `delivery_uncertain` and `delivery_reconciliation_required` without message content. Investigate either state before another final delivery or privacy deletion for that guild.

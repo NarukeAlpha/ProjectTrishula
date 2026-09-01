@@ -51,6 +51,8 @@ import {
   DISCORD_RECENT_TAIL_TOKEN_BUDGET,
   discordConversationId,
   discordConversationLeaseToken,
+  discordPrivacyDeletionBlocked,
+  discordSnowflakeUpperBound,
   isCurrentDiscordConversationFence,
   portableCheckpointRestorable,
   portableConversationSummarySchema,
@@ -544,6 +546,26 @@ async function discordChannelState(
     .query("discordChannelStates")
     .withIndex("by_owner_channel", (index) => index.eq("ownerId", ownerId).eq("channelId", channelId))
     .unique();
+}
+
+async function discordHistoryAfterMessageId(
+  ctx: DiscordReader,
+  ownerId: string,
+  guildId: string,
+  channelId: string,
+): Promise<string | null> {
+  const latestMessage = await ctx.db
+    .query("discordMessages")
+    .withIndex("by_owner_channel_sequence", (index) => index
+      .eq("ownerId", ownerId)
+      .eq("channelId", channelId))
+    .order("desc")
+    .first();
+  if (latestMessage !== null) return latestMessage.messageId;
+  const conversation = await assistantConversationByGuild(ctx, guildId);
+  return conversation?.ownerId === ownerId
+    ? conversation.privacyReconciliationAfterMessageId ?? null
+    : null;
 }
 
 async function assistantConversationByGuild(
@@ -1052,6 +1074,15 @@ async function resetAssistantConversation(
         deliveryLeaseExpiresAt: undefined,
         updatedAt: now,
       });
+      await recordActivity(ctx, conversation.ownerId, {
+        eventId: `${reply.outboxId}:delivery-reconciliation-required`,
+        guildId: reply.sourceGuildId,
+        channelId: reply.sourceChannelId,
+        runId: reply.runId,
+        eventType: "delivery_reconciliation_required",
+        replyKind: reply.replyKind
+          ?? (reply.finalizesLoop ? "final" : "research_log"),
+      }, now);
     }
     if (reply.canonicalEventId !== undefined) {
       const event = await ctx.db
@@ -1731,6 +1762,14 @@ export const deleteGuildConversationPrivacyData = mutation({
       throw new Error("Discord conversation not found.");
     }
     const now = Date.now();
+    const ownerOutbox = await ctx.db.query("discordOutbox")
+      .withIndex("by_owner_status_createdAt", (index) => index.eq("ownerId", actor.id))
+      .collect();
+    if (discordPrivacyDeletionBlocked(guildId, ownerOutbox)) {
+      throw new Error(
+        "Privacy deletion is blocked until uncertain Discord delivery is reconciled.",
+      );
+    }
     const epoch = await resetAssistantConversation(
       ctx,
       conversation,
@@ -1745,9 +1784,6 @@ export const deleteGuildConversationPrivacyData = mutation({
       .collect();
     const ownerRuns = await ctx.db.query("discordLoopRuns")
       .withIndex("by_owner_run", (index) => index.eq("ownerId", actor.id))
-      .collect();
-    const ownerOutbox = await ctx.db.query("discordOutbox")
-      .withIndex("by_owner_status_createdAt", (index) => index.eq("ownerId", actor.id))
       .collect();
     const ownerActivity = await ctx.db.query("discordActivityEvents")
       .withIndex("by_owner_createdAt", (index) => index.eq("ownerId", actor.id))
@@ -1791,6 +1827,8 @@ export const deleteGuildConversationPrivacyData = mutation({
       leaseExpiresAt: undefined,
       activeCheckpointId: undefined,
       migrationWatermarkSequence: 0,
+      privacyDeletedAt: now,
+      privacyReconciliationAfterMessageId: discordSnowflakeUpperBound(now),
       updatedAt: now,
     });
     return {
@@ -2158,17 +2196,15 @@ export const syncGuilds = internalMutation({
     const monitoredChannels: MonitoredChannelCursor[] = [];
     for (const channel of synchronizedChannels) {
       if (!channel.available || !hasRole(channel, "conversation_monitor")) continue;
-      const latestMessage = await ctx.db
-        .query("discordMessages")
-        .withIndex("by_owner_channel_sequence", (index) => index
-          .eq("ownerId", ownerId)
-          .eq("channelId", channel.channelId))
-        .order("desc")
-        .first();
       const cursor: MonitoredChannelCursor = {
         guildId: channel.guildId,
         channelId: channel.channelId,
-        afterMessageId: latestMessage?.messageId ?? null,
+        afterMessageId: await discordHistoryAfterMessageId(
+          ctx,
+          ownerId,
+          channel.guildId,
+          channel.channelId,
+        ),
       };
       monitoredChannels.push(cursor);
     }
@@ -2191,17 +2227,15 @@ export const syncGuilds = internalMutation({
         && candidate.canReadHistory
       );
       if (channel === undefined) continue;
-      const latestMessage = await ctx.db
-        .query("discordMessages")
-        .withIndex("by_owner_channel_sequence", (index) => index
-          .eq("ownerId", ownerId)
-          .eq("channelId", channelId))
-        .order("desc")
-        .first();
       monitoredChannels.push({
         guildId: channel.guildId,
         channelId,
-        afterMessageId: latestMessage?.messageId ?? null,
+        afterMessageId: await discordHistoryAfterMessageId(
+          ctx,
+          ownerId,
+          channel.guildId,
+          channelId,
+        ),
       });
     }
     return {
@@ -3255,6 +3289,8 @@ export const recordResearchResult = internalMutation({
       || !Number.isSafeInteger(args.estimatedTokens)
       || args.estimatedTokens < 0
       || args.sourceUrls.length > 12
+      || (args.packet !== undefined && args.sourceUrls.length === 0)
+      || (args.packet !== undefined && args.freshness === undefined)
       || args.tokenEstimatorVersion
         !== "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1"
     ) return { accepted: false as const, reason: "research_result_invalid" as const };
@@ -4439,6 +4475,15 @@ export const acknowledgeReply = internalMutation({
         deliveryLeaseExpiresAt: undefined,
         updatedAt: now,
       });
+      await recordActivity(ctx, ownerId, {
+        eventId: `${outbox.outboxId}:delivery-uncertain`,
+        guildId: outbox.sourceGuildId,
+        channelId: outbox.sourceChannelId,
+        runId: outbox.runId,
+        eventType: "delivery_uncertain",
+        replyKind: outbox.replyKind
+          ?? (outbox.finalizesLoop ? "final" : "research_log"),
+      }, now);
       return {
         accepted: true as const,
         duplicate: false,
@@ -4589,6 +4634,15 @@ export const listRunnable = internalMutation({
           deliveryLeaseExpiresAt: undefined,
           updatedAt: now,
         });
+        await recordActivity(ctx, ownerId, {
+          eventId: `${reply.outboxId}:delivery-reconciliation-required`,
+          guildId: reply.sourceGuildId,
+          channelId: reply.sourceChannelId,
+          runId: reply.runId,
+          eventType: "delivery_reconciliation_required",
+          replyKind: reply.replyKind
+            ?? (reply.finalizesLoop ? "final" : "research_log"),
+        }, now);
         continue;
       }
       const state = await discordChannelState(ctx, ownerId, reply.sourceChannelId);

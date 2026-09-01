@@ -3,6 +3,35 @@ import { z } from "zod";
 export const DISCORD_CONVERSATION_LEASE_MS = 120_000;
 export const DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES = 512 * 1_024;
 export const DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
+const DISCORD_EPOCH_MS = 1_420_070_400_000;
+const DISCORD_SNOWFLAKE_LOW_BITS = (1n << 22n) - 1n;
+
+export function discordSnowflakeUpperBound(timestamp: number): string {
+  if (!Number.isSafeInteger(timestamp) || timestamp < DISCORD_EPOCH_MS) {
+    throw new Error("Discord privacy boundary timestamp is invalid.");
+  }
+  return (
+    (BigInt(timestamp - DISCORD_EPOCH_MS) << 22n)
+    | DISCORD_SNOWFLAKE_LOW_BITS
+  ).toString();
+}
+
+export function discordPrivacyDeletionBlocked(
+  guildId: string,
+  replies: readonly {
+    guildId: string;
+    sourceGuildId: string;
+    status: string;
+  }[],
+): boolean {
+  return replies.some((reply) =>
+    (reply.guildId === guildId || reply.sourceGuildId === guildId)
+    && (
+      reply.status === "delivery_uncertain"
+      || reply.status === "needs_reconciliation"
+    )
+  );
+}
 export const DISCORD_RECENT_TAIL_TOKEN_BUDGET = 20_000;
 export const DISCORD_RECENT_TAIL_ESTIMATOR_VERSION =
   "utf8-bytes-div-3-plus-message-overhead:v1";

@@ -273,6 +273,15 @@ describe("Discord control surface", () => {
           createdAt: Date.now(),
         },
         {
+          eventId: "run_1:delivery-reconciliation-required",
+          guildId: "guild_1",
+          channelId: "channel_1",
+          runId: "run_1",
+          eventType: "delivery_reconciliation_required",
+          replyKind: "final",
+          createdAt: Date.now(),
+        },
+        {
           eventId: "run_2:researching",
           guildId: "guild_2",
           channelId: "channel_2",
@@ -317,6 +326,9 @@ describe("Discord control surface", () => {
     );
 
     expect(screen.getByText("Acknowledgment sent")).toBeVisible();
+    expect(
+      screen.getByText("Delivery blocked for reconciliation"),
+    ).toBeVisible();
     expect(screen.queryByText("Writing reply")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Server"), {

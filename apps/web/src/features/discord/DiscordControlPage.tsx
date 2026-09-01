@@ -39,6 +39,12 @@ function activityLabel(event: DiscordActivityReadModel): string {
   if (event.eventType === "loop_started") return "Reviewing chat";
   if (event.eventType === "loop_completed") return "Loop complete";
   if (event.eventType === "loop_failed") return "Loop failed";
+  if (event.eventType === "delivery_uncertain") {
+    return "Delivery needs verification";
+  }
+  if (event.eventType === "delivery_reconciliation_required") {
+    return "Delivery blocked for reconciliation";
+  }
   if (event.eventType === "stage_changed") {
     return event.stage === undefined ? "Loop updated" : loopLabels[event.stage];
   }
