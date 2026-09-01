@@ -121,6 +121,43 @@ const guild = z.object({
   channels: z.array(channel).max(500),
 }).strict();
 
+const conversationFence = z.object({
+  conversationId: id,
+  epoch: z.number().int().positive(),
+  generation: z.number().int().positive(),
+  routingGeneration: z.number().int().positive(),
+  turnId: id,
+  leaseToken: id,
+  eligibleHumanRevision: z.number().int().nonnegative().optional(),
+}).strict();
+
+const durableRunFence = z.object({
+  runId: id,
+  conversationId: id,
+  epoch: z.number().int().positive(),
+  conversationGeneration: z.number().int().positive(),
+  routingGeneration: z.number().int().positive(),
+  turnId: id,
+  conversationLeaseToken: id,
+}).strict();
+
+const durableStageFence = z.object({
+  sourceChannelId: id,
+  runId: id,
+  channelGeneration: z.number().int().positive(),
+  conversationId: id,
+  epoch: z.number().int().nonnegative(),
+  conversationGeneration: z.number().int().positive(),
+  routingGeneration: z.number().int().positive(),
+  turnId: id,
+  conversationLeaseToken: id,
+}).strict();
+
+const discordReplyContent = z.string().trim().min(1).refine(
+  (value) => Array.from(value).length <= 2_000,
+  "Discord reply content exceeds 2,000 Unicode characters.",
+);
+
 export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("syncGuilds"),
@@ -146,6 +183,8 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     mentionsBot: z.boolean(),
     isBot: z.boolean(),
     replyToMessageId: id.optional(),
+    nonce: id.optional(),
+    payloadHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     createdAt: timestamp,
   }).strict().superRefine((message, context) => {
     if (message.content.trim().length === 0 && (message.images?.length ?? 0) === 0) {
@@ -169,6 +208,79 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     actorId: id,
     guildId: id,
     channelId: id,
+    run: durableRunFence.optional(),
+  }).strict(),
+  z.object({
+    operation: z.literal("recordFrontmanPlan"),
+    actorId: id,
+    guildId: id,
+    fence: durableStageFence,
+    requestId: id,
+    action: z.enum(["silent", "reply", "clarify", "research"]),
+    reasonCode: id,
+    payload: z.string().trim().min(2).max(32 * 1_024),
+  }).strict(),
+  z.object({
+    operation: z.literal("recordResearchStarted"),
+    actorId: id,
+    guildId: id,
+    fence: durableStageFence,
+    requestId: id,
+    normalizedRequest: z.string().trim().min(2).max(16 * 1_024),
+    inputContextHash: z.string().regex(/^[a-f0-9]{16,64}$/),
+    pass: z.number().int().min(1).max(2),
+  }).strict(),
+  z.object({
+    operation: z.literal("recordResearchResult"),
+    actorId: id,
+    guildId: id,
+    fence: durableStageFence,
+    requestId: id,
+    packet: z.string().trim().min(2).max(16_384).optional(),
+    failureCode: id.optional(),
+    failureDetail: z.string().trim().min(1).max(500).optional(),
+    failureRetryable: z.boolean().optional(),
+    freshness: z.enum(["current", "limited", "unknown"]).optional(),
+    sourceUrls: z.array(z.url().refine((value) => new URL(value).protocol === "https:")).max(12),
+    trustedChartArtifactId: id.optional(),
+    trustedChartSpec: z.string().trim().min(2).max(64 * 1_024).optional(),
+    serializedBytes: z.number().int().min(0).max(16_384),
+    estimatedTokens: z.number().int().nonnegative(),
+    tokenEstimatorVersion: z.literal(
+      "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1",
+    ),
+  }).strict().superRefine((value, context) => {
+    if ((value.packet === undefined) === (value.failureCode === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "A research result requires one packet or one failure.",
+      });
+    }
+    if (
+      value.failureCode === undefined
+        ? value.failureDetail !== undefined || value.failureRetryable !== undefined
+        : value.failureDetail === undefined || value.failureRetryable === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "A research failure requires bounded detail and retry classification.",
+      });
+    }
+  }),
+  z.object({
+    operation: z.literal("recordFrontmanResume"),
+    actorId: id,
+    guildId: id,
+    fence: durableStageFence,
+    requestId: id,
+    action: z.enum(["send", "suppress", "recheck"]),
+    payload: z.string().trim().min(2).max(32 * 1_024),
+    acknowledgementDelivery: z.enum(["not_required", "pending", "sent", "uncertain"]),
+    replyHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    eligibleThroughSequence: z.number().int().positive(),
+    eligibleHumanRevision: z.number().int().nonnegative(),
+    eligibleContextHash: z.string().regex(/^[a-f0-9]{16,64}$/),
+    nextExplicitTriggerSequence: z.number().int().positive().optional(),
   }).strict(),
   z.object({
     operation: z.literal("completeLoop"),
@@ -176,6 +288,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     channelId: id,
     runId: id,
     generation: z.number().int().positive(),
+    conversation: conversationFence.optional(),
     outcome: z.enum(["completed", "error"]),
     recheckRequested: z.boolean().optional(),
     consumesThroughSequence: timestamp.optional(),
@@ -196,6 +309,12 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
       channelId: id,
       runId: id,
       generation: z.number().int().positive(),
+      conversationId: id.optional(),
+      epoch: z.number().int().positive().optional(),
+      conversationGeneration: z.number().int().positive().optional(),
+      routingGeneration: z.number().int().positive().optional(),
+      turnId: id.optional(),
+      conversationLeaseToken: id.optional(),
       stage: z.enum([
         "triaging",
         "acknowledging",
@@ -219,21 +338,41 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     channelId: id,
     runId: id,
     generation: z.number().int().positive(),
+    conversation: conversationFence.optional(),
     idempotencyKey: id,
     replyKind: z.enum(["acknowledgement", "research_log", "final"]).optional(),
-    content: z.string().trim().min(1).max(2_000),
+    content: discordReplyContent,
     chart: discordMarketChart.optional(),
     replyToMessageId: id.optional(),
     consumesThroughSequence: timestamp.optional(),
     recheckRequested: z.boolean(),
     finalizesLoop: z.boolean(),
+  }).strict().superRefine((value, context) => {
+    const replyKind = value.replyKind
+      ?? (value.finalizesLoop ? "final" : "research_log");
+    if (
+      replyKind === "acknowledgement"
+      && Array.from(value.content).length > 320
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["content"],
+        message: "Discord acknowledgement exceeds 320 Unicode characters.",
+      });
+    }
+  }),
+  z.object({
+    operation: z.literal("beginReplyDelivery"),
+    actorId: id,
+    outboxId: id,
+    deliveryToken: id,
   }).strict(),
   z.object({
     operation: z.literal("acknowledgeReply"),
     actorId: id,
     outboxId: id,
     deliveryToken: id,
-    status: z.enum(["sent", "failed"]),
+    status: z.enum(["sent", "failed", "uncertain"]),
     discordMessageId: id.optional(),
     images: z.array(discordImageAttachment).max(4).optional(),
     error: z.string().trim().min(1).max(1_000).optional(),

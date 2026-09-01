@@ -7,6 +7,17 @@ import {
   marketChartSpecSchema,
   type MarketChartSpec,
 } from "./media/market-chart.js";
+import {
+  DISCORD_ACKNOWLEDGEMENT_MAX_CHARACTERS,
+  DISCORD_FINAL_REPLY_MAX_CHARACTERS,
+  normalizeDiscordContent,
+  validDiscordContent,
+} from "./content.js";
+import type {
+  ConversationIdentity,
+  DurableConversationContext,
+  DurableTurnRecovery,
+} from "./personality-contracts.js";
 
 export {
   discordImageAttachmentSchema,
@@ -36,14 +47,18 @@ const httpsUrlSchema = z
     (value) => new URL(value).protocol === "https:",
     "HTTPS URL required.",
   );
+const discordContentSchema = (maximum: number) => z.string().refine(
+  (value) => validDiscordContent(value, maximum),
+  `Discord content must contain at most ${maximum} Unicode characters.`,
+).transform(normalizeDiscordContent);
 
 export const agentMessageSchema = z
   .object({
     messageId: snowflakeSchema,
     sequence: z.number().int().positive(),
     authorId: snowflakeSchema,
-    authorName: z.string().trim().min(1).max(100),
-    content: z.string().max(4_000),
+    authorName: z.string().trim().min(1).max(200),
+    content: z.string().max(8_000),
     images: z
       .array(discordImageAttachmentSchema)
       .max(MAX_DISCORD_CONTEXT_IMAGES)
@@ -100,8 +115,8 @@ export const triageResponseSchema = z
     decision: z.enum(["silent", "direct", "research"]),
     targetMessageId: snowflakeSchema.nullable(),
     question: z.string().trim().min(1).max(1_000).nullable(),
-    directReply: z.string().trim().min(1).max(1_200).nullable(),
-    acknowledgement: z.string().trim().min(1).max(320).nullable(),
+    directReply: discordContentSchema(DISCORD_FINAL_REPLY_MAX_CHARACTERS).nullable(),
+    acknowledgement: discordContentSchema(DISCORD_ACKNOWLEDGEMENT_MAX_CHARACTERS).nullable(),
     reason: z.string().trim().min(1).max(500),
     confidence: z.number().min(0).max(1),
     additiveValue: z.number().min(0).max(1),
@@ -201,7 +216,7 @@ export const replyResponseSchema = z
   .object({
     profile: z.literal("reply"),
     action: z.enum(["send", "suppress"]),
-    reply: z.string().trim().min(1).max(1_200).nullable(),
+    reply: discordContentSchema(DISCORD_FINAL_REPLY_MAX_CHARACTERS).nullable(),
     reason: z.string().trim().min(1).max(500),
     chart: marketChartSpecSchema.optional(),
   })
@@ -276,6 +291,8 @@ export const storedMessageSchema = z
     mentionsBot: z.boolean(),
     isBot: z.boolean(),
     replyToMessageId: snowflakeSchema.optional(),
+    nonce: stableIdSchema.optional(),
+    payloadHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     createdAt: timestampSchema,
   })
   .strict()
@@ -336,6 +353,14 @@ export interface ClaimedLoop extends ChannelReference {
   contextHash: string;
   recheckCount: number;
   triggerKind: DiscordTriggerKind;
+  conversation: ConversationIdentity;
+  conversationGeneration: number;
+  conversationLeaseToken: string;
+  routingGeneration: number;
+  durableContext: DurableConversationContext;
+  recovery?: DurableTurnRecovery | undefined;
+  recoveryFailure?: "invalid_persisted_recovery" | undefined;
+  fence: DurableRunFence;
   replyChannelId: string;
   researchLogChannelId?: string | undefined;
   messages: AgentMessage[];
@@ -363,8 +388,10 @@ export interface OutboxItem extends ChannelReference {
   sourceChannelId: string;
   runId: string;
   generation: number;
+  fence?: DurableRunFence | undefined;
   replyKind?: ReplyKind | undefined;
   status: "pending" | "sent";
+  deliveryState: "pending" | "delivery_uncertain" | "sent";
   content: string;
   chart?: MarketChartSpec | undefined;
   replyToMessageId?: string | undefined;
@@ -373,6 +400,8 @@ export interface OutboxItem extends ChannelReference {
   finalizesLoop: boolean;
   discordMessageId?: string | undefined;
   deliveryToken?: string | undefined;
+  nonce: string;
+  payloadHash: string;
   attempts: number;
   createdAt: number;
 }
@@ -383,3 +412,13 @@ export type LoopStage =
   | "researching"
   | "drafting"
   | "catching_up";
+
+export interface DurableRunFence {
+  conversationId: string;
+  epoch: number;
+  generation: number;
+  routingGeneration: number;
+  turnId: string;
+  leaseToken: string;
+  eligibleHumanRevision?: number | undefined;
+}

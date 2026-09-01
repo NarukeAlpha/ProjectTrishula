@@ -4,12 +4,14 @@ import type {
   CompleteLoopOptions,
   CompleteLoopResult,
   EnqueueReplyInput,
+  EnqueueReplyResult,
   NewestContext,
   RunIdentity,
 } from "../convex/client.js";
 import type {
   AgentMessage,
   ChannelReference,
+  ClaimedLoop,
   ClaimLoopResponse,
   LoopStage,
   ReplyRequest,
@@ -19,6 +21,20 @@ import type {
   TriageRequest,
   TriageResponse,
 } from "../contracts.js";
+import type {
+  FrontmanPlanRequest,
+  FrontmanPlanResponse,
+  FrontmanResearchRequest,
+  FrontmanResumeRequest,
+  FrontmanResumeResponse,
+  ResearchFailure,
+  SolResearchRequest,
+  SolResearchResponse,
+} from "../personality-contracts.js";
+import {
+  DISCORD_FINAL_REPLY_MAX_CHARACTERS,
+  requireDiscordContent,
+} from "../content.js";
 import { PiAgentOperationError } from "../pi/client.js";
 import { logger } from "../runtime/logger.js";
 
@@ -27,6 +43,7 @@ export interface ChannelLoopDependencies {
   pi: PiLoopClient;
   workerId: string;
   heartbeatIntervalMs: number;
+  durableConversationsEnabled?: boolean;
 }
 
 export interface ConvexLoopClient {
@@ -42,7 +59,10 @@ export interface ConvexLoopClient {
     signal?: AbortSignal,
   ): Promise<boolean>;
   newestContext(
-    channel: ChannelReference,
+    channel: ChannelReference & {
+      fence?: RunIdentity["fence"];
+      runId?: string;
+    },
     signal?: AbortSignal,
   ): Promise<NewestContext>;
   completeLoop(
@@ -51,10 +71,56 @@ export interface ConvexLoopClient {
     options?: CompleteLoopOptions,
     signal?: AbortSignal,
   ): Promise<CompleteLoopResult>;
-  enqueueReply(input: EnqueueReplyInput, signal?: AbortSignal): Promise<void>;
+  enqueueReply(input: EnqueueReplyInput, signal?: AbortSignal): Promise<EnqueueReplyResult>;
+  recordFrontmanPlan?(
+    identity: RunIdentity,
+    requestId: string,
+    plan: FrontmanPlanResponse,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  recordResearchStarted?(
+    identity: RunIdentity,
+    requestId: string,
+    request: FrontmanResearchRequest,
+    inputContextHash: string,
+    pass: 1 | 2,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  recordResearchResult?(
+    identity: RunIdentity,
+    requestId: string,
+    research: SolResearchResponse | ResearchFailure,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  recordFrontmanResume?(
+    identity: RunIdentity,
+    requestId: string,
+    resume: FrontmanResumeResponse,
+    acknowledgementDelivery: FrontmanResumeRequest["acknowledgementDelivery"],
+    newest: Pick<
+      NewestContext,
+      | "eligibleThroughSequence"
+      | "eligibleHumanRevision"
+      | "eligibleContextHash"
+      | "nextExplicitTriggerSequence"
+    >,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 export interface PiLoopClient {
+  frontmanPlan?(
+    input: FrontmanPlanRequest,
+    signal?: AbortSignal,
+  ): Promise<FrontmanPlanResponse>;
+  solResearch?(
+    input: SolResearchRequest,
+    signal?: AbortSignal,
+  ): Promise<SolResearchResponse>;
+  frontmanResume?(
+    input: FrontmanResumeRequest,
+    signal?: AbortSignal,
+  ): Promise<FrontmanResumeResponse>;
   triage(input: TriageRequest, signal?: AbortSignal): Promise<TriageResponse>;
   research(
     input: ResearchRequest,
@@ -75,6 +141,7 @@ function runIdentity(
     channelId: claim.channelId,
     runId: claim.runId,
     generation: claim.generation,
+    fence: claim.fence,
   };
 }
 
@@ -84,11 +151,38 @@ function researchLogContent(research: ResearchResponse): string {
   ].slice(0, 3);
   const suffix = sources.length === 0 ? "" : `\nSources: ${sources.join(" ")}`;
   const prefix = "Research note: ";
-  const summaryLimit = 2_000 - prefix.length - suffix.length;
-  return `${prefix}${research.summary.slice(0, Math.max(1, summaryLimit))}${suffix}`.slice(
-    0,
-    2_000,
+  return requireDiscordContent(
+    `${prefix}${research.summary}${suffix}`,
+    DISCORD_FINAL_REPLY_MAX_CHARACTERS,
   );
+}
+
+function durableResearchLogContent(research: SolResearchResponse): string {
+  const sources = research.packet.sources.slice(0, 3).map((source) => source.url);
+  const suffix = sources.length === 0 ? "" : `\nSources: ${sources.join(" ")}`;
+  return requireDiscordContent(
+    `Research note: ${research.packet.summary}${suffix}`,
+    DISCORD_FINAL_REPLY_MAX_CHARACTERS,
+  );
+}
+
+function researchFailure(error: Error): ResearchFailure {
+  if (error instanceof PiAgentOperationError) {
+    return {
+      code: error.code.includes("freshness")
+        ? "freshness_unverified"
+        : error.code.includes("packet")
+          ? "packet_invalid"
+          : "provider_unavailable",
+      detail: "Public research could not be completed reliably.",
+      retryable: error.retryable,
+    };
+  }
+  return {
+    code: "provider_unavailable",
+    detail: "Public research could not be completed reliably.",
+    retryable: true,
+  };
 }
 
 function isExplicitTrigger(
@@ -176,6 +270,422 @@ export class ChannelLoopOrchestrator {
     return this.locallyRunning.has(channelKey(channel));
   }
 
+  private async runDurable(
+    claim: ClaimedLoop,
+    identity: RunIdentity,
+    changeStage: (stage: LoopStage) => Promise<void>,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const planAgent = this.dependencies.pi.frontmanPlan;
+    const researchAgent = this.dependencies.pi.solResearch;
+    const resumeAgent = this.dependencies.pi.frontmanResume;
+    const recordPlan = this.dependencies.convex.recordFrontmanPlan;
+    const recordResearchStarted = this.dependencies.convex.recordResearchStarted;
+    const recordResearchResult = this.dependencies.convex.recordResearchResult;
+    const recordResume = this.dependencies.convex.recordFrontmanResume;
+    let terminalReplyQueued = false;
+    try {
+    if (claim.recoveryFailure !== undefined) {
+      throw new Error("Persisted Discord recovery state is invalid.");
+    }
+    if (
+      planAgent === undefined
+      || researchAgent === undefined
+      || resumeAgent === undefined
+      || recordPlan === undefined
+      || recordResearchStarted === undefined
+      || recordResearchResult === undefined
+      || recordResume === undefined
+    ) {
+      throw new Error("The durable Discord agent protocol is unavailable.");
+    }
+    const agentChannel = {
+      guildId: claim.guildId,
+      channelId: claim.channelId,
+      channelName: claim.channelName,
+    };
+    const planRequestId = `${claim.runId}:frontman-plan`;
+    let plan = claim.recovery?.plan;
+    if (plan === undefined) {
+      await changeStage("triaging");
+      plan = await planAgent.call(this.dependencies.pi, {
+        requestId: planRequestId,
+        profile: "frontman_plan",
+        triggerKind: claim.triggerKind,
+        conversation: claim.conversation,
+        durableContext: claim.durableContext,
+        channel: agentChannel,
+        messages: claim.messages,
+      }, signal);
+      await recordPlan.call(
+        this.dependencies.convex,
+        identity,
+        planRequestId,
+        plan,
+        signal,
+      );
+    }
+    const target = targetMessage(plan.targetMessageId, claim.messages);
+    logger.info("Discord frontman plan completed.", {
+      channelId: claim.channelId,
+      guildId: claim.guildId,
+      loopId: claim.runId,
+      action: plan.action,
+      reasonCode: plan.reasonCode,
+      confidence: plan.confidence,
+      additiveValue: plan.additiveValue,
+    });
+
+    if (plan.action === "silent") {
+      const result = await this.dependencies.convex.completeLoop(
+        identity,
+        "completed",
+        { recheckRequested: false, consumesThroughSequence: claim.windowEnd },
+        signal,
+      );
+      return result.status === "catching_up";
+    }
+
+    const newestFor = async (): Promise<NewestContext> => {
+      const newest = await this.dependencies.convex.newestContext({
+        guildId: claim.guildId,
+        channelId: claim.channelId,
+        runId: claim.runId,
+        fence: claim.fence,
+      }, signal);
+      if (!newest.exact) {
+        throw new ConvexDiscordOperationError(
+          "newestContext",
+          "context_not_exact",
+          409,
+        );
+      }
+      return newest;
+    };
+    const queueFinal = async (
+      reply: string,
+      newest: NewestContext,
+      chart?: SolResearchResponse["chart"],
+      enforceEligibleCutoff = true,
+    ): Promise<void> => {
+      const finalFence = enforceEligibleCutoff
+        ? {
+            ...claim.fence,
+            eligibleHumanRevision: newest.eligibleHumanRevision,
+          }
+        : claim.fence;
+      const input: EnqueueReplyInput = {
+        ...identity,
+        fence: finalFence,
+        targetChannelId: claim.replyChannelId,
+        idempotencyKey: `${claim.runId}:reply`,
+        replyKind: "final",
+        content: requireDiscordContent(reply, DISCORD_FINAL_REPLY_MAX_CHARACTERS),
+        consumesThroughSequence: newest.eligibleThroughSequence,
+        recheckRequested: false,
+        finalizesLoop: true,
+      };
+      if (chart !== undefined) input.chart = chart;
+      if (claim.replyChannelId === claim.channelId) {
+        input.replyToMessageId = target.messageId;
+      }
+      await this.dependencies.convex.enqueueReply(input, signal);
+      terminalReplyQueued = true;
+    };
+
+    if (plan.action === "reply" || plan.action === "clarify") {
+      if (plan.reply === undefined) throw new Error("The frontman plan omitted its reply.");
+      await changeStage("catching_up");
+      const newest = await newestFor();
+      await queueFinal(plan.reply, newest);
+      return false;
+    }
+
+    if (plan.researchRequest === undefined) {
+      throw new Error("The frontman plan omitted its research request.");
+    }
+    let acknowledgementDelivery: FrontmanResumeRequest["acknowledgementDelivery"] =
+      claim.recovery?.acknowledgementDelivery ?? "not_required";
+    if (plan.acknowledgement !== undefined) {
+      if (claim.recovery?.acknowledgementDelivery === undefined) {
+        await changeStage("acknowledging");
+      }
+      const acknowledgement: EnqueueReplyInput = {
+        ...identity,
+        targetChannelId: claim.replyChannelId,
+        idempotencyKey: `ack:${claim.conversation.conversationId}:${claim.conversation.epoch}:${target.messageId}`,
+        replyKind: "acknowledgement",
+        content: plan.acknowledgement,
+        recheckRequested: false,
+        finalizesLoop: false,
+      };
+      if (claim.replyChannelId === claim.channelId) {
+        acknowledgement.replyToMessageId = target.messageId;
+      }
+      const acknowledgementResult = await this.dependencies.convex.enqueueReply(
+        acknowledgement,
+        signal,
+      );
+      acknowledgementDelivery = acknowledgementResult.status === "sent"
+        || acknowledgementResult.status === "finalized"
+        ? "sent"
+        : acknowledgementResult.status === "delivery_uncertain"
+          || acknowledgementResult.status === "needs_reconciliation"
+          ? "uncertain"
+          : "pending";
+    }
+
+    let recoveredResearch = claim.recovery?.research;
+    let activeResearchRequest: FrontmanResearchRequest =
+      recoveredResearch?.normalizedRequest ?? plan.researchRequest;
+    let pass: 1 | 2 = recoveredResearch?.requestId.endsWith(":2") ? 2 : 1;
+    let newest: NewestContext | undefined;
+    while (true) {
+      const researchRequestId = `${claim.runId}:sol:${pass}`;
+      let research: SolResearchResponse | ResearchFailure;
+      if (
+        recoveredResearch?.requestId === researchRequestId
+        && recoveredResearch.result !== undefined
+      ) {
+        research = recoveredResearch.result;
+      } else {
+        await changeStage("researching");
+        await recordResearchStarted.call(
+          this.dependencies.convex,
+          identity,
+          researchRequestId,
+          activeResearchRequest,
+          newest?.eligibleContextHash ?? claim.contextHash,
+          pass,
+          signal,
+        );
+        try {
+          research = await researchAgent.call(this.dependencies.pi, {
+            requestId: researchRequestId,
+            profile: "research",
+            conversation: claim.conversation,
+            channel: agentChannel,
+            messages: newest?.messages ?? claim.messages,
+            researchRequest: activeResearchRequest,
+            pass,
+          }, signal);
+        } catch (error) {
+          research = researchFailure(
+            error instanceof Error
+              ? error
+              : new Error("Public research failed without an error contract."),
+          );
+        }
+        await recordResearchResult.call(
+          this.dependencies.convex,
+          identity,
+          researchRequestId,
+          research,
+          signal,
+        );
+      }
+      recoveredResearch = undefined;
+
+      await changeStage("catching_up");
+      try {
+        newest = await newestFor();
+      } catch {
+        if (claim.triggerKind === "ambient") {
+          const result = await this.dependencies.convex.completeLoop(
+            identity,
+            "completed",
+            {
+              recheckRequested: false,
+              consumesThroughSequence: claim.windowEnd,
+              suppressPendingReplies: true,
+            },
+            signal,
+          );
+          return result.status === "catching_up";
+        }
+        await queueFinal(
+          "I couldn't reconcile the newest messages safely, so I stopped instead of sending a stale answer.",
+          {
+            guildId: claim.guildId,
+            channelId: claim.channelId,
+            throughSequence: claim.windowEnd,
+            triggerThroughSequence: claim.windowEnd,
+            completedThroughSequence: claim.windowStart - 1,
+            contextHash: claim.contextHash,
+            eligibleThroughSequence: claim.windowEnd,
+            eligibleHumanRevision: claim.conversation.humanRevision,
+            eligibleContextHash: claim.contextHash,
+            catchUpMessages: [],
+            exact: true,
+            messages: claim.messages,
+          },
+          undefined,
+          false,
+        );
+        return false;
+      }
+
+      const resumeRequestId = `${claim.runId}:frontman-resume:${pass}`;
+      const recoveredResumeIsCurrent = claim.recovery?.resume !== undefined
+        && claim.recovery.resumeRequestId === resumeRequestId
+        && claim.recovery.eligibleThroughSequence === newest.eligibleThroughSequence
+        && claim.recovery.eligibleHumanRevision === newest.eligibleHumanRevision
+        && claim.recovery.eligibleContextHash === newest.eligibleContextHash
+        && claim.recovery.nextExplicitTriggerSequence === newest.nextExplicitTriggerSequence;
+      let resume: FrontmanResumeResponse;
+      if (recoveredResumeIsCurrent) {
+        resume = claim.recovery!.resume!;
+      } else {
+        await changeStage("drafting");
+        const resumeRequest: FrontmanResumeRequest = {
+            requestId: resumeRequestId,
+            profile: "frontman_resume",
+            triggerKind: claim.triggerKind,
+            conversation: claim.conversation,
+            durableContext: claim.durableContext,
+            channel: agentChannel,
+            messages: newest.messages,
+            targetMessageId: target.messageId,
+            originalAuthorId: target.authorId,
+            acknowledgementDelivery,
+            research,
+            catchUpMessages: newest.catchUpMessages,
+            eligibleThroughSequence: newest.eligibleThroughSequence,
+            eligibleHumanRevision: newest.eligibleHumanRevision,
+            eligibleContextHash: newest.eligibleContextHash,
+            autonomousPass: pass,
+        };
+        if (newest.nextExplicitTriggerSequence !== undefined) {
+          resumeRequest.nextExplicitTriggerSequence = newest.nextExplicitTriggerSequence;
+        }
+        resume = await resumeAgent.call(this.dependencies.pi, resumeRequest, signal);
+      }
+      if (
+        claim.triggerKind !== "ambient"
+        && !("profile" in research)
+        && resume.action === "suppress"
+      ) {
+        resume = {
+          profile: "frontman_resume",
+          action: "send",
+          reasonCode: "research_failed",
+          reply: "I couldn't verify that reliably, so I don't want to guess.",
+        };
+      }
+      if (!recoveredResumeIsCurrent) {
+        await recordResume.call(
+          this.dependencies.convex,
+          identity,
+          resumeRequestId,
+          resume,
+          acknowledgementDelivery,
+          newest,
+          signal,
+        );
+      }
+      if (resume.action === "recheck") {
+        if (pass >= 2 || resume.recheckRequest === undefined) {
+          throw new Error("The autonomous Discord research cap was exceeded.");
+        }
+        activeResearchRequest = resume.recheckRequest;
+        pass = 2;
+        continue;
+      }
+      if (resume.action === "suppress") {
+        const result = await this.dependencies.convex.completeLoop(
+          identity,
+          "completed",
+          {
+            recheckRequested: false,
+            consumesThroughSequence: newest.eligibleThroughSequence,
+            suppressPendingReplies: true,
+          },
+          signal,
+        );
+        return result.status === "catching_up";
+      }
+      if (resume.reply === undefined) {
+        throw new Error("The frontman resume omitted its final reply.");
+      }
+      if ("profile" in research && claim.researchLogChannelId !== undefined) {
+        try {
+          await this.dependencies.convex.enqueueReply({
+            ...identity,
+            targetChannelId: claim.researchLogChannelId,
+            idempotencyKey: `${claim.runId}:research-log:${pass}`,
+            replyKind: "research_log",
+            content: durableResearchLogContent(research),
+            recheckRequested: false,
+            finalizesLoop: false,
+          }, signal);
+        } catch (error) {
+          logger.warn("Discord research log was omitted.", {
+            channelId: claim.channelId,
+            guildId: claim.guildId,
+            loopId: claim.runId,
+            code: error instanceof Error ? error.name : "research_log_invalid",
+          });
+        }
+      }
+      await queueFinal(
+        resume.reply,
+        newest,
+        "profile" in research ? research.chart : undefined,
+      );
+      return false;
+    }
+    } catch (error) {
+      if (claim.triggerKind !== "ambient" && !terminalReplyQueued) {
+        const failureTarget = claim.messages.findLast((message) =>
+          !message.isBot && isExplicitTrigger(message, claim.messages)
+        ) ?? claim.messages.findLast((message) => !message.isBot);
+        if (failureTarget !== undefined) {
+          const closure: EnqueueReplyInput = {
+            ...identity,
+            targetChannelId: claim.replyChannelId,
+            idempotencyKey: `${claim.runId}:failure-closure`,
+            replyKind: "final",
+            content: "I couldn't complete that reliably, so I stopped instead of guessing.",
+            consumesThroughSequence: claim.windowEnd,
+            recheckRequested: false,
+            finalizesLoop: true,
+          };
+          if (claim.replyChannelId === claim.channelId) {
+            closure.replyToMessageId = failureTarget.messageId;
+          }
+          await this.dependencies.convex.enqueueReply(closure);
+          logger.warn("Discord explicit failure closure queued.", {
+            channelId: claim.channelId,
+            guildId: claim.guildId,
+            loopId: claim.runId,
+            code:
+              error instanceof PiAgentOperationError
+                ? error.code
+                : error instanceof ConvexDiscordOperationError
+                  ? error.code
+                  : error instanceof Error
+                    ? error.name
+                    : "unknown_error",
+          });
+          return false;
+        }
+      }
+      if (claim.triggerKind === "ambient") {
+        const result = await this.dependencies.convex.completeLoop(
+          identity,
+          "completed",
+          {
+            recheckRequested: false,
+            consumesThroughSequence: claim.windowEnd,
+            suppressPendingReplies: true,
+          },
+        );
+        return result.status === "catching_up";
+      }
+      throw error;
+    }
+  }
+
   private async run(channel: ChannelReference): Promise<boolean> {
     let claim: ClaimLoopResponse;
     try {
@@ -228,6 +738,14 @@ export class ChannelLoopOrchestrator {
     heartbeat.unref();
 
     try {
+      if (this.dependencies.durableConversationsEnabled === true) {
+        return await this.runDurable(
+          claim,
+          identity,
+          changeStage,
+          controller.signal,
+        );
+      }
       await changeStage("triaging");
       const triageStartedAt = Date.now();
       const triage = await this.dependencies.pi.triage(

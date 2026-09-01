@@ -172,6 +172,22 @@ describe("Discord durable loop state", () => {
         finalizesLoop: false,
       },
     ], "run_1", 3)).toBe(false);
+    expect(hasPendingDiscordReply([
+      {
+        runId: "run_1",
+        generation: 3,
+        status: "delivery_uncertain",
+        finalizesLoop: true,
+      },
+    ], "run_1", 3)).toBe(true);
+    expect(hasPendingDiscordReply([
+      {
+        runId: "run_1",
+        generation: 3,
+        status: "needs_reconciliation",
+        finalizesLoop: true,
+      },
+    ], "run_1", 3)).toBe(true);
   });
 
   it("recognizes a delivered acknowledgement for the same reply target", () => {

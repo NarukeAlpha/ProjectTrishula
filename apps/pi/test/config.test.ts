@@ -19,6 +19,59 @@ describe("loadConfig", () => {
     expect(config.robinhoodOAuthRedirectUri).toBe("http://convex.internal/http/broker/robinhood/callback");
     expect(config.piCredentialKeyVersion).toBe(1);
     expect(config.discordSharedSecret).toBe(base.PI_DISCORD_SHARED_SECRET);
+    expect(config).toMatchObject({
+      trishulaLunaModel: "gpt-5.6-luna",
+      trishulaLunaReasoningEffort: "xhigh",
+      trishulaLunaServiceTier: "priority",
+      trishulaSolModel: "gpt-5.6-sol",
+      trishulaSolReasoningEffort: "ultra",
+      trishulaSolServiceTier: "priority",
+      trishulaPersonalityVersion: "trishula-discord-v1",
+      trishulaLunaProfileVersion: "luna-frontman-v1",
+      trishulaSolProfileVersion: "sol-research-v1",
+      trishulaModelContextWindow: 400_000,
+      trishulaLunaMaxOutputTokens: 8_000,
+      trishulaSolMaxOutputTokens: 16_000,
+      trishulaResearchPacketTokenTarget: 2_500,
+      trishulaResearchPacketMaxBytes: 16_384,
+      trishulaRecentTailTokenBudget: 20_000,
+      trishulaMaxAutonomousRechecks: 2,
+      trishulaAmbientMinConfidence: 0.85,
+      trishulaAmbientMinAdditiveValue: 0.9,
+      trishulaCompactionReserve: 32_000,
+      trishulaCompactionThreshold: 280_000,
+      trishulaDurableConversationsEnabled: true,
+      trishulaHotSessionReuseEnabled: true,
+      trishulaPortableCheckpointsEnabled: false,
+      trishulaNativeCompactionEnabled: false,
+    });
+  });
+
+  it("rejects model drift and cannot enable the opaque compaction gate", () => {
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_LUNA_MODEL: "gpt-5.6-terra",
+    })).toThrow(/TRISHULA_LUNA_MODEL/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_SOL_REASONING_EFFORT: "xhigh",
+    })).toThrow(/TRISHULA_SOL_REASONING_EFFORT/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_NATIVE_COMPACTION_ENABLED: "true",
+    })).toThrow(/TRISHULA_NATIVE_COMPACTION_ENABLED/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
+    })).toThrow(/TRISHULA_PORTABLE_CHECKPOINTS_ENABLED/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_PERSONALITY_VERSION: "unreviewed-v2",
+    })).toThrow(/TRISHULA_PERSONALITY_VERSION/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_RESEARCH_PACKET_MAX_BYTES: "20000",
+    })).toThrow(/TRISHULA_RESEARCH_PACKET_MAX_BYTES/);
   });
 
   it("requires HTTPS for the production Convex endpoint", () => {

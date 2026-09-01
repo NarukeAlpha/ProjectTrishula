@@ -25,6 +25,18 @@ describe("loadConfig", () => {
     expect(config.piSharedSecret).toBe(
       baseEnvironment.PI_DISCORD_SHARED_SECRET,
     );
+    expect(config.durableConversationsEnabled).toBe(true);
+  });
+
+  it("parses the durable-conversation rollback switch independently", () => {
+    expect(loadConfig({
+      ...baseEnvironment,
+      TRISHULA_DURABLE_CONVERSATIONS_ENABLED: "false",
+    }).durableConversationsEnabled).toBe(false);
+    expect(() => loadConfig({
+      ...baseEnvironment,
+      TRISHULA_DURABLE_CONVERSATIONS_ENABLED: "1",
+    })).toThrow("TRISHULA_DURABLE_CONVERSATIONS_ENABLED");
   });
 
   it("loads a CHART-IMG key without exposing it through an error", () => {

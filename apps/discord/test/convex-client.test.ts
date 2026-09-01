@@ -23,6 +23,7 @@ const config: DiscordGatewayConfig = {
   requestTimeoutMs: 30_000,
   agentTimeoutMs: 600_000,
   maxReconcileMessages: 500,
+  durableConversationsEnabled: true,
 };
 
 const run: RunIdentity = {

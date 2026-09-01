@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DiscordAPIError } from "discord.js";
 import type {
   AttachmentPayload,
   Client,
@@ -19,6 +20,11 @@ import {
   ChartImageError,
   type MarketChartRenderer,
 } from "../media/chart-img.js";
+import {
+  DISCORD_ACKNOWLEDGEMENT_MAX_CHARACTERS,
+  DISCORD_FINAL_REPLY_MAX_CHARACTERS,
+  requireDiscordContent,
+} from "../content.js";
 import { discordImageAttachments } from "../media/images.js";
 import { MAX_DISCORD_GENERATED_FILE_BYTES } from "../media/market-chart.js";
 import { logger } from "../runtime/logger.js";
@@ -45,10 +51,14 @@ export interface ConvexOutboxClient {
     identity: RunIdentity,
     signal?: AbortSignal,
   ): Promise<boolean>;
+  beginReplyDelivery(
+    item: Pick<OutboxItem, "outboxId" | "deliveryToken">,
+    signal?: AbortSignal,
+  ): Promise<void>;
   acknowledgeReply(
     item: Pick<OutboxItem, "outboxId" | "deliveryToken">,
     result: {
-      status: "sent" | "failed";
+      status: "sent" | "failed" | "uncertain";
       discordMessageId?: string | undefined;
       images?: StoredMessage["images"];
       error?: string | undefined;
@@ -73,6 +83,60 @@ export interface OutboxDispatcherDependencies {
 
 function discordNonce(outboxId: string): string {
   return createHash("sha256").update(outboxId).digest("hex").slice(0, 24);
+}
+
+type CanonicalJsonValue =
+  | boolean
+  | number
+  | string
+  | null
+  | readonly CanonicalJsonValue[]
+  | { readonly [key: string]: CanonicalJsonValue | undefined };
+
+function canonicalPayload(value: CanonicalJsonValue): CanonicalJsonValue {
+  if (Array.isArray(value)) return value.map(canonicalPayload);
+  if (value === null || !(value instanceof Object)) return value;
+  const normalized: Record<string, CanonicalJsonValue> = {};
+  for (const [key, entry] of Object.entries(value).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (entry !== undefined) normalized[key] = canonicalPayload(entry);
+  }
+  return normalized;
+}
+
+function discordPayloadHash(item: OutboxItem): string {
+  const chart = item.chart === undefined
+    ? null
+    : {
+        symbol: item.chart.symbol,
+        title: item.chart.title,
+        points: item.chart.points.map((point) => ({
+          timestamp: point.timestamp,
+          close: point.close,
+        })),
+        tradingViewSymbol: item.chart.tradingViewSymbol,
+        interval: item.chart.interval,
+        range: item.chart.range,
+        style: item.chart.style,
+        includeVolume: item.chart.includeVolume,
+      };
+  const payload = canonicalPayload({
+    guildId: item.guildId,
+    channelId: item.channelId,
+    content: item.content,
+    chart,
+    replyToMessageId: item.replyToMessageId ?? null,
+  });
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function uncertainDiscordDelivery(error: Error): boolean {
+  const status = error instanceof DiscordAPIError ? error.status : undefined;
+  return status === undefined
+    || status === 408
+    || status === 429
+    || status >= 500;
 }
 
 function boundedReplyFiles(files: readonly DiscordReplyFile[]) {
@@ -116,10 +180,18 @@ function messageOptions(
   files: readonly DiscordReplyFile[] = [],
 ): MessageCreateOptions {
   const replyFiles = boundedReplyFiles(files);
+  if (item.nonce.length > 25) throw new Error("Discord nonce exceeds 25 characters.");
+  const replyKind = item.replyKind
+    ?? (item.finalizesLoop ? "final" : "research_log");
   const options: MessageCreateOptions = {
-    content: item.content.slice(0, 2_000),
+    content: requireDiscordContent(
+      item.content,
+      replyKind === "acknowledgement"
+        ? DISCORD_ACKNOWLEDGEMENT_MAX_CHARACTERS
+        : DISCORD_FINAL_REPLY_MAX_CHARACTERS,
+    ),
     allowedMentions: { parse: [] },
-    nonce: discordNonce(item.outboxId),
+    nonce: item.nonce,
     enforceNonce: true,
   };
   if (replyFiles.length > 0) options.files = replyFiles;
@@ -133,12 +205,14 @@ function messageOptions(
 }
 
 function runIdentity(item: OutboxItem): RunIdentity {
-  return {
+  const identity: RunIdentity = {
     guildId: item.sourceGuildId,
     channelId: item.sourceChannelId,
     runId: item.runId,
     generation: item.generation,
   };
+  if (item.fence !== undefined) identity.fence = item.fence;
+  return identity;
 }
 
 function priority(item: OutboxItem): number {
@@ -181,6 +255,10 @@ export class OutboxDispatcher {
     const identity = runIdentity(item);
     const active = await this.dependencies.convex.renewRunLease(identity);
     if (!active) return;
+    if (discordPayloadHash(item) !== item.payloadHash) {
+      await this.recordFailure(item, "Discord outbox payload hash mismatch.", false);
+      return;
+    }
     let sentMessageId: string;
     let sentImages: NonNullable<StoredMessage["images"]> = [];
     try {
@@ -236,15 +314,19 @@ export class OutboxDispatcher {
         }
         if (!(await this.dependencies.convex.renewRunLease(identity))) return;
       }
+      await this.dependencies.convex.beginReplyDelivery(item);
       const sent = await channel.send(messageOptions(item, files));
       sentMessageId = sent.id;
       sentImages = discordImageAttachments(sent.attachments?.values() ?? []);
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Discord reply delivery failed.";
-      await this.recordFailure(item, message, true);
+      const deliveryError = error instanceof Error
+        ? error
+        : new Error("Discord reply delivery failed.");
+      if (uncertainDiscordDelivery(deliveryError)) {
+        await this.recordUncertain(item, deliveryError.message);
+      } else {
+        await this.recordFailure(item, deliveryError.message, false);
+      }
       return;
     }
 
@@ -297,6 +379,22 @@ export class OutboxDispatcher {
     }
   }
 
+  private async recordUncertain(item: OutboxItem, error: string): Promise<void> {
+    try {
+      await this.dependencies.convex.acknowledgeReply(item, {
+        status: "uncertain",
+        error: error.slice(0, 1_000),
+      });
+    } catch {
+      logger.error("Discord uncertain delivery could not be recorded.", {
+        channelId: item.channelId,
+        outboxId: item.outboxId,
+        replyKind: item.replyKind,
+        code: "outbox_uncertain_ack_failed",
+      });
+    }
+  }
+
   private async completeWithError(
     item: OutboxItem,
     error: string,
@@ -343,4 +441,10 @@ export class OutboxDispatcher {
   }
 }
 
-export { discordNonce, messageOptions, priority };
+export {
+  discordNonce,
+  discordPayloadHash,
+  messageOptions,
+  priority,
+  uncertainDiscordDelivery,
+};

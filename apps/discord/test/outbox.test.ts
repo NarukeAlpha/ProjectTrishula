@@ -13,13 +13,14 @@ import {
 } from "../src/media/chart-img.js";
 import {
   discordNonce,
+  discordPayloadHash,
   messageOptions,
   OutboxDispatcher,
   type ConvexOutboxClient,
 } from "../src/outbox/dispatcher.js";
 
 function outbox(overrides: Partial<OutboxItem> = {}): OutboxItem {
-  return {
+  const result: OutboxItem = {
     outboxId: "run-1:reply",
     sourceGuildId: "10",
     sourceChannelId: "20",
@@ -29,14 +30,23 @@ function outbox(overrides: Partial<OutboxItem> = {}): OutboxItem {
     generation: 1,
     replyKind: "final",
     status: "pending",
+    deliveryState: "pending",
     content: "A concise reply.",
     recheckRequested: false,
     finalizesLoop: true,
     deliveryToken: "delivery-token-1",
+    nonce: "a".repeat(24),
+    payloadHash: "0".repeat(64),
     attempts: 0,
     createdAt: 1,
     ...overrides,
   };
+  if (overrides.nonce === undefined) result.nonce = discordNonce(result.outboxId);
+  if (result.status === "sent" && overrides.deliveryState === undefined) {
+    result.deliveryState = "sent";
+  }
+  if (overrides.payloadHash === undefined) result.payloadHash = discordPayloadHash(result);
+  return result;
 }
 
 const providerChart = {
@@ -63,8 +73,9 @@ const renderedChart = {
 };
 
 class FakeConvex implements ConvexOutboxClient {
+  begins: string[] = [];
   acknowledgements: Array<{
-    status: "sent" | "failed";
+    status: "sent" | "failed" | "uncertain";
     discordMessageId?: string;
     images?: StoredMessage["images"];
   }> = [];
@@ -77,16 +88,26 @@ class FakeConvex implements ConvexOutboxClient {
     return true;
   }
 
+  async beginReplyDelivery(item: Pick<OutboxItem, "outboxId">): Promise<void> {
+    this.begins.push(item.outboxId);
+  }
+
   async acknowledgeReply(
     _item: Pick<OutboxItem, "outboxId" | "deliveryToken">,
     result: {
-      status: "sent" | "failed";
+      status: "sent" | "failed" | "uncertain";
       discordMessageId?: string;
       images?: StoredMessage["images"];
     },
   ): Promise<AcknowledgeResult> {
     this.acknowledgements.push(result);
-    return { status: result.status === "sent" ? "sent" : "failed" };
+    return {
+      status: result.status === "sent"
+        ? "sent"
+        : result.status === "uncertain"
+          ? "delivery_uncertain"
+          : "failed",
+    };
   }
 
   async completeLoop(
@@ -115,22 +136,33 @@ function fakeClient(channel: FakeChannel, sendReady = true): Client {
 }
 
 describe("OutboxDispatcher", () => {
-  it("disables mentions, bounds text, and enforces a deterministic nonce", () => {
+  it("disables mentions, rejects oversize text, and uses the persisted nonce", () => {
     const item = outbox({
-      content: "x".repeat(2_500),
+      content: "😀".repeat(2_000),
       replyToMessageId: "100",
     });
     const options = messageOptions(item);
 
-    expect(options.content).toHaveLength(2_000);
+    expect(Array.from(String(options.content))).toHaveLength(2_000);
     expect(options.allowedMentions).toEqual({ parse: [] });
     expect(options.reply).toEqual({
       messageReference: "100",
       failIfNotExists: false,
     });
-    expect(options.nonce).toBe(discordNonce(item.outboxId));
+    expect(options.nonce).toBe(item.nonce);
     expect(String(options.nonce)).toHaveLength(24);
     expect(options.enforceNonce).toBe(true);
+    expect(() => messageOptions(outbox({
+      content: "😀".repeat(2_001),
+    }))).toThrow(/2,?000 Unicode/);
+    expect(messageOptions(outbox({
+      content: `  ${"😀".repeat(2_000)}  `,
+    })).content).toBe("😀".repeat(2_000));
+    expect(() => messageOptions(outbox({
+      replyKind: "acknowledgement",
+      finalizesLoop: false,
+      content: "😀".repeat(321),
+    }))).toThrow(/320 Unicode/);
   });
 
   it("adds a bounded chart file after the provider resolves it", () => {
@@ -164,6 +196,7 @@ describe("OutboxDispatcher", () => {
     await dispatcher.dispatch([outbox({ recheckRequested: true })]);
 
     expect(send).toHaveBeenCalledOnce();
+    expect(convex.begins).toEqual(["run-1:reply"]);
     expect(convex.acknowledgements).toEqual([
       { status: "sent", discordMessageId: "999" },
     ]);
@@ -275,6 +308,54 @@ describe("OutboxDispatcher", () => {
     expect(channel.send).not.toHaveBeenCalled();
     expect(convex.acknowledgements).toHaveLength(0);
     expect(convex.completions).toHaveLength(1);
+  });
+
+  it("marks a network send outcome uncertain and does not finalize", async () => {
+    const send = vi.fn().mockRejectedValue(new TypeError("Connection reset."));
+    const convex = new FakeConvex();
+    const dispatcher = new OutboxDispatcher({
+      client: fakeClient({
+        isSendable: () => true,
+        isDMBased: () => false,
+        guildId: "10",
+        send,
+      }),
+      convex,
+      schedule: vi.fn(),
+    });
+
+    await dispatcher.dispatch([outbox()]);
+
+    expect(convex.begins).toEqual(["run-1:reply"]);
+    expect(convex.acknowledgements).toEqual([{
+      status: "uncertain",
+      error: "Connection reset.",
+    }]);
+    expect(convex.completions).toHaveLength(0);
+  });
+
+  it("rejects a payload hash mismatch before Discord receives it", async () => {
+    const send = vi.fn();
+    const convex = new FakeConvex();
+    const dispatcher = new OutboxDispatcher({
+      client: fakeClient({
+        isSendable: () => true,
+        isDMBased: () => false,
+        guildId: "10",
+        send,
+      }),
+      convex,
+      schedule: vi.fn(),
+    });
+
+    await dispatcher.dispatch([outbox({ payloadHash: "f".repeat(64) })]);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(convex.begins).toHaveLength(0);
+    expect(convex.acknowledgements[0]).toMatchObject({
+      status: "failed",
+      retryable: false,
+    });
   });
 
   it("delivers the acknowledgement before a final reply", async () => {

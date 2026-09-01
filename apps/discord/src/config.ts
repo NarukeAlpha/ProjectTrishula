@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const positiveInteger = z.coerce.number().int().positive();
+const booleanFlag = z.enum(["true", "false"]).transform((value) => value === "true");
 const stableId = z
   .string()
   .trim()
@@ -53,6 +54,7 @@ const environmentSchema = z
       .min(10)
       .max(1_000)
       .default(500),
+    TRISHULA_DURABLE_CONVERSATIONS_ENABLED: booleanFlag.default(true),
   })
   .superRefine((value, context) => {
     if (value.CONVEX_DISCORD_SHARED_SECRET === value.PI_DISCORD_SHARED_SECRET) {
@@ -82,6 +84,7 @@ export interface DiscordGatewayConfig {
   requestTimeoutMs: number;
   agentTimeoutMs: number;
   maxReconcileMessages: number;
+  durableConversationsEnabled: boolean;
 }
 
 function normalizeBaseUrl(raw: string, label: string): string {
@@ -145,5 +148,6 @@ export function loadConfig(
     requestTimeoutMs: value.REQUEST_TIMEOUT_MS,
     agentTimeoutMs: value.AGENT_TIMEOUT_MS,
     maxReconcileMessages: value.DISCORD_MAX_RECONCILE_MESSAGES,
+    durableConversationsEnabled: value.TRISHULA_DURABLE_CONVERSATIONS_ENABLED,
   };
 }
