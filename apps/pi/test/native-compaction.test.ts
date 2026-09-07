@@ -619,6 +619,51 @@ describe("native Discord compaction", () => {
   });
 
   it.each([
+    ["absent", undefined],
+    ["empty", []],
+    ["nonmatching", [{
+      id: "terminal_only",
+      type: "compaction",
+      encrypted_content: "not-the-streamed-artifact",
+    }]],
+  ])("uses the streamed compaction when terminal output is %s", async (_scenario, output) => {
+    const streamedCompaction = {
+      id: "streamed_item",
+      type: "compaction",
+      encrypted_content: "streamed-artifact",
+    };
+    const terminalResponseBase = {
+      id: "response_1",
+      status: "completed",
+      usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 },
+    };
+    const terminalResponse = output === undefined
+      ? terminalResponseBase
+      : { ...terminalResponseBase, output };
+    const response = customSseResponse([
+      { type: "response.created", response: { id: "response_1" } },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 1,
+        item: streamedCompaction,
+      },
+      { type: "response.completed", response: terminalResponse },
+    ]);
+
+    await expect(generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => response,
+    })).resolves.toMatchObject({
+      replacementHistory: expect.arrayContaining([streamedCompaction]),
+      usage: { inputTokens: 21, outputTokens: 5, totalTokens: 26 },
+    });
+  });
+
+  it.each([
     ["missing completed status", [
       { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "compaction", encrypted_content: "opaque" } },
       { type: "response.completed", response: { usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
@@ -635,16 +680,10 @@ describe("native Discord compaction", () => {
       { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "message", role: "assistant", content: [] } },
       { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
     ]],
-    ["mismatched terminal output", [
+    ["multiple streamed compaction output items", [
       { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { id: "item_1", type: "compaction", encrypted_content: "opaque" } },
-      {
-        type: "response.completed",
-        response: {
-          status: "completed",
-          output: [{ id: "item_2", type: "compaction", encrypted_content: "other" }],
-          usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 },
-        },
-      },
+      { type: "response.output_item.done", output_index: 1, sequence_number: 2, item: { id: "item_2", type: "compaction", encrypted_content: "other" } },
+      { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
     ]],
     ["malformed terminal followed by a valid terminal", [
       { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "compaction", opaque: "value" } },
