@@ -11,7 +11,8 @@ The durable Luna and isolated Sol pipeline is ready for staged owner testing wit
 Verified implementation evidence:
 
 - At code commit `f369994`, `npm run check:personality` passed without a user login, provider call, or Discord delivery: 63 Pi tests, 35 Discord tests, and 50 baseline Convex tests.
-- Native Convex commits `b2e0b56` and `5069adb` separately passed all 96 Convex tests, Convex typecheck and build, and root lint before integration. The final deployment commit still requires the full root gate.
+- Native Convex commits `b2e0b56`, `5069adb`, and `65d9fb8` passed all 98 Convex tests, Convex typecheck and build, root lint, and the diff check before integration. The last commit permits a stale claimed revision only when it is not newer than the current revision and every owner, epoch, generation, routing, checkpoint-pointer, and row-identity fence still matches.
+- The full repository gate at integrated commit `46f8e988918d4125d18b4cfb20879664baedb469` passed 570 application tests and four Railway source checks.
 - The fixture replay runs each routing case three times.
 - The synthetic restart fixture preserves author attribution, an accepted correction, an unresolved question, freshness, and the recent raw tail.
 - Portable generation uses a fresh Luna session with no tools. Pi accepts only typed summaries whose source-event IDs and author IDs occur in supplied evidence. Each authored claim must cite an event from that author or preserve the complete evidence bundle from a prior validated claim by that author.
@@ -21,8 +22,11 @@ Verified implementation evidence:
 - The native adapter is pinned as `responses-compaction-v2-pi-0_84_1-v1`. It uses only Pi `0.84.1` public request hooks and the reviewed Codex remote-compaction SSE route.
 - Native traffic uses the `native-v2` gateway protocol. Convex keeps `durable-v1` and no-header responses free of native fields during rolling deployment.
 - Offline native tests cover nullable headers, exact request fields, the pinned SDK output event, strict terminal ordering and usage, one opaque-item response capture, hash and byte validation, full source-lineage fencing, corrupt identity fallback, portable-summary seeding, current context and trailing-user preservation, JSON restart injection, safe error text, and an early cloned-stream failure.
+- Model-readable prompt context contains only the portable summary, recent canonical tail, and tail metadata. A regression proves that the opaque native artifact and its source-lineage metadata do not enter that text projection.
 - A provider rejection restarts the full original prompt from readable context. Discord then requests an exact-fence opaque-artifact invalidation. A failed cleanup write cannot discard the already-valid portable result, and a later turn retries cleanup.
 - Native still defaults off. Startup accepts `true` only with portable fallback enabled and the exact reviewed live-probe attestation.
+
+Native scope for this release is intentionally narrow. Convex retains opaque output only for a first checkpoint built from complete raw evidence or a continuation with a compatible active native predecessor. It discards opaque output for staged candidates and active portable-only predecessors, while the readable portable checkpoint continues normally. This prevents a delta-only native artifact from becoming active. A later protocol version must identify and validate the full input basis before native compaction can cover those lineages.
 
 ## Live evidence captured by the deployment owner
 

@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { composeDurableConversationContext } from "../src/assistant/context.js";
+import {
+  composeDurableConversationContext,
+  type DurableConversationContext,
+} from "../src/assistant/context.js";
 import { inspectPersonalitySurface } from "../src/assistant/naturalness.js";
 import { normalizeFrontmanPlan } from "../src/discord/runner.js";
 import {
@@ -125,10 +128,18 @@ describe("deterministic personality shadow harness", () => {
   });
 
   it("reconstructs correction, attribution, question, and freshness after a synthetic restart", () => {
-    const restored = composeDurableConversationContext({
+    const opaqueMarker = "opaque-native-artifact-must-not-enter-readable-context";
+    const durableContext: DurableConversationContext & {
+      activeCheckpointSourceContextHash: string;
+      nativeCheckpoint: unknown;
+    } = {
       sourceRevision: 8,
       sourceHumanRevision: 5,
       activeCheckpointId: "checkpoint:restart",
+      activeCheckpointSourceContextHash: "c".repeat(64),
+      nativeCheckpoint: {
+        replacementHistory: [{ type: "compaction", encrypted_content: opaqueMarker }],
+      },
       portableSummary: {
         participants: [{ authorId: "223456789012345678", displayName: "Mira" }],
         acceptedFacts: [{
@@ -171,11 +182,14 @@ describe("deterministic personality shadow harness", () => {
         omittedEventCount: 0,
         complete: true,
       },
-    });
+    };
+    const restored = composeDurableConversationContext(durableContext);
     expect(restored).toContain("The corrected value is 42.");
     expect(restored).toContain("Mira");
     expect(restored).toContain("Did guidance change?");
     expect(restored).toContain("limited");
     expect(restored).toContain("Use the corrected value.");
+    expect(restored).not.toContain(opaqueMarker);
+    expect(restored).not.toContain("activeCheckpointSourceContextHash");
   });
 });
