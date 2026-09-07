@@ -480,7 +480,7 @@ function MarketResearchSettings({
           className="status-pill"
           data-status={preferences?.enabled ? "online" : "offline"}
         >
-          {preferences?.enabled ? "Enabled" : "Disabled"}
+          {preferences?.enabled ? "Schedule on" : "Schedule off"}
         </span>
       </div>
       <p>
@@ -615,9 +615,7 @@ function MarketResearchSettings({
         </label>
       </div>
       <p className="discord-fine-print">
-        Charts need forum attachment permission, the CHART-IMG service, and its
-        rollout switch. This page cannot verify provider readiness. Images are
-        optional context, not numerical evidence; text can publish without them.
+        Charts are optional. Missing images do not block the text edition.
         {selectedForum &&
           !selectedForum.canAttachFiles &&
           " This forum is missing ATTACH_FILES."}
@@ -649,9 +647,8 @@ function MarketResearchSettings({
         </label>
       </div>
       <p className="discord-fine-print">
-        Automatic publishing needs a permitted forum, a chosen timezone, and a
-        numerical provider in Advanced. Saving does not bypass provider approval
-        or service rollout gates.
+        Automatic publishing needs a forum, timezone, and a data provider in
+        Advanced.
       </p>
       <details className="discord-newspaper-advanced">
         <summary>Advanced</summary>
@@ -692,10 +689,9 @@ function MarketResearchSettings({
           </label>
         </div>
         <p className="discord-fine-print">
-          Choosing a provider does not approve it. Financial Datasets requires a
-          reviewed live evaluation, owner approval, a service cost cap, and
-          runtime enablement. Numerical data stays unavailable until these gates
-          pass.
+          Data access needs owner approval and a cost limit in Railway. Charts
+          need CHART-IMG access and forum attachment permission. These settings
+          do not change service access.
         </p>
       </details>
       {selectedForum && !forumReady && (
@@ -763,8 +759,7 @@ function MarketResearchSettings({
           )}
       </div>
       <p className="discord-fine-print">
-        Preview and Publish now use saved settings. Preview needs no forum or
-        automatic publishing.
+        Actions use saved settings. Preview never posts to Discord.
       </p>
       {status?.preview && (
         <details className="discord-fine-print" open>
