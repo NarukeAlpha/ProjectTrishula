@@ -150,6 +150,7 @@ class FakeConvex implements ConvexLoopClient {
     routingGeneration: number;
   }> = [];
   nativeCheckpointContext = false;
+  invalidationFails = false;
   recovery: Extract<ClaimLoopResponse, { claimed: true }>["recovery"];
   recoveryFailure: Extract<ClaimLoopResponse, { claimed: true }>["recoveryFailure"];
 
@@ -294,6 +295,7 @@ class FakeConvex implements ConvexLoopClient {
     generation: number;
     routingGeneration: number;
   }): Promise<void> {
+    if (this.invalidationFails) throw new Error("Synthetic invalidation outage.");
     this.invalidations.push(invalidation);
     this.durableWrites.push("native_invalidated");
   }
@@ -308,7 +310,8 @@ class FakePi implements PiLoopClient {
   frontmanAction: FrontmanPlanResponse["action"] = "research";
   durableCalls: string[] = [];
   resumeAction: FrontmanResumeResponse["action"] = "send";
-  rejectNativeCheckpoint = false;
+  rejectNativeCheckpointOnPlan = false;
+  rejectNativeCheckpointOnResume = false;
 
   async frontmanPlan(input: FrontmanPlanRequest): Promise<FrontmanPlanResponse> {
     this.durableCalls.push("plan");
@@ -325,7 +328,7 @@ class FakePi implements PiLoopClient {
         reply: this.frontmanAction === "reply"
           ? "A durable direct answer."
           : "Which market session do you mean?",
-        nativeCheckpointRejection: this.rejectNativeCheckpoint
+        nativeCheckpointRejection: this.rejectNativeCheckpointOnPlan
           ? { checkpointId: "checkpoint:native:1", reason: "provider_rejected" }
           : undefined,
       };
@@ -402,7 +405,7 @@ class FakePi implements PiLoopClient {
 
   async frontmanResume(_input: FrontmanResumeRequest): Promise<FrontmanResumeResponse> {
     this.durableCalls.push("resume");
-    return this.resumeAction === "send"
+    const resume: FrontmanResumeResponse = this.resumeAction === "send"
       ? {
           profile: "frontman_resume",
           action: "send",
@@ -414,6 +417,13 @@ class FakePi implements PiLoopClient {
           action: "suppress",
           reasonCode: "answered_by_human",
         };
+    if (this.rejectNativeCheckpointOnResume) {
+      resume.nativeCheckpointRejection = {
+        checkpointId: "checkpoint:native:1",
+        reason: "provider_rejected",
+      };
+    }
+    return resume;
   }
 
   async triage(input: TriageRequest): Promise<TriageResponse> {
@@ -535,7 +545,7 @@ describe("ChannelLoopOrchestrator", () => {
     convex.nativeCheckpointContext = true;
     const pi = new FakePi();
     pi.frontmanAction = "reply";
-    pi.rejectNativeCheckpoint = true;
+    pi.rejectNativeCheckpointOnPlan = true;
     orchestrator(convex, pi, true).schedule(channel);
 
     await vi.waitFor(() => expect(convex.queued).toHaveLength(1));
@@ -550,6 +560,40 @@ describe("ChannelLoopOrchestrator", () => {
       epoch: 1,
       ownerBindingVersion: 1,
     }]);
+  });
+
+  it("invalidates a resume-time rejection after durable plan and research writes", async () => {
+    const convex = new FakeConvex();
+    convex.claimTriggerKind = "mention";
+    convex.nativeCheckpointContext = true;
+    const pi = new FakePi();
+    pi.rejectNativeCheckpointOnResume = true;
+    orchestrator(convex, pi, true).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(3));
+    expect(convex.durableWrites).toEqual([
+      "plan",
+      "research_started",
+      "research_result",
+      "native_invalidated",
+      "resume",
+    ]);
+    expect(convex.invalidations).toHaveLength(1);
+  });
+
+  it("keeps the valid portable fallback when native invalidation is temporarily unavailable", async () => {
+    const convex = new FakeConvex();
+    convex.claimTriggerKind = "mention";
+    convex.nativeCheckpointContext = true;
+    convex.invalidationFails = true;
+    const pi = new FakePi();
+    pi.frontmanAction = "reply";
+    pi.rejectNativeCheckpointOnPlan = true;
+    orchestrator(convex, pi, true).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(1));
+    expect(convex.queued[0]?.content).toBe("A durable direct answer.");
+    expect(convex.durableWrites).toEqual(["plan"]);
   });
 
   it("orders explicit acknowledgement, isolated Sol, catch-up, and resume", async () => {
