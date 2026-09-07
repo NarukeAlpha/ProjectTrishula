@@ -16,6 +16,7 @@ auth.json
 .DS_Store
 /.idea/
 /.vscode/
+/.worktrees/
 /.railway/*
 !/.railway/README.md
 !/.railway/railway.ts
