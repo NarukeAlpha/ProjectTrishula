@@ -5,6 +5,7 @@ import type { Doc, Id } from "../convex/_generated/dataModel.js";
 import type { MutationCtx } from "../convex/_generated/server.js";
 import {
   canonicalCheckpointSlice, deleteGuildConversationPrivacyData, durableConversationContext,
+  claimLoop, heartbeat,
   expirePortableCheckpoints, invalidateNativeCheckpoint, nextPortableCheckpoint, resetGuildConversation,
   stagedCheckpointContext, storePortableCheckpoint,
 } from "../convex/discord.js";
@@ -17,6 +18,7 @@ import {
 import {
   projectLegacyClaimLoopResponse, projectLegacyNewestContextResponse,
   projectPreNativeContext, projectPreNativeCheckpointRequest,
+  discordGatewayRequestSchema,
   DISCORD_GATEWAY_PROTOCOL_HEADER,
 } from "../convex/lib/discord_contract.js";
 import {
@@ -58,6 +60,7 @@ function database() {
       let descending = false;
       const index = {
         eq(key: string, value: unknown) { filters.push((row) => row[key] === value); return index; },
+        gte(key: string, value: number) { filters.push((row) => Number(row[key]) >= value); return index; },
         lte(key: string, value: number) { filters.push((row) => Number(row[key]) <= value); return index; },
       };
       const found = () => {
@@ -69,7 +72,11 @@ function database() {
         order(value: string) { descending = value === "desc"; return query; },
         async collect() { return found(); },
         async take(count: number) { return found().slice(0, count); },
-        async unique() { if (found().length > 1) throw new Error("fixture_duplicate"); return found()[0] ?? null; },
+        async unique() {
+          const matches = found();
+          if (matches.length > 1) throw new Error("fixture_duplicate");
+          return matches[0] ?? null;
+        },
       };
       return query;
     },
@@ -301,6 +308,48 @@ describe("native checkpoint CAS, restore, and removal", () => {
       }
     }
   });
+
+  it("invalidates the same active artifact after plan and research writes advance the claim revision", async () => {
+    const db = database(); const conversation = db.conversation("123", 3);
+    const stored = await storeArgs(db, conversation, 1);
+    await invoke(storePortableCheckpoint, db.ctx, stored);
+    const args = {
+      actorId: ownerId, guildId: "123", conversationId: "discord:123", checkpointId: stored.checkpointId,
+      epoch: 1, expectedOwnerBindingVersion: 1, expectedRevision: 3, expectedGeneration: 1, expectedRoutingGeneration: 1,
+    };
+    // recordFrontmanPlan, recordResearchStarted, and recordResearchResult advance
+    // the canonical revision without changing the claimed generation or checkpoint.
+    conversation.revision = 6;
+    for (const change of [
+      { expectedRevision: 7 }, { expectedRevision: 0 }, { expectedRevision: 2.5 },
+      { actorId: "owner_2" }, { guildId: "456" }, { conversationId: "discord:456" },
+      { expectedOwnerBindingVersion: 2 }, { expectedGeneration: 2 }, { expectedRoutingGeneration: 2 },
+      { epoch: 2 }, { checkpointId: "different" },
+    ]) expect(await invoke(invalidateNativeCheckpoint, db.ctx, { ...args, ...change })).toMatchObject({ accepted: false });
+    const checkpoint = db.rows("discordCompactionCheckpoints")[0]!;
+    expect(checkpoint.nativeCompaction).toBeDefined();
+    expect(await invoke(invalidateNativeCheckpoint, db.ctx, args)).toEqual({ accepted: true, invalidated: true });
+    expect(checkpoint.nativeCompaction).toBeUndefined();
+    expect(checkpoint.portableSummary).toBe(portableSummary);
+    expect(checkpoint.status).toBe("active");
+    expect(conversation.activeCheckpointId).toBe(stored.checkpointId);
+    expect(await invoke(invalidateNativeCheckpoint, db.ctx, args)).toEqual({ accepted: true, invalidated: false });
+  });
+
+  it("never invalidates a replacement checkpoint with a stale claim", async () => {
+    const db = database(); const conversation = db.conversation("123", 3);
+    const first = await storeArgs(db, conversation, 1);
+    await invoke(storePortableCheckpoint, db.ctx, first);
+    conversation.revision = 6;
+    const replacement = await storeArgs(db, conversation, 2);
+    await invoke(storePortableCheckpoint, db.ctx, replacement);
+    expect(await invoke(invalidateNativeCheckpoint, db.ctx, {
+      actorId: ownerId, guildId: "123", conversationId: "discord:123", checkpointId: first.checkpointId,
+      epoch: 1, expectedOwnerBindingVersion: 1, expectedRevision: 3, expectedGeneration: 1, expectedRoutingGeneration: 1,
+    })).toMatchObject({ accepted: false, reason: "checkpoint_compare_and_set_lost" });
+    expect(conversation.activeCheckpointId).toBe(replacement.checkpointId);
+    expect(db.rows("discordCompactionCheckpoints").at(-1)?.nativeCompaction).toBeDefined();
+  });
 });
 
 describe("bounded staged compaction", () => {
@@ -458,6 +507,68 @@ describe("bounded staged compaction", () => {
     });
     expect(oldRequest.conversation).toEqual({ activeCheckpointId: activeArgs.checkpointId });
     expect(oldRequest).not.toHaveProperty("previousNativeCheckpoint");
+  });
+
+  it("renews the first real claim of a newly created conversation through the HTTP contract", async () => {
+    const db = database();
+    db.rows("discordChannels").push({
+      _id: "channel:456", ownerId, guildId: "123", channelId: "456", name: "testing-bot",
+      available: true, canSend: true, canView: true, canReadHistory: true,
+      roles: ["conversation_monitor", "reply_target"],
+    });
+    db.rows("discordChannelStates").push({
+      _id: "state:456", ownerId, guildId: "123", channelId: "456", generation: 0,
+      latestSequence: 1, triggerThroughSequence: 1, completedThroughSequence: 0,
+      recheckCount: 0, recheckPending: false, status: "idle",
+    });
+    db.rows("discordMessages").push({
+      _id: "message:789", ownerId, guildId: "123", channelId: "456", messageId: "789",
+      sequence: 1, authorId: "111", authorName: "Participant", content: "What is market capitalization?",
+      mentionsBot: true, isBot: false, createdAt: Date.now(),
+    });
+    const claim = z.object({
+      claimed: z.literal(true), runId: z.string(), generation: z.number(),
+      conversation: z.object({ conversationId: z.string(), epoch: z.number(), turnId: z.string() }),
+      conversationGeneration: z.number(), routingGeneration: z.number(), conversationLeaseToken: z.string(),
+    }).parse(await invoke(claimLoop, db.ctx, {
+      actorId: ownerId, guildId: "123", channelId: "456", workerId: "worker_1", claimId: "claim_1",
+    }));
+    expect(claim.conversation.epoch).toBe(0);
+    expect(claim.conversationGeneration).toBe(1);
+    const parsed = discordGatewayRequestSchema.parse({
+      operation: "heartbeat", actorId: ownerId, instanceId: "gateway_1", status: "online",
+      run: {
+        channelId: "456", runId: claim.runId, generation: claim.generation,
+        ...claim.conversation, conversationGeneration: claim.conversationGeneration,
+        routingGeneration: claim.routingGeneration, conversationLeaseToken: claim.conversationLeaseToken,
+        stage: "triaging",
+      },
+    });
+    const { operation, ...args } = parsed;
+    void operation;
+    expect(await invoke(heartbeat, db.ctx, args)).toMatchObject({ gatewayAccepted: true, loopAccepted: true });
+  });
+
+  it.each(["durable-v1", "native-v2"])("dispatches a fresh conversation heartbeat through %s", async (protocol) => {
+    vi.stubEnv("DISCORD_GATEWAY_SHARED_SECRET", "fixture-gateway-secret");
+    const request = {
+      operation: "heartbeat", actorId: ownerId, instanceId: "gateway_1", status: "online",
+      run: {
+        channelId: "456", runId: "run_1", generation: 1, conversationId: "discord:123",
+        epoch: 0, conversationGeneration: 1, routingGeneration: 1, turnId: "turn_1",
+        conversationLeaseToken: "lease_1", stage: "triaging",
+      },
+    };
+    const result = { gatewayAccepted: true, loopAccepted: true, leaseExpiresAt: 100 };
+    const heartbeat = await gatewayRequest(request, result, protocol);
+    expect(heartbeat.response.status).toBe(200);
+    expect(heartbeat.body.result).toEqual(result);
+    const { operation, ...mutationArgs } = request;
+    void operation;
+    expect(heartbeat.runMutation).toHaveBeenCalledWith(expect.anything(), mutationArgs);
+    const invalid = await gatewayRequest({ ...request, run: { ...request.run, epoch: -1 } }, result, protocol);
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.runMutation).not.toHaveBeenCalled();
   });
 
   it("negotiates native fields and checkpoint operations only through the native-v2 HTTP header", async () => {

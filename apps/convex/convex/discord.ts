@@ -2539,7 +2539,10 @@ export const invalidateNativeCheckpoint = internalMutation({
       || conversation.conversationId !== args.conversationId
       || conversation.epoch !== args.epoch
       || conversation.ownerBindingVersion !== args.expectedOwnerBindingVersion
-      || conversation.revision !== args.expectedRevision
+      // Plan and research writes advance revision within this generation. A rejected
+      // artifact still belongs to the same exact checkpoint and run identity below.
+      || !Number.isSafeInteger(args.expectedRevision) || args.expectedRevision <= 0
+      || args.expectedRevision > conversation.revision
       || conversation.generation !== args.expectedGeneration
       || conversation.routingGeneration !== args.expectedRoutingGeneration
       || (conversation.activeCheckpointId !== args.checkpointId && conversation.candidateCheckpointId !== args.checkpointId)

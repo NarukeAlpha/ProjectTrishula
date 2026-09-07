@@ -1,6 +1,8 @@
 /* oxlint-disable anti-slop/no-unknown-parameters -- Serialized byte measurement is the I/O size boundary and intentionally accepts any JSON candidate. */
 import { z } from "zod";
 
+export const MARKET_RESEARCH_DEFAULT_DATA_PROVIDER = "exa_financial_datasets";
+
 export const marketResearchControlOptionsSchema = z.object({
   marketDataProviderId: z.literal("exa_financial_datasets").nullable().optional(),
   includeCharts: z.boolean().optional(),
@@ -262,6 +264,13 @@ export function scheduledEditionKey(
   editionDate: string,
 ): string {
   return `market-paper:${configuration.ownerId}:${configuration.guildId}:${configuration.scheduleId}:${editionDate}`;
+}
+
+export function manualTestEditionKey(
+  configuration: Pick<ScheduleConfiguration, "ownerId" | "guildId" | "scheduleId">,
+  requestId: string,
+): string {
+  return `market-test:${configuration.ownerId}:${configuration.guildId}:${configuration.scheduleId}:${requestId}`;
 }
 
 export function dueScheduleDecision(

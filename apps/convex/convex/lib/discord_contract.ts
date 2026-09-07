@@ -18,6 +18,7 @@ export const DISCORD_SERVICE_CONTRACT = {
 
 const id = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
 const timestamp = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const conversationEpoch = z.number().int().nonnegative();
 const discordAttachmentUrl = z.url().max(2_000).refine((value) => {
   const url = new URL(value);
   const hostname = url.hostname.toLowerCase();
@@ -163,7 +164,7 @@ const guild = z.object({
 
 const conversationFence = z.object({
   conversationId: id,
-  epoch: z.number().int().positive(),
+  epoch: conversationEpoch,
   generation: z.number().int().positive(),
   routingGeneration: z.number().int().positive(),
   turnId: id,
@@ -174,7 +175,7 @@ const conversationFence = z.object({
 const durableRunFence = z.object({
   runId: id,
   conversationId: id,
-  epoch: z.number().int().positive(),
+  epoch: conversationEpoch,
   conversationGeneration: z.number().int().positive(),
   routingGeneration: z.number().int().positive(),
   turnId: id,
@@ -186,7 +187,7 @@ const durableStageFence = z.object({
   runId: id,
   channelGeneration: z.number().int().positive(),
   conversationId: id,
-  epoch: z.number().int().nonnegative(),
+  epoch: conversationEpoch,
   conversationGeneration: z.number().int().positive(),
   routingGeneration: z.number().int().positive(),
   turnId: id,
@@ -545,7 +546,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
       runId: id,
       generation: z.number().int().positive(),
       conversationId: id.optional(),
-      epoch: z.number().int().positive().optional(),
+      epoch: conversationEpoch.optional(),
       conversationGeneration: z.number().int().positive().optional(),
       routingGeneration: z.number().int().positive().optional(),
       turnId: id.optional(),
@@ -574,7 +575,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     actorId: id,
     guildId: id,
     conversationId: id,
-    epoch: z.number().int().nonnegative(),
+    epoch: conversationEpoch,
     expectedRevision: z.number().int().positive(),
     expectedGeneration: z.number().int().positive(),
     expectedRoutingGeneration: z.number().int().positive(),
@@ -595,7 +596,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     guildId: id,
     conversationId: id,
     checkpointId: id,
-    epoch: z.number().int().nonnegative(),
+    epoch: conversationEpoch,
     expectedOwnerBindingVersion: z.number().int().positive(),
     expectedRevision: z.number().int().positive(),
     expectedGeneration: z.number().int().positive(),

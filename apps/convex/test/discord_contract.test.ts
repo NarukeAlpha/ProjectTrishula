@@ -126,7 +126,64 @@ const legacyRunnableResponseSchema = z.object({
   }).strict()),
 }).strict();
 
+function freshConversationRequests(epoch: number, generation = 1) {
+  const actorId = "user_01HWORKOSALLOWED";
+  const guildId = "123";
+  const channelId = "456";
+  const runId = "run_1";
+  const run = {
+    runId, conversationId: "discord:123", epoch, conversationGeneration: generation,
+    routingGeneration: 1, turnId: "turn_1", conversationLeaseToken: "lease_1",
+  };
+  const conversation = {
+    conversationId: run.conversationId, epoch, generation, routingGeneration: 1,
+    turnId: run.turnId, leaseToken: run.conversationLeaseToken,
+  };
+  const stage = {
+    actorId, guildId,
+    fence: { ...run, sourceChannelId: channelId, channelGeneration: 1 },
+  };
+  return [
+    { operation: "heartbeat", actorId, instanceId: "gateway_1", status: "online", run: { ...run, channelId, generation: 1 } },
+    { operation: "newestContext", actorId, guildId, channelId, run },
+    { operation: "recordFrontmanPlan", ...stage, requestId: "plan_1", action: "research", reasonCode: "explicit_needs_freshness", payload: "{}" },
+    { operation: "recordResearchStarted", ...stage, requestId: "research_1", normalizedRequest: "{}", inputContextHash: "a".repeat(64), pass: 1 },
+    {
+      operation: "recordResearchResult", ...stage, requestId: "research_1", failureCode: "provider_unavailable",
+      failureDetail: "Public research was unavailable.", failureRetryable: true,
+      sourceUrls: [], serializedBytes: 0, estimatedTokens: 0,
+      tokenEstimatorVersion: "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1",
+    },
+    {
+      operation: "recordFrontmanResume", ...stage, requestId: "resume_1", action: "send", payload: "{}",
+      acknowledgementDelivery: "not_required", eligibleThroughSequence: 1, eligibleHumanRevision: 1,
+      eligibleContextHash: "b".repeat(64),
+    },
+    {
+      operation: "enqueueReply", actorId, guildId, channelId, sourceChannelId: channelId, runId, generation: 1,
+      conversation, idempotencyKey: "reply_1", content: "Done.", replyKind: "final", recheckRequested: false, finalizesLoop: true,
+    },
+    { operation: "completeLoop", actorId, channelId, runId, generation: 1, conversation, outcome: "completed" },
+  ];
+}
+
 describe("Discord gateway HTTP contract", () => {
+  it.each(freshConversationRequests(0))("accepts the initial epoch throughout $operation", (request) => {
+    expect(discordGatewayRequestSchema.safeParse(request).success).toBe(true);
+  });
+
+  it.each([-1, 0.5])("rejects invalid epoch %s throughout a fenced turn", (epoch) => {
+    for (const request of freshConversationRequests(epoch)) {
+      expect(discordGatewayRequestSchema.safeParse(request).success, request.operation).toBe(false);
+    }
+  });
+
+  it.each([0, -1, 0.5])("still rejects inactive or invalid generation %s", (generation) => {
+    for (const request of freshConversationRequests(0, generation)) {
+      expect(discordGatewayRequestSchema.safeParse(request).success, request.operation).toBe(false);
+    }
+  });
+
   it("keeps the old gateway request bodies valid during a Convex-first rollout", () => {
     const actorId = "user_01HWORKOSALLOWED";
     expect([
