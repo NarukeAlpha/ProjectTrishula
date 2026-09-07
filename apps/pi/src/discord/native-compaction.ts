@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type {
   Api,
@@ -119,7 +118,6 @@ export type NativeCompactionProbeFailureCategory =
   | "terminal_before_output"
   | "terminal_event_invalid"
   | "terminal_missing"
-  | "terminal_output_mismatch"
   | "terminal_response_id_mismatch"
   | "terminal_status_invalid"
   | "terminal_usage_inconsistent"
@@ -484,6 +482,8 @@ function responseArtifact(
       if (!output.success) {
         rejectNativeCompactionResponse(state, "output_event_invalid");
       }
+      // This first-party boundary is intentionally narrower than Codex: accept
+      // exactly one streamed output item, and require that item to be compaction.
       if (compactionEvent !== undefined) {
         rejectNativeCompactionResponse(state, "output_event_duplicate");
       }
@@ -538,21 +538,6 @@ function responseArtifact(
     && terminal.response.id !== undefined
     && compactionEvent!.response_id !== terminal.response.id
   ) rejectNativeCompactionResponse(state, "terminal_response_id_mismatch");
-  const terminalOutput = terminal.response.output;
-  if (terminalOutput !== undefined) {
-    const outputIndex = compactionEvent!.output_index;
-    const compactionOutput = terminalOutput.filter(
-      (item) => compactionItemSchema.safeParse(item).success,
-    );
-    const linkedItem = [terminalOutput[outputIndex]];
-    if (
-      terminalOutput.length !== 1
-      || compactionOutput.length !== 1
-      || linkedItem.length !== 1
-      || linkedItem[0] === undefined
-      || !isDeepStrictEqual(linkedItem[0], compactionEvent!.item)
-    ) rejectNativeCompactionResponse(state, "terminal_output_mismatch");
-  }
   const usage = terminal.response.usage;
   if (usage.total_tokens !== usage.input_tokens + usage.output_tokens) {
     rejectNativeCompactionResponse(state, "terminal_usage_inconsistent");

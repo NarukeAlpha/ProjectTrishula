@@ -75,16 +75,25 @@ export function createApp(dependencies: AppDependencies): express.Express {
   app.get("/health", (_request, response) => {
     const executor = dependencies.executor.readiness();
     const discordAgents = dependencies.discordAgents?.readiness();
-    const ready = dependencies.registry.isAccepting() && executor.ready && (discordAgents?.ready ?? true);
+    const acceptingRuns = dependencies.registry.isAccepting();
+    const marketResearchEnabled = dependencies.marketResearchEnabled ?? false;
+    const exaConfigured = dependencies.exaConfigured ?? false;
+    const marketResearchRunner = dependencies.marketResearch?.readiness();
+    const marketResearchReady = !marketResearchEnabled || (
+      exaConfigured
+      && marketResearchRunner?.ready === true
+      && dependencies.marketResearchJobs !== undefined
+    );
+    const ready = acceptingRuns && executor.ready && (discordAgents?.ready ?? true) && marketResearchReady;
     const health: HealthResponse = {
       ok: ready,
       service: "project-trishula-pi",
-      acceptingRuns: dependencies.registry.isAccepting(),
+      acceptingRuns,
       executor,
       marketResearch: {
-        enabled: dependencies.marketResearchEnabled ?? false,
-        exaConfigured: dependencies.exaConfigured ?? false,
-        ...(dependencies.marketResearch ? { runner: dependencies.marketResearch.readiness() } : {}),
+        enabled: marketResearchEnabled,
+        exaConfigured,
+        ...(marketResearchRunner ? { runner: marketResearchRunner } : {}),
       },
     };
     if (discordAgents) health.discordAgents = discordAgents;
