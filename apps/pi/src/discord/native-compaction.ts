@@ -264,6 +264,24 @@ async function boundedResponseText(response: Response): Promise<string> {
   return text + decoder.decode();
 }
 
+type CapturedCompactionResponse =
+  | { ok: true; text: string }
+  | { ok: false; code: NativeCompactionErrorCode };
+
+function captureCompactionResponse(
+  response: Response,
+): Promise<CapturedCompactionResponse> {
+  return boundedResponseText(response).then(
+    (text): CapturedCompactionResponse => ({ ok: true, text }),
+    (error): CapturedCompactionResponse => ({
+      ok: false,
+      code: error instanceof NativeCompactionError
+        ? error.code
+        : "response_invalid",
+    }),
+  );
+}
+
 function codexEndpoint(input: string | URL | Request): URL {
   const url = new URL(input instanceof Request ? input.url : input);
   if (
@@ -297,7 +315,7 @@ export async function generateNativeCompaction(
   }
   const input = nativeCompactionInput(options.request);
   let requestCaptured = false;
-  let capturedResponse: Promise<string> | undefined;
+  let capturedResponse: Promise<CapturedCompactionResponse> | undefined;
   const upstreamFetch = options.fetch ?? globalThis.fetch;
   try {
     const streamOptions: ModelsSimpleStreamOptions = {
@@ -326,7 +344,7 @@ export async function generateNativeCompaction(
       fetch: async (request, init) => {
         codexEndpoint(request);
         const response = await upstreamFetch(request, init);
-        if (response.ok) capturedResponse = boundedResponseText(response.clone());
+        if (response.ok) capturedResponse = captureCompactionResponse(response.clone());
         return response;
       },
     };
@@ -351,7 +369,9 @@ export async function generateNativeCompaction(
     if (!requestCaptured || capturedResponse === undefined) {
       throw new NativeCompactionError("provider_contract_incompatible");
     }
-    const parsed = responseArtifact(await capturedResponse, input);
+    const captured = await capturedResponse;
+    if (!captured.ok) throw new NativeCompactionError(captured.code);
+    const parsed = responseArtifact(captured.text, input);
     const historyBytes = serializedBytes(parsed.replacementHistory);
     return discordNativeCompactionArtifactSchema.parse({
       schemaVersion: 1,
