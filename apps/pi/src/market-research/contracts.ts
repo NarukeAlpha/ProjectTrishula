@@ -7,6 +7,7 @@ export const MARKET_RESEARCH_SCHEMA_VERSION = 1 as const;
 export const MARKET_RESEARCH_MAX_EVIDENCE_BYTES = 256 * 1024;
 export const MARKET_RESEARCH_MAX_CHECKPOINT_BYTES = 64 * 1024;
 export const MARKET_RESEARCH_MAX_HIGHLIGHT_CHARACTERS = 2_000;
+export const MARKET_RESEARCH_MAX_RANKED_SETUPS = 10;
 
 const id = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:._-]+$/);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -149,7 +150,8 @@ export const marketResearchPreferencesSchema = z.object({
   excludedDomains: z.array(boundedText(253)).max(100),
   requestedSources: z.array(requestedSourceSchema).length(5),
   reportSections: reportSectionsSchema,
-  maximumRankedSetups: z.number().int().min(1).max(5),
+  maximumRankedSetups: z.number().int().min(1).max(MARKET_RESEARCH_MAX_RANKED_SETUPS),
+  // Frozen jobs may retain the retired concise setting; new saves and composition use full editions.
   editionDepth: z.enum(["full", "concise"]),
   includeWeekends: z.boolean(),
   includeCharts: z.boolean(),
@@ -427,6 +429,13 @@ export const setupSchema = z.object({
   }
 });
 
+export function isPositiveRankedSetup(setup: z.infer<typeof setupSchema>): boolean {
+  return (setup.label === "TOP WATCH" || setup.label === "WATCH")
+    && setup.score >= 75
+    && setup.thesisLabel !== "AT RISK"
+    && setup.thesisLabel !== "INVALIDATED";
+}
+
 const tickerDossierSchema = z.object({
   symbol,
   thesisLabel: z.enum(["VALIDATED", "PARTIALLY VALIDATED", "AT RISK", "INVALIDATED", "NO PRIOR THESIS"]),
@@ -489,7 +498,7 @@ export const morningPaperEditionSchema = z.object({
   topStories: z.array(citedTextSchema).min(3).max(5),
   scheduledEvents: z.array(citedTextSchema).max(20),
   marketContext: z.array(citedTextSchema).min(1).max(30),
-  primaryBoard: z.array(setupSchema).max(10),
+  primaryBoard: z.array(setupSchema).max(MARKET_RESEARCH_MAX_RANKED_SETUPS),
   challengers: z.array(setupSchema).max(3),
   tickerDossiers: z.array(tickerDossierSchema).min(1).max(40),
   validationRules: z.array(citedTextSchema).min(1).max(20),
@@ -504,6 +513,9 @@ export const morningPaperEditionSchema = z.object({
   const primarySymbols = value.tickerDossiers.map((dossier) => dossier.symbol);
   if (new Set(primarySymbols).size !== primarySymbols.length) {
     context.addIssue({ code: "custom", path: ["tickerDossiers"], message: "Ticker dossiers must be unique." });
+  }
+  if (new Set(value.primaryBoard.map((setup) => setup.symbol)).size !== value.primaryBoard.length) {
+    context.addIssue({ code: "custom", path: ["primaryBoard"], message: "Ranked setup symbols must be unique." });
   }
   if (new Set(value.sourceIds).size !== value.sourceIds.length) {
     context.addIssue({ code: "custom", path: ["sourceIds"], message: "Edition source IDs must be unique." });
@@ -591,8 +603,17 @@ export const morningPaperEditionSchema = z.object({
     context.addIssue({ code: "custom", path: ["sections"], message: "Edition sections are out of order." });
   }
   const sectionIdSet = new Set(sectionIds);
+  const rankedSectionIds = new Set(value.sections.filter((section) => section.kind === "primary_board").map((section) => section.sectionId));
+  const chartEligibleSymbols = new Set(value.primaryBoard.filter(isPositiveRankedSetup).map((setup) => setup.symbol));
   const chartRequestIds = new Set<string>();
   for (const [index, request] of value.chartRequests.entries()) {
+    if (!chartEligibleSymbols.has(request.symbol) || !rankedSectionIds.has(request.sectionId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["chartRequests", index],
+        message: "Charts require a positive ranked setup in the primary board section.",
+      });
+    }
     if (
       request.editionId !== value.editionId
       || !sectionIdSet.has(request.sectionId)

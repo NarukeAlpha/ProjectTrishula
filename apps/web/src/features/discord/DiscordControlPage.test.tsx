@@ -120,7 +120,10 @@ function resetGuildConversation(guildId: string) {
   });
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 function marketResearchStatus(
   timezone = "America/New_York",
@@ -146,6 +149,19 @@ function marketResearchStatus(
     },
     current: null,
   };
+}
+
+function readyNewspaperStatus(): MarketResearchControlStatusReadModel {
+  const status = marketResearchStatus();
+  Object.assign(status.preferences, {
+    forumChannelId: "channel_3",
+    forumTagIds: ["tag_1"],
+    timezoneConfirmed: true,
+    maximumRankedSetups: 10,
+    includeCharts: true,
+    maximumCharts: 3,
+  });
+  return status;
 }
 
 describe("Discord control surface", () => {
@@ -222,7 +238,7 @@ describe("Discord control surface", () => {
     ).toHaveAttribute("href", discordInstallUrl("1114379702015111228"));
   });
 
-  it("shows three independent server-level routes instead of channel cards", () => {
+  it("shows only the forum, time, and weekend controls for a full newspaper", () => {
     render(
       <DiscordControlView
         model={controlPlane()}
@@ -230,7 +246,6 @@ describe("Discord control surface", () => {
         onResetGuildConversation={resetGuildConversation}
       />,
     );
-
     expect(
       screen.getByRole("combobox", { name: "Conversation channel" }),
     ).toHaveValue("channel_1");
@@ -240,345 +255,372 @@ describe("Discord control surface", () => {
     expect(
       screen.getByRole("combobox", { name: "Morning newspaper forum" }),
     ).toHaveValue("");
-    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-    expect(screen.getByRole("combobox", { name: "Chart images" })).toHaveValue(
-      "0",
-    );
-    expect(screen.getByText("Advanced").closest("details")).not.toHaveAttribute(
-      "open",
-    );
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    for (const label of [
+      "Edition depth",
+      "Chart images",
+      "Numerical data provider",
+      "Maximum ranked setups",
+    ]) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByText("Advanced")).not.toBeInTheDocument();
     expect(
-      screen.getByLabelText("Numerical data provider").closest("details"),
-    ).toBe(screen.getByText("Advanced").closest("details"));
-    expect(
-      screen.getByLabelText("Maximum ranked setups").closest("details"),
-    ).toBe(screen.getByText("Advanced").closest("details"));
-    expect(
-      screen.queryByRole("checkbox", { name: /timezone|chart/i }),
+      screen.queryByRole("checkbox", { name: "Automatic publishing" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("spinbutton", { name: "Maximum chart images" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText(/up to 10 qualified ranked/)).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Save morning newspaper" }),
     ).toHaveTextContent("Save");
-    expect(
-      screen.getByRole("button", { name: "Run preview" }),
-    ).toHaveTextContent("Preview (no Discord)");
+    expect(screen.getByRole("button", { name: "Test now" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Schedule now" })).toBeDisabled();
   });
 
-  it("saves the forum route without changing either conversational route", async () => {
-    const onSetGuildRouting = vi.fn().mockResolvedValue(undefined);
-    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+  it("saves the forum and fixed research policy without changing conversation routes", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onRoute = vi.fn();
     render(
       <DiscordControlView
         model={controlPlane()}
-        onSetGuildRouting={onSetGuildRouting}
-        onSaveMarketResearch={onSaveMarketResearch}
-        onResetGuildConversation={vi.fn()}
-      />,
-    );
-
-    const forum = screen.getByRole("combobox", {
-      name: "Morning newspaper forum",
-    });
-    expect(forum.querySelector('option[value="channel_1"]')).toBeNull();
-    fireEvent.change(forum, { target: { value: "channel_3" } });
-    const tag = screen.getByRole("combobox", { name: "Morning newspaper tag" });
-    expect(tag.querySelector('option[value="tag_2"]')).toBeNull();
-    fireEvent.change(tag, { target: { value: "tag_1" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save morning newspaper" }),
-    );
-
-    await waitFor(() =>
-      expect(onSaveMarketResearch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          guildId: "guild_1",
-          forumChannelId: "channel_3",
-          forumTagIds: ["tag_1"],
-          enabled: false,
-        }),
-      ),
-    );
-    expect(onSetGuildRouting).not.toHaveBeenCalled();
-  });
-
-  it("runs a preview without selecting a forum or enabling scheduled publication", async () => {
-    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
-    const onMarketResearchAction = vi.fn().mockResolvedValue(undefined);
-    const onSetGuildRouting = vi.fn();
-    render(
-      <DiscordControlView
-        model={controlPlane()}
-        onSetGuildRouting={onSetGuildRouting}
-        onSaveMarketResearch={onSaveMarketResearch}
-        onMarketResearchAction={onMarketResearchAction}
+        onSetGuildRouting={onRoute}
+        onSaveMarketResearch={onSave}
         onResetGuildConversation={resetGuildConversation}
       />,
     );
-    expect(screen.getByRole("button", { name: "Publish now" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
-    await waitFor(() =>
-      expect(onMarketResearchAction).toHaveBeenCalledWith(
-        "guild_1",
-        "preview",
-        undefined,
-      ),
+    fireEvent.change(screen.getByLabelText("Morning newspaper forum"), {
+      target: { value: "channel_3" },
+    });
+    fireEvent.change(screen.getByLabelText("Morning newspaper tag"), {
+      target: { value: "tag_1" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
     );
-    expect(onSaveMarketResearch).toHaveBeenCalledWith(
-      expect.objectContaining({ forumChannelId: null, enabled: false }),
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    expect(onSave.mock.calls[0]![0]).toMatchObject({
+      guildId: "guild_1",
+      forumChannelId: "channel_3",
+      forumTagIds: ["tag_1"],
+      editionDepth: "full",
+      maximumRankedSetups: 10,
+      includeCharts: true,
+      maximumCharts: 3,
+      enabled: false,
+    });
+    expect(onSave.mock.calls[0]![0]).not.toHaveProperty("marketDataProviderId");
+    expect(onSave.mock.calls[0]![0]).not.toHaveProperty(
+      "chartsAcceptancePassed",
     );
-    expect(onSetGuildRouting).not.toHaveBeenCalled();
+    expect(onSave.mock.calls[0]![0]).not.toHaveProperty("ownerDecision");
+    expect(onRoute).not.toHaveBeenCalled();
   });
 
-  it("saves explicit chart and provider choices without claiming evaluation acceptance", async () => {
-    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+  it("requires a valid forum, tag, timezone, and time before test or schedule", () => {
     render(
       <DiscordControlView
         model={controlPlane()}
         onSetGuildRouting={vi.fn()}
-        marketResearch={[marketResearchStatus()]}
-        onSaveMarketResearch={onSaveMarketResearch}
         onResetGuildConversation={resetGuildConversation}
       />,
     );
-    fireEvent.click(screen.getByText("Advanced"));
-    fireEvent.change(screen.getByLabelText("Numerical data provider"), {
-      target: { value: "exa_financial_datasets" },
+    const schedule = screen.getByRole("button", { name: "Schedule now" });
+    const test = screen.getByRole("button", { name: "Test now" });
+    fireEvent.change(screen.getByLabelText("Morning newspaper forum"), {
+      target: { value: "channel_3" },
     });
-    fireEvent.change(screen.getByRole("combobox", { name: "Chart images" }), {
-      target: { value: "2" },
+    fireEvent.change(screen.getByLabelText("Schedule timezone"), {
+      target: { value: "America/Puerto_Rico" },
     });
-    fireEvent.change(screen.getByLabelText("Maximum ranked setups"), {
-      target: { value: "3" },
+    expect(schedule).toBeDisabled();
+    expect(test).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Morning newspaper tag"), {
+      target: { value: "tag_1" },
+    });
+    expect(schedule).toBeEnabled();
+    expect(test).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Local publish time"), {
+      target: { value: "" },
+    });
+    expect(schedule).toBeDisabled();
+    expect(test).toBeDisabled();
+  });
+
+  it("test saves the current form then queues a real forum edition with a request ID", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onAction = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[readyNewspaperStatus()]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={onSave}
+        onMarketResearchAction={onAction}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Local publish time"), {
+      target: { value: "09:30" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Test now" }));
+    await waitFor(() =>
+      expect(onAction).toHaveBeenCalledWith(
+        "guild_1",
+        "test",
+        undefined,
+        expect.any(String),
+      ),
+    );
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localHour: 9,
+        localMinute: 30,
+        enabled: false,
+        forumChannelId: "channel_3",
+      }),
+    );
+    expect(onSave.mock.invocationCallOrder[0]).toBeLessThan(
+      onAction.mock.invocationCallOrder[0]!,
+    );
+    expect(screen.getByText(/Test queued/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Schedule now" })).toBeEnabled();
+  });
+
+  it("does not queue a test when saving fails", async () => {
+    const onAction = vi.fn();
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[readyNewspaperStatus()]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi.fn().mockRejectedValue(new Error("offline"))}
+        onMarketResearchAction={onAction}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Test now" }));
+    await waitFor(() =>
+      expect(screen.getByText(/Could not queue/)).toBeVisible(),
+    );
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("reuses an uncertain test request ID, then creates a new ID after success", async () => {
+    const onAction = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[readyNewspaperStatus()]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi.fn().mockResolvedValue(undefined)}
+        onMarketResearchAction={onAction}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    const test = screen.getByRole("button", { name: "Test now" });
+    fireEvent.click(test);
+    await waitFor(() =>
+      expect(screen.getByText(/Could not queue/)).toBeVisible(),
+    );
+    fireEvent.click(test);
+    await waitFor(() => expect(screen.getByText(/Test queued/)).toBeVisible());
+    expect(onAction.mock.calls[0]![3]).toBe(onAction.mock.calls[1]![3]);
+    fireEvent.click(test);
+    await waitFor(() => expect(onAction).toHaveBeenCalledTimes(3));
+    expect(onAction.mock.calls[2]![3]).not.toBe(onAction.mock.calls[1]![3]);
+  });
+
+  it("preserves an uncertain test ID when the server card remounts", async () => {
+    const onAction = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValue(undefined);
+    const view = () => (
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[readyNewspaperStatus()]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi.fn().mockResolvedValue(undefined)}
+        onMarketResearchAction={onAction}
+        onResetGuildConversation={resetGuildConversation}
+      />
+    );
+    const first = render(view());
+    fireEvent.click(screen.getByRole("button", { name: "Test now" }));
+    await waitFor(() =>
+      expect(screen.getByText(/Could not queue/)).toBeVisible(),
+    );
+    first.unmount();
+    render(view());
+    fireEvent.click(screen.getByRole("button", { name: "Test now" }));
+    await waitFor(() => expect(screen.getByText(/Test queued/)).toBeVisible());
+    expect(onAction.mock.calls[1]![3]).toBe(onAction.mock.calls[0]![3]);
+  });
+
+  it("shows Scheduled only after scheduling succeeds and re-enables it for changes", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[readyNewspaperStatus()]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={onSave}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Schedule now" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Scheduled" })).toBeDisabled(),
+    );
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true }),
+    );
+    fireEvent.change(screen.getByLabelText("Local publish time"), {
+      target: { value: "09:00" },
+    });
+    expect(screen.getByRole("button", { name: "Schedule now" })).toBeEnabled();
+    expect(screen.queryByText("Newspaper scheduled.")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Local publish time"), {
+      target: { value: "08:00" },
+    });
+    expect(screen.getByRole("button", { name: "Scheduled" })).toBeDisabled();
+  });
+
+  it("Save keeps an unchanged schedule but changed settings need scheduling again", async () => {
+    const status = readyNewspaperStatus();
+    status.preferences.enabled = true;
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[status]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={onSave}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Scheduled" })).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
+    await waitFor(() =>
+      expect(onSave).toHaveBeenLastCalledWith(
+        expect.objectContaining({ enabled: true }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Local publish time")).toBeEnabled(),
+    );
+    fireEvent.change(screen.getByLabelText("Local publish time"), {
+      target: { value: "10:00" },
     });
     fireEvent.click(
       screen.getByRole("button", { name: "Save morning newspaper" }),
     );
     await waitFor(() =>
-      expect(onSaveMarketResearch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          marketDataProviderId: "exa_financial_datasets",
-          includeCharts: true,
-          maximumCharts: 2,
-          maximumRankedSetups: 3,
-          enabled: false,
-        }),
+      expect(onSave).toHaveBeenLastCalledWith(
+        expect.objectContaining({ enabled: false, localHour: 10 }),
       ),
     );
-    expect(onSaveMarketResearch.mock.calls[0]![0]).not.toHaveProperty(
-      "chartsAcceptancePassed",
+    expect(screen.getByRole("button", { name: "Schedule now" })).toBeEnabled();
+  });
+
+  it("does not claim Scheduled when the backend rejects scheduling", async () => {
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[readyNewspaperStatus()]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi
+          .fn()
+          .mockRejectedValue(new Error("unavailable"))}
+        onResetGuildConversation={resetGuildConversation}
+      />,
     );
-    expect(onSaveMarketResearch.mock.calls[0]![0]).not.toHaveProperty(
-      "ownerDecision",
+    fireEvent.click(screen.getByRole("button", { name: "Schedule now" }));
+    await waitFor(() =>
+      expect(screen.getByText(/Could not save/)).toBeVisible(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Scheduled" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule now" })).toBeEnabled();
+  });
+
+  it("uses new server revisions to clear an outdated Scheduled state without resetting the draft", () => {
+    const status = readyNewspaperStatus();
+    status.preferences.enabled = true;
+    const callbacks = {
+      onSetGuildRouting: vi.fn(),
+      onResetGuildConversation: resetGuildConversation,
+    };
+    const { rerender } = render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[status]}
+        {...callbacks}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Scheduled" })).toBeDisabled();
+    const updated = readyNewspaperStatus();
+    updated.preferences.revision = 2;
+    rerender(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[updated]}
+        {...callbacks}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Schedule now" })).toBeEnabled();
+    expect(screen.getByLabelText("Morning newspaper forum")).toHaveValue(
+      "channel_3",
     );
   });
 
-  it("displays preview completion and allows preview when the forum lacks attachment permission", async () => {
+  it("allows text publication when the forum lacks optional chart permission", () => {
     const model = controlPlane();
     model.guilds[0]!.channels[2]!.canAttachFiles = false;
-    const status = marketResearchStatus();
-    status.preferences.forumChannelId = "channel_3";
-    status.preferences.forumTagIds = ["tag_1"];
-    status.preview = {
-      previewId: "MRP-test",
-      status: "completed",
-      requestedAt: Date.now(),
-      qualitySummary: ["Preview composed without delivery."],
-    };
-    const onMarketResearchAction = vi.fn().mockResolvedValue(undefined);
-    const onSaveMarketResearch = vi.fn();
     render(
       <DiscordControlView
         model={model}
+        marketResearch={[readyNewspaperStatus()]}
         onSetGuildRouting={vi.fn()}
-        marketResearch={[status]}
-        onSaveMarketResearch={onSaveMarketResearch}
-        onMarketResearchAction={onMarketResearchAction}
         onResetGuildConversation={resetGuildConversation}
       />,
     );
-    const charts = screen.getByRole("combobox", { name: "Chart images" });
-    expect(charts).toBeEnabled();
-    expect(within(charts).getByRole("option", { name: "Off" })).toBeEnabled();
-    for (const count of [1, 2, 3])
-      expect(
-        within(charts).getByRole("option", { name: String(count) }),
-      ).toBeDisabled();
-    expect(screen.getByText("Latest preview: completed")).toBeVisible();
-    expect(
-      screen.getByText("Preview composed without delivery."),
-    ).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
-    await waitFor(() => expect(onMarketResearchAction).toHaveBeenCalledOnce());
-    expect(onSaveMarketResearch).not.toHaveBeenCalled();
-  });
-
-  it("requires an explicit timezone choice without adding a confirmation checkbox", async () => {
-    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
-    const status = marketResearchStatus();
-    status.preferences.forumChannelId = "channel_3";
-    status.preferences.forumTagIds = ["tag_1"];
-    status.preferences.marketDataProviderId = "exa_financial_datasets";
-    render(
-      <DiscordControlView
-        model={controlPlane()}
-        marketResearch={[status]}
-        onSetGuildRouting={vi.fn()}
-        onSaveMarketResearch={onSaveMarketResearch}
-        onResetGuildConversation={resetGuildConversation}
-      />,
-    );
-    const timezone = screen.getByRole("combobox", {
-      name: "Schedule timezone",
-    });
-    expect(timezone).toHaveValue("");
-    expect(
-      within(timezone).getByRole("option", { name: "Choose a timezone" }),
-    ).toBeDisabled();
-    const automatic = screen.getByRole("checkbox", {
-      name: "Automatic publishing",
-    });
-    expect(automatic).toBeDisabled();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save morning newspaper" }),
-    );
-    await waitFor(() =>
-      expect(onSaveMarketResearch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          timezone: "America/New_York",
-          timezoneConfirmed: false,
-          enabled: false,
-        }),
-      ),
-    );
-    await waitFor(() => expect(timezone).toBeEnabled());
-    fireEvent.change(timezone, { target: { value: "America/New_York" } });
-    expect(automatic).toBeEnabled();
-    expect(automatic).not.toBeChecked();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save morning newspaper" }),
-    );
-    await waitFor(() =>
-      expect(onSaveMarketResearch).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          timezone: "America/New_York",
-          timezoneConfirmed: true,
-          enabled: false,
-        }),
-      ),
-    );
+    expect(screen.getByText(/Research will still post as text/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Test now" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Schedule now" })).toBeEnabled();
   });
 
   it.each(["America/Puerto_Rico", "Europe/London"])(
-    "preserves an already-confirmed saved timezone: %s",
+    "preserves the saved timezone %s",
     async (timezone) => {
-      const status = marketResearchStatus(timezone);
-      status.preferences.timezoneConfirmed = true;
-      status.preferences.maximumCharts = 2;
-      const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+      const status = readyNewspaperStatus();
+      status.preferences.timezone = timezone;
+      const onSave = vi.fn().mockResolvedValue(undefined);
       render(
         <DiscordControlView
           model={controlPlane()}
           marketResearch={[status]}
           onSetGuildRouting={vi.fn()}
-          onSaveMarketResearch={onSaveMarketResearch}
+          onSaveMarketResearch={onSave}
           onResetGuildConversation={resetGuildConversation}
         />,
       );
-      expect(
-        screen.getByRole("combobox", { name: "Schedule timezone" }),
-      ).toHaveValue(timezone);
+      expect(screen.getByLabelText("Schedule timezone")).toHaveValue(timezone);
       fireEvent.click(
         screen.getByRole("button", { name: "Save morning newspaper" }),
       );
       await waitFor(() =>
-        expect(onSaveMarketResearch).toHaveBeenCalledWith(
-          expect.objectContaining({
-            timezone,
-            timezoneConfirmed: true,
-            includeCharts: false,
-            maximumCharts: 2,
-            enabled: false,
-          }),
+        expect(onSave).toHaveBeenCalledWith(
+          expect.objectContaining({ timezone, timezoneConfirmed: true }),
         ),
       );
     },
   );
-
-  it.each([0, 1, 2, 3])(
-    "maps chart choice %s to the existing save fields without enabling publishing",
-    async (count) => {
-      const status = marketResearchStatus();
-      status.preferences.includeCharts = true;
-      status.preferences.maximumCharts = 3;
-      const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
-      render(
-        <DiscordControlView
-          model={controlPlane()}
-          marketResearch={[status]}
-          onSetGuildRouting={vi.fn()}
-          onSaveMarketResearch={onSaveMarketResearch}
-          onResetGuildConversation={resetGuildConversation}
-        />,
-      );
-      const charts = screen.getByRole("combobox", { name: "Chart images" });
-      expect(charts).toHaveValue("3");
-      fireEvent.change(charts, { target: { value: String(count) } });
-      fireEvent.click(
-        screen.getByRole("button", { name: "Save morning newspaper" }),
-      );
-      await waitFor(() =>
-        expect(onSaveMarketResearch).toHaveBeenCalledWith(
-          expect.objectContaining({
-            includeCharts: count > 0,
-            maximumCharts: count,
-            timezoneConfirmed: false,
-            enabled: false,
-          }),
-        ),
-      );
-    },
-  );
-
-  it("keeps automatic publishing gated by the forum, required tag, timezone, and provider", () => {
-    render(
-      <DiscordControlView
-        model={controlPlane()}
-        onSetGuildRouting={vi.fn()}
-        onSaveMarketResearch={vi.fn()}
-        onResetGuildConversation={resetGuildConversation}
-      />,
-    );
-    const automatic = screen.getByRole("checkbox", {
-      name: "Automatic publishing",
-    });
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Schedule timezone" }),
-      { target: { value: "America/Puerto_Rico" } },
-    );
-    fireEvent.click(screen.getByText("Advanced"));
-    fireEvent.change(screen.getByLabelText("Numerical data provider"), {
-      target: { value: "exa_financial_datasets" },
-    });
-    expect(automatic).toBeDisabled();
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Morning newspaper forum" }),
-      { target: { value: "channel_3" } },
-    );
-    expect(automatic).toBeDisabled();
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Morning newspaper tag" }),
-      { target: { value: "tag_1" } },
-    );
-    expect(automatic).toBeEnabled();
-    expect(automatic).not.toBeChecked();
-    fireEvent.change(screen.getByLabelText("Numerical data provider"), {
-      target: { value: "" },
-    });
-    expect(automatic).toBeDisabled();
-  });
 
   it("does not present split legacy roles as a configured conversation", () => {
     const model = controlPlane();

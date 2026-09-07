@@ -16,6 +16,7 @@ import { normalizeDiscordForumCapabilities } from "./lib/discord_contract.js";
 import { canonicalJson, sha256Hex } from "./lib/canonical_json.js";
 import {
   MARKET_RESEARCH_DELIVERY_LEASE_MS,
+  MARKET_RESEARCH_DEFAULT_DATA_PROVIDER,
   MARKET_RESEARCH_EVIDENCE_RETENTION_MS,
   MARKET_RESEARCH_LEASE_MS,
   MARKET_RESEARCH_MAX_EVIDENCE_RECORD_BYTES,
@@ -30,6 +31,7 @@ import {
   hasConfirmedPriorSession,
   isNonPublicHostname,
   manualEditionDisposition,
+  manualTestEditionKey,
   mergeMarketResearchControlOptions,
   marketResearchDeploymentOwnerMatches,
   marketEditionLabel,
@@ -153,16 +155,16 @@ function defaultPreferences(ownerId: string, guildId: string, nowIso: string): P
       dataQuality: true,
       sources: true,
     },
-    maximumRankedSetups: 5,
+    maximumRankedSetups: 10,
     editionDepth: "full",
     includeWeekends: true,
-    includeCharts: false,
+    includeCharts: true,
     chartsAcceptancePassed: false,
     maximumCharts: 3,
     lateEditionCutoffLocalTime: "12:00",
     searchRequestBudget: 12,
     contentsPageBudget: 24,
-    marketDataProviderId: null,
+    marketDataProviderId: MARKET_RESEARCH_DEFAULT_DATA_PROVIDER,
     marketSessionCalendarId: "nyse",
     durableTheses: [],
     sourcePolicyVersion: "source-policy-v1",
@@ -265,7 +267,8 @@ function validatePreferences(value: Preferences, ownerId: string): Preferences {
   if (
     value.searchRequestBudget < 12 || value.searchRequestBudget > 100
     || value.contentsPageBudget < 1 || value.contentsPageBudget > 100
-    || value.maximumRankedSetups < 1 || value.maximumRankedSetups > 5
+    || !Number.isSafeInteger(value.maximumRankedSetups)
+    || value.maximumRankedSetups < 1 || value.maximumRankedSetups > 10
     || value.maximumCharts < 0 || value.maximumCharts > 3
   ) throw new Error("Market-research budgets are invalid.");
   if (value.enabled && (!value.timezoneConfirmed || value.forumChannelId === null || value.marketDataProviderId === null)) {
@@ -273,7 +276,7 @@ function validatePreferences(value: Preferences, ownerId: string): Preferences {
   }
   if (value.forumTagIds.length > 5 || !unique(value.forumTagIds)) throw new Error("Forum tags are invalid.");
   if (value.durableTheses.length > 50) throw new Error("Durable theses are invalid.");
-  return value;
+  return { ...value, editionDepth: "full" };
 }
 
 async function validateForum(
@@ -1107,6 +1110,7 @@ export const saveControlSettings = mutation({
         includeCharts: args.includeCharts,
         maximumCharts: args.maximumCharts,
       }),
+      marketDataProviderId: args.marketDataProviderId ?? base.marketDataProviderId ?? MARKET_RESEARCH_DEFAULT_DATA_PROVIDER,
       enabled: args.enabled,
       forumChannelId: args.forumChannelId,
       forumTagIds: args.forumTagIds,
@@ -1115,12 +1119,10 @@ export const saveControlSettings = mutation({
       localHour: args.localHour,
       localMinute: args.localMinute,
       includeWeekends: args.includeWeekends,
-      editionDepth: args.editionDepth,
+      editionDepth: "full",
       maximumRankedSetups: args.maximumRankedSetups,
-      revision: existing ? existing.revision + 1 : 0,
-      updatedAt: nowIso,
     }, actor.id);
-    await validateForum(ctx, next, args.includeCharts === true);
+    await validateForum(ctx, next);
     if (next.enabled) {
       const calendar = await currentCalendarForOwner(
         ctx,
@@ -1129,6 +1131,11 @@ export const saveControlSettings = mutation({
       );
       await requireCalendarEnablementGate(ctx, calendar, next, Date.now());
     }
+    if (existing && canonicalJson(next) === canonicalJson(base)) {
+      return { ...base, configurationSnapshotHash: existing.configurationSnapshotHash };
+    }
+    next.revision = existing ? existing.revision + 1 : 0;
+    next.updatedAt = nowIso;
     const configurationSnapshotHash = await sha256Hex(canonicalJson(next));
     if (existing) await ctx.db.replace(existing._id, { ...next, configurationSnapshotHash });
     else await ctx.db.insert("marketResearchPreferences", { ...next, configurationSnapshotHash });
@@ -1226,11 +1233,16 @@ export const manualTrigger = mutation({
     dryRun: v.boolean(),
     publish: v.boolean(),
     regeneratePublishedEdition: v.boolean(),
+    requestId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
     requireConfiguredMarketResearchOwner(actor.id);
     if (args.dryRun === args.publish) throw new Error("Choose dryRun or publish.");
+    const requestId = args.requestId === undefined ? undefined : requireId(args.requestId, "requestId");
+    if (requestId !== undefined && (args.dryRun || args.regeneratePublishedEdition)) {
+      throw new Error("A test request must publish a new edition.");
+    }
     const preferences = await preferenceByOwnerGuild(ctx, actor.id, requireId(args.guildId, "guildId"));
     if (!preferences) throw new Error("market_research_disabled");
     const now = Date.now();
@@ -1276,19 +1288,27 @@ export const manualTrigger = mutation({
         status: "queued" as const,
       };
     }
+    if (preferences.forumChannelId === null) throw new Error("forum_not_configured");
     await validateForum(ctx, preferences);
+    const manualDecision = {
+      ...decision,
+      kind: "due" as const,
+      ...(requestId === undefined ? {} : {
+        scheduledKey: manualTestEditionKey(preferences, requestId),
+        scheduledFor: now,
+      }),
+    };
     const existing = await ctx.db
       .query("marketResearchEditions")
       .withIndex("by_owner_scheduledKey_revision", (index) => index
         .eq("ownerId", actor.id)
-        .eq("scheduledKey", decision.scheduledKey))
+        .eq("scheduledKey", manualDecision.scheduledKey))
       .order("desc")
       .first();
     const disposition = manualEditionDisposition(existing, args.regeneratePublishedEdition);
     if (disposition.kind === "duplicate") {
       return { kind: "edition" as const, editionId: disposition.editionId, duplicate: true };
     }
-    const manualDecision = { ...decision, kind: "due" as const };
     const session = await frozenSessionContext(ctx, storedPreferences(preferences), manualDecision, now);
     const edition = await createEdition(
       ctx,
@@ -2071,10 +2091,21 @@ const editionRecordSchema = z.object({
   ) context.addIssue({ code: "custom", path: ["sections"], message: "Edition sections are invalid." });
   const sectionIds = new Set(value.sections.map((section) => section.sectionId));
   if (
-    new Set(value.tickerDossiers.map((dossier) => dossier.symbol)).size !== value.tickerDossiers.length
+    new Set(value.primaryBoard.map((setup) => setup.symbol)).size !== value.primaryBoard.length
+    || new Set(value.tickerDossiers.map((dossier) => dossier.symbol)).size !== value.tickerDossiers.length
     || new Set(value.chartRequests.map((chart) => chart.chartRequestId)).size !== value.chartRequests.length
     || value.chartRequests.some((chart) => chart.editionId !== value.editionId || !sectionIds.has(chart.sectionId))
   ) context.addIssue({ code: "custom", message: "Edition dossier or chart identity is invalid." });
+  const positiveSetups = new Set(value.primaryBoard.filter((setup) =>
+    (setup.label === "TOP WATCH" || setup.label === "WATCH")
+    && setup.score >= 75
+    && setup.thesisLabel !== "AT RISK"
+    && setup.thesisLabel !== "INVALIDATED").map((setup) => setup.symbol));
+  const primarySections = new Set(value.sections.filter((section) => section.kind === "primary_board")
+    .map((section) => section.sectionId));
+  if (value.chartRequests.some((chart) => !positiveSetups.has(chart.symbol) || !primarySections.has(chart.sectionId))) {
+    context.addIssue({ code: "custom", path: ["chartRequests"], message: "Charts require a positive ranked setup in the primary board." });
+  }
 });
 
 const deliveryRecordSchema = z.object({
@@ -2120,6 +2151,7 @@ const piResultRecordSchema = z.object({
 });
 
 export const marketResearchEvidencePacketRecordSchema = evidencePacketRecordSchema;
+export const marketResearchEditionRecordSchema = editionRecordSchema;
 export const marketResearchPiResultRecordSchema = piResultRecordSchema;
 
 function parseStoredChartRequests(value: string): PiChartRequest[] {

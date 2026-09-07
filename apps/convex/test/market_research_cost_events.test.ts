@@ -1,6 +1,4 @@
-/* oxlint-disable anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-parameters -- The bounded in-memory database stores only the explicit fixture rows needed to exercise the real mutation handler. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MutationCtx } from "../convex/_generated/server.js";
 import {
   MARKET_RESEARCH_MAX_COST_EVENTS_PER_CLAIM,
   marketResearchCostEventSchema,
@@ -8,53 +6,7 @@ import {
   registerExaCostBinding,
 } from "../convex/market_research.js";
 import { marketResearchPiRequestSchema } from "../convex/market_research_http.js";
-
-type Row = Record<string, unknown> & { _id: string };
-
-function database() {
-  const tables = new Map<string, Row[]>();
-  const rows = (table: string) => {
-    const existing = tables.get(table);
-    if (existing) return existing;
-    const created: Row[] = [];
-    tables.set(table, created);
-    return created;
-  };
-  const db = {
-    query(table: string) {
-      const conditions: Array<[string, unknown]> = [];
-      const index = {
-        eq(field: string, value: unknown) { conditions.push([field, value]); return index; },
-      };
-      return {
-        withIndex(_name: string, configure: (value: typeof index) => typeof index) {
-          configure(index);
-          return {
-            async unique() {
-              const found = rows(table).filter((row) => conditions.every(([key, value]) => row[key] === value));
-              if (found.length > 1) throw new Error("fixture_duplicate_index");
-              return found[0] ?? null;
-            },
-          };
-        },
-      };
-    },
-    async insert(table: string, row: Record<string, unknown>) {
-      const _id = `${table}-${rows(table).length + 1}`;
-      rows(table).push({ ...row, _id });
-      return _id;
-    },
-    async patch(id: string, fields: Record<string, unknown>) {
-      const row = [...tables.values()].flat().find((item) => item._id === id);
-      if (!row) throw new Error("fixture_missing_row");
-      Object.assign(row, fields);
-    },
-  };
-  // SAFETY: The real handlers use only query/withIndex/unique, insert, and patch;
-  // the fixture implements those operations and fails on duplicate or missing rows.
-  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- The fixture intentionally does not implement unrelated Convex database operations.
-  return { ctx: { db: db as unknown as MutationCtx["db"] }, rows };
-}
+import { convexMutationFixture } from "./helpers/convex-fixture.js";
 
 const originalClaim = { ownerId: "owner_1", editionId: "MR-1", generation: 1, claimToken: "claim-original" };
 const event = {
@@ -63,7 +15,7 @@ const event = {
 };
 
 async function fixture(targetKind: "edition" | "preview" = "edition") {
-  const db = database();
+  const db = convexMutationFixture();
   const targetId = targetKind === "preview" ? "MRP-1" : "MR-1";
   const target = {
     _id: "target", ownerId: "owner_1", generation: 1, claimId: "claim-original",
