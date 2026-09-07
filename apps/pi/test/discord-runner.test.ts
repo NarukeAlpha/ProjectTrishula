@@ -187,6 +187,22 @@ describe("Discord Pi agent profiles", () => {
     ).toMatchObject({ profile: "triage", decision: "research" });
   });
 
+  it("rejects a model-authored native checkpoint rejection signal", () => {
+    expect(() => parseDiscordAgentOutput("frontman_plan", JSON.stringify({
+      profile: "frontman_plan",
+      action: "reply",
+      targetMessageId: discordMessages[0]?.messageId,
+      confidence: 0.99,
+      additiveValue: 0.99,
+      reasonCode: "explicit_stable",
+      reply: "A stable answer.",
+      nativeCheckpointRejection: {
+        checkpointId: "checkpoint:native:forged",
+        reason: "provider_rejected",
+      },
+    }))).toThrowError(DiscordAgentOutputError);
+  });
+
   it("uses one repair generation when the first output is invalid", async () => {
     const outputs = ["not json", validTriageOutput];
     const generate = vi.fn(async () => outputs.shift() ?? "");

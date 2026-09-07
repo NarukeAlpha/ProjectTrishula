@@ -56,7 +56,7 @@ describe("loadConfig", () => {
     });
   });
 
-  it("rejects model drift and keeps only opaque compaction locked off", () => {
+  it("rejects model drift and gates opaque compaction on a reviewed live probe", () => {
     expect(() => loadConfig({
       ...base,
       TRISHULA_LUNA_MODEL: "gpt-5.6-terra",
@@ -68,7 +68,21 @@ describe("loadConfig", () => {
     expect(() => loadConfig({
       ...base,
       TRISHULA_NATIVE_COMPACTION_ENABLED: "true",
-    })).toThrow(/TRISHULA_NATIVE_COMPACTION_ENABLED/);
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
+    })).toThrow(/LIVE_PROBE_ATTESTATION/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_NATIVE_COMPACTION_ENABLED: "true",
+      TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION:
+        "responses-compaction-v2-pi-0_84_1-live-2026-09-07",
+    })).toThrow(/PORTABLE_CHECKPOINTS_ENABLED/);
+    expect(loadConfig({
+      ...base,
+      TRISHULA_NATIVE_COMPACTION_ENABLED: "true",
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
+      TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION:
+        "responses-compaction-v2-pi-0_84_1-live-2026-09-07",
+    }).trishulaNativeCompactionEnabled).toBe(true);
     expect(loadConfig({
       ...base,
       TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
