@@ -852,6 +852,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
       return result;
     } catch (error) {
       const failure = safeFailure(error);
+      leaseController.abort(error);
       await this.options.callbacks.fail(request, failure.code, failure.retryable, signal).catch(() => undefined);
       throw error;
     } finally {

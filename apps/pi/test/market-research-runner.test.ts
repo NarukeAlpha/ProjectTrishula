@@ -15,7 +15,7 @@ import {
 } from "../src/market-research/contracts.js";
 import { materializeDeliveryParts } from "../src/market-research/delivery.js";
 import type { MarketResearchCallbacks } from "../src/market-research/convex-client.js";
-import type { MarketResearchExaClient } from "../src/market-research/exa-client.js";
+import { MarketResearchExaClient } from "../src/market-research/exa-client.js";
 import { MarketResearchJobRegistry } from "../src/market-research/jobs.js";
 import type {
   MarketBar,
@@ -748,6 +748,81 @@ describe("market-research production market-data boundary", () => {
 });
 
 describe("market-research job timeout", () => {
+  it.each(["throw", "reject"] as const)("cancels sibling provider work when an evidence checkpoint fails (%s)", async (outcome) => {
+    const firstProvider = Promise.withResolvers<unknown>();
+    const secondProvider = Promise.withResolvers<unknown>();
+    const search = vi.fn().mockReturnValueOnce(firstProvider.promise).mockReturnValue(secondProvider.promise);
+    const getContents = vi.fn();
+    const costObserver = vi.fn(async () => undefined);
+    const exa = new MarketResearchExaClient({
+      apiKey: "sibling-cancellation-test-not-a-real-key",
+      transport: { search, getContents },
+      searchConcurrency: 1,
+      contentsConcurrency: 1,
+      requestTimeoutMs: 1_000,
+      maximumSearchRequests: 12,
+      maximumContentPages: 24,
+      onCostEvent: costObserver,
+      logger,
+    });
+    const outerController = new AbortController();
+    const appendFailure = new Error("market_research_convex_rejected");
+    let checkpointSignal: AbortSignal | undefined;
+    let abortedBeforeFailureCallback = false;
+    const callbacks: MarketResearchCallbacks = {
+      heartbeat: vi.fn(async () => true),
+      loadEvidence: vi.fn(async () => []),
+      appendEvidence: vi.fn(async (_job, _sequence, _evidence, signal) => {
+        checkpointSignal = signal;
+        if (outcome === "throw") throw appendFailure;
+        return false;
+      }),
+      complete: vi.fn(async () => true),
+      fail: vi.fn(async () => {
+        abortedBeforeFailureCallback = checkpointSignal?.aborted === true;
+      }),
+    };
+    const composer = fixtureComposer();
+    const runner = createMarketResearchRunner({
+      exaClient: () => exa, callbacks, composer: composer.composer, logger,
+      now: () => new Date("2026-09-01T12:00:00.000Z"),
+    });
+    const result = runner.run(request(), outerController.signal).catch((error: Error) => error);
+    try {
+      await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+      firstProvider.resolve({ requestId: "first-cost", costDollars: { total: 0.01 }, results: [] });
+      const failure = await result;
+      if (outcome === "throw") expect(failure).toBe(appendFailure);
+      else expect(failure).toMatchObject({ message: "edition_lease_lost" });
+      expect(checkpointSignal?.reason).toBe(failure);
+      expect(abortedBeforeFailureCallback).toBe(true);
+      expect(callbacks.fail).toHaveBeenCalledOnce();
+      expect(callbacks.fail).toHaveBeenCalledWith(expect.anything(),
+        outcome === "throw" ? "exa_unavailable" : "edition_lease_lost",
+        false, outerController.signal);
+      // The semaphore can admit the second SDK request before the first checkpoint fails.
+      // It must not admit the remaining research slots after the run is cancelled.
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(search.mock.calls[1]?.[2]?.aborted).toBe(true);
+      expect(callbacks.appendEvidence).toHaveBeenCalledOnce();
+      secondProvider.resolve({ requestId: "late-cost", costDollars: { total: 0.03 }, results: [] });
+      await vi.waitFor(() => expect(costObserver).toHaveBeenCalledWith(expect.objectContaining({
+        operation: "search", outcome: "settled", late: true, costUsd: 0.03, requestId: "late-cost",
+      })));
+      expect(search).toHaveBeenCalledTimes(2);
+      expect(callbacks.appendEvidence).toHaveBeenCalledOnce();
+      expect(getContents).not.toHaveBeenCalled();
+      expect(composer.compose).not.toHaveBeenCalled();
+      expect(callbacks.complete).not.toHaveBeenCalled();
+      expect(outerController.signal.aborted).toBe(false);
+    } finally {
+      firstProvider.resolve({ requestId: "cleanup-first", costDollars: { total: 0 }, results: [] });
+      secondProvider.resolve({ requestId: "cleanup-second", costDollars: { total: 0 }, results: [] });
+      await result;
+      await runner.dispose();
+    }
+  });
+
   it("aborts a stuck provider job with the fixed retryable timeout state", async () => {
     vi.useFakeTimers();
     const stuckRunner: MarketResearchRunner = {

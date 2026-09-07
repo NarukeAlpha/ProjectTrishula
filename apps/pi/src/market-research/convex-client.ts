@@ -35,6 +35,7 @@ export interface ConvexMarketResearchClientOptions {
 export class ConvexMarketResearchClient implements MarketResearchCallbacks {
   private readonly endpoint: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly pendingEditions = new Map<string, Promise<void>>();
 
   constructor(private readonly options: ConvexMarketResearchClientOptions) {
     this.endpoint = `${options.siteUrl}/market-research/pi`;
@@ -53,7 +54,6 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
     };
     const streamId = randomUUID();
     let sequence = 0;
-    let pending = Promise.resolve();
     return (event) => {
       sequence += 1;
       if (sequence > 1_024) {
@@ -75,12 +75,13 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
         ...target,
         event: safeEvent,
       };
-      // Bound callback concurrency and retry the same event ID. Do not use the cancelled
-      // research signal: SDK work can settle and incur cost after that signal is aborted.
-      const delivery = pending.then(async () => {
+      // Queue the entire delivery with the edition's other callbacks, including retries
+      // of this event ID. Late SDK costs retain their original accounting capability and
+      // do not use the cancelled research signal.
+      return this.enqueue(target.editionId, async () => {
         for (let attempt = 0; attempt < 3; attempt += 1) {
           try {
-            const response = await this.request(body);
+            const response = await this.post(body);
             if (response.accepted !== true) throw new Error("market_research_cost_event_rejected");
             return;
           } catch {
@@ -89,8 +90,6 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
           }
         }
       });
-      pending = delivery.catch(() => undefined);
-      return delivery;
     };
   }
 
@@ -99,7 +98,7 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
     stage: string,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    const response = await this.request({ operation: "heartbeat", ...leaseFields(request), stage }, signal);
+    const response = await this.request(request.editionId, { operation: "heartbeat", ...leaseFields(request), stage }, signal);
     return response.accepted === true;
   }
 
@@ -109,7 +108,7 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
     evidence: readonly MarketResearchEvidenceItem[],
     signal?: AbortSignal,
   ): Promise<boolean> {
-    const response = await this.request({ operation: "appendEvidence", ...leaseFields(request), sequence, evidence }, signal);
+    const response = await this.request(request.editionId, { operation: "appendEvidence", ...leaseFields(request), sequence, evidence }, signal);
     return response.accepted === true;
   }
 
@@ -117,13 +116,13 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
     request: ResearchLease,
     signal?: AbortSignal,
   ): Promise<readonly MarketResearchEvidenceItem[]> {
-    const response = await this.request({ operation: "loadEvidence", ...leaseFields(request) }, signal);
+    const response = await this.request(request.editionId, { operation: "loadEvidence", ...leaseFields(request) }, signal);
     if (response.accepted !== true || !Array.isArray(response.evidence)) throw new Error("edition_lease_lost");
     return response.evidence.map((item) => marketResearchEvidenceItemSchema.parse(item));
   }
 
   async complete(result: MarketResearchJobResult, signal?: AbortSignal): Promise<boolean> {
-    const response = await this.request({ operation: "complete", result }, signal);
+    const response = await this.request(result.editionId, { operation: "complete", result }, signal);
     return response.accepted === true;
   }
 
@@ -133,10 +132,31 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
     retryable: boolean,
     signal?: AbortSignal,
   ): Promise<void> {
-    await this.request({ operation: "fail", ...leaseFields(request), code, retryable }, signal);
+    await this.request(request.editionId, { operation: "fail", ...leaseFields(request), code, retryable }, signal);
   }
 
-  private async request(body: Readonly<Record<string, unknown>> & { readonly operation: string }, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  private enqueue<T>(editionId: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const previous = this.pendingEditions.get(editionId) ?? Promise.resolve();
+    const delivery = previous.then(() => {
+      signal?.throwIfAborted();
+      return operation();
+    });
+    const release = () => {
+      if (this.pendingEditions.get(editionId) === tail) this.pendingEditions.delete(editionId);
+    };
+    // Recover the queue after either outcome without swallowing the caller's failure.
+    const tail = delivery.then(release, release);
+    this.pendingEditions.set(editionId, tail);
+    return delivery;
+  }
+
+  private request(editionId: string, body: Readonly<Record<string, unknown>> & { readonly operation: string }, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    return this.enqueue(editionId, () => this.post(body, signal), signal);
+  }
+
+  private async post(body: Readonly<Record<string, unknown>> & { readonly operation: string }, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    // The per-request timeout starts only after this edition admits the callback.
+    signal?.throwIfAborted();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     const abort = () => controller.abort(signal?.reason);
