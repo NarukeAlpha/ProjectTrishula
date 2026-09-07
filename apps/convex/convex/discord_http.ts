@@ -1,7 +1,13 @@
 import { internal } from "./_generated/api.js";
 import { httpAction } from "./_generated/server.js";
 import {
+  DISCORD_GATEWAY_DURABLE_PROTOCOL,
+  DISCORD_GATEWAY_PROTOCOL_HEADER,
   discordGatewayRequestSchema,
+  projectLegacyClaimLoopResponse,
+  projectLegacyHeartbeatResponse,
+  projectLegacyNewestContextResponse,
+  projectLegacyRunnableResponse,
   type DiscordGatewayOperation,
   type DiscordGatewayResponse,
 } from "./lib/discord_contract.js";
@@ -53,6 +59,8 @@ export const discordGateway = httpAction(async (ctx, request) => {
     return json({ ok: false, error: "Invalid Discord gateway request." }, 400);
   }
   const body = parsed.data;
+  const durableProtocol = request.headers.get(DISCORD_GATEWAY_PROTOCOL_HEADER)
+    === DISCORD_GATEWAY_DURABLE_PROTOCOL;
   try {
     switch (body.operation) {
       case "syncGuilds": {
@@ -69,11 +77,61 @@ export const discordGateway = httpAction(async (ctx, request) => {
       case "claimLoop": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(internal.discord.claimLoop, args);
-        return success(operation, result);
+        return success(
+          operation,
+          durableProtocol ? result : projectLegacyClaimLoopResponse(result),
+        );
       }
       case "newestContext": {
         const { operation, ...args } = body;
-        return success(operation, await ctx.runQuery(internal.discord.getNewestContext, args));
+        const result = await ctx.runMutation(
+          internal.discord.getNewestContext,
+          withoutUndefined(args),
+        );
+        return success(
+          operation,
+          durableProtocol ? result : projectLegacyNewestContextResponse(result),
+        );
+      }
+      case "recordFrontmanPlan": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordFrontmanPlan,
+          args,
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "recordResearchStarted": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordResearchStarted,
+          args,
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "recordResearchResult": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordResearchResult,
+          withoutUndefined(args),
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "recordFrontmanResume": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.recordFrontmanResume,
+          withoutUndefined(args),
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
       }
       case "completeLoop": {
         const { operation, ...args } = body;
@@ -85,15 +143,46 @@ export const discordGateway = httpAction(async (ctx, request) => {
       case "heartbeat": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(internal.discord.heartbeat, withoutUndefined(args));
-        return success(operation, result);
+        return success(operation, durableProtocol ? result : projectLegacyHeartbeatResponse(result));
       }
       case "listRunnable": {
         const { operation, ...args } = body;
-        return success(operation, await ctx.runMutation(internal.discord.listRunnable, withoutUndefined(args)));
+        const result = await ctx.runMutation(
+          internal.discord.listRunnable,
+          withoutUndefined(args),
+        );
+        return success(
+          operation,
+          durableProtocol ? result : projectLegacyRunnableResponse(result),
+        );
+      }
+      case "nextPortableCheckpoint": {
+        const { operation, ...args } = body;
+        return success(operation, await ctx.runMutation(
+          internal.discord.nextPortableCheckpoint,
+          args,
+        ));
+      }
+      case "storePortableCheckpoint": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.storePortableCheckpoint,
+          args,
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
       }
       case "enqueueReply": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(internal.discord.enqueueReply, withoutUndefined(args));
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "beginReplyDelivery": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(internal.discord.beginReplyDelivery, args);
         return result.accepted
           ? success(operation, result)
           : json({ ok: false, operation, error: result.reason }, 409);

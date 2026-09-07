@@ -58,7 +58,14 @@ export interface DiscordMessageIdentity {
 export interface DiscordFinalizationCandidate {
   runId: string;
   generation: number;
-  status: "pending" | "sent" | "finalized" | "failed";
+  status:
+    | "pending"
+    | "sent"
+    | "finalized"
+    | "failed"
+    | "delivery_uncertain"
+    | "needs_reconciliation"
+    | "cancelled";
   finalizesLoop: boolean;
 }
 
@@ -68,7 +75,14 @@ export interface DiscordAcknowledgementCandidate {
   channelId: string;
   replyKind?: DiscordReplyKind;
   finalizesLoop: boolean;
-  status: "pending" | "sent" | "finalized" | "failed";
+  status:
+    | "pending"
+    | "sent"
+    | "finalized"
+    | "failed"
+    | "delivery_uncertain"
+    | "needs_reconciliation"
+    | "cancelled";
   replyToMessageId?: string;
 }
 
@@ -289,7 +303,11 @@ export function hasPendingDiscordReply(
 ): boolean {
   return replies.some((reply) => reply.runId === runId
     && reply.generation === generation
-    && reply.status === "pending");
+    && (
+      reply.status === "pending"
+      || reply.status === "delivery_uncertain"
+      || reply.status === "needs_reconciliation"
+    ));
 }
 
 export function isDeliveredDiscordAcknowledgement(

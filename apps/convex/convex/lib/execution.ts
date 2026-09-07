@@ -25,6 +25,17 @@ function requirePath(path: string): string {
   return path;
 }
 
+function requireTimeoutMs(timeoutMs: number): number {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
+    throw new Error("Execution request timeout is invalid.");
+  }
+  return timeoutMs;
+}
+
+export interface ExecutionRequestOptions {
+  timeoutMs?: number;
+}
+
 export async function executionServiceName(actorId: string): Promise<string> {
   const digest = await sha256Hex(requireActorId(actorId));
   return `pi-u-${digest.slice(0, 20)}`;
@@ -44,13 +55,18 @@ export async function executionRequest<TBody>(
   actorId: string,
   path: string,
   body: TBody,
+  options: ExecutionRequestOptions = {},
 ): Promise<Response> {
-  return fetch(await executionUrl(actorId, path), {
+  const request: RequestInit = {
     method: "POST",
     headers: {
       authorization: `Bearer ${requiredEnvironment("SERVICE_SHARED_SECRET")}`,
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
-  });
+  };
+  if (options.timeoutMs !== undefined) {
+    request.signal = AbortSignal.timeout(requireTimeoutMs(options.timeoutMs));
+  }
+  return fetch(await executionUrl(actorId, path), request);
 }

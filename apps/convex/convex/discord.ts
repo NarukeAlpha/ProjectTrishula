@@ -1,14 +1,17 @@
 import { v } from "convex/values";
+import { z } from "zod";
 import type { Doc } from "./_generated/dataModel.js";
 import {
   internalMutation,
-  internalQuery,
   mutation,
   query,
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server.js";
 import { actorFromIdentity, requireAllowedWorkosUserId } from "./lib/auth.js";
+import { canonicalJson, sha256Hex } from "./lib/canonical_json.js";
+import { normalizeDiscordForumCapabilities } from "./lib/discord_contract.js";
+import { isMarketResearchForumIngress } from "./lib/market_research.js";
 import {
   DISCORD_AMBIENT_COOLDOWN_MS,
   DISCORD_AMBIENT_DEBOUNCE_MS,
@@ -44,6 +47,30 @@ import {
   type DiscordTriggerKind,
 } from "./lib/discord_state.js";
 import {
+  DISCORD_CONVERSATION_LEASE_MS,
+  DISCORD_COMPACTION_THRESHOLD_TOKENS,
+  DISCORD_MAX_RECENT_EVENT_COUNT,
+  DISCORD_PERSONALITY_PROFILE,
+  DISCORD_RECENT_TAIL_ESTIMATOR_VERSION,
+  DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+  discordConversationId,
+  discordConversationLeaseToken,
+  discordPrivacyDeletionBlocked,
+  discordSnowflakeUpperBound,
+  isCurrentDiscordConversationFence,
+  portableCheckpointRestorable,
+  portableCheckpointSourceBatchSupported,
+  portableConversationSummarySchema,
+  portableSummaryEvidenceMatchesEvents,
+  estimateDiscordCanonicalEventTokens,
+  requireDiscordReplyContent,
+  selectDiscordCanonicalTail,
+  selectDiscordCheckpointTail,
+  validatePortableCheckpointCandidate,
+  DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES,
+  DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
+} from "./lib/discord_conversation.js";
+import {
   discordChannelRoleValidator,
   discordChannelTypeValidator,
   discordImageAttachmentValidator,
@@ -65,6 +92,17 @@ const discordChannelSnapshotValidator = v.object({
   canView: v.boolean(),
   canSend: v.boolean(),
   canReadHistory: v.boolean(),
+  canCreateForumPost: v.optional(v.boolean()),
+  canSendInThreads: v.optional(v.boolean()),
+  canReadThreadHistory: v.optional(v.boolean()),
+  canAttachFiles: v.optional(v.boolean()),
+  requiresTag: v.optional(v.boolean()),
+  availableTags: v.optional(v.array(v.object({
+    id: v.string(),
+    name: v.string(),
+    moderated: v.boolean(),
+    emoji: v.optional(v.string()),
+  }))),
 });
 const discordGuildSnapshotValidator = v.object({
   guildId: v.string(),
@@ -77,6 +115,7 @@ const discordMessageValidator = v.object({
   actorId: serviceId,
   guildId: serviceId,
   channelId: serviceId,
+  parentChannelId: v.optional(serviceId),
   messageId: serviceId,
   authorId: serviceId,
   authorName: v.string(),
@@ -85,6 +124,8 @@ const discordMessageValidator = v.object({
   mentionsBot: v.boolean(),
   isBot: v.boolean(),
   replyToMessageId: v.optional(v.string()),
+  nonce: v.optional(v.string()),
+  payloadHash: v.optional(v.string()),
   createdAt: v.number(),
 });
 const loopStageValidator = v.union(
@@ -94,8 +135,20 @@ const loopStageValidator = v.union(
   v.literal("drafting"),
   v.literal("catching_up"),
 );
+const durableStageFenceValidator = v.object({
+  sourceChannelId: serviceId,
+  runId: serviceId,
+  channelGeneration: v.number(),
+  conversationId: serviceId,
+  epoch: v.number(),
+  conversationGeneration: v.number(),
+  routingGeneration: v.number(),
+  turnId: serviceId,
+  conversationLeaseToken: serviceId,
+});
 const DISCORD_ACTIVITY_HISTORY_PER_GUILD = 20;
 const DISCORD_ACTIVITY_RETENTION_LIMIT = 500;
+const DISCORD_NONCE_RETRY_WINDOW_MS = 5 * 60_000;
 
 type DiscordReader = { db: Pick<QueryCtx["db"], "query"> };
 type DiscordWriter = Pick<MutationCtx, "db">;
@@ -111,6 +164,22 @@ type DiscordGatewayUpdate = Pick<
 type DiscordGuildRecord = Omit<Doc<"discordGuilds">, "_id" | "_creationTime">;
 type DiscordMessageRecord = Omit<Doc<"discordMessages">, "_id" | "_creationTime">;
 type DiscordOutboxRecord = Omit<Doc<"discordOutbox">, "_id" | "_creationTime">;
+type DiscordAssistantConversationRecord = Omit<
+  Doc<"discordAssistantConversations">,
+  "_id" | "_creationTime"
+>;
+type DiscordConversationEventRecord = Omit<
+  Doc<"discordConversationEvents">,
+  "_id" | "_creationTime"
+>;
+type DiscordResearchArtifactPatch = Partial<Omit<
+  Doc<"discordResearchArtifacts">,
+  "_id" | "_creationTime"
+>>;
+type DiscordAssistantTurnPatch = Partial<Omit<
+  Doc<"discordAssistantTurns">,
+  "_id" | "_creationTime"
+>>;
 type DiscordActivityRecord = Omit<
   Doc<"discordActivityEvents">,
   "_id" | "_creationTime" | "ownerId" | "createdAt"
@@ -158,6 +227,124 @@ interface DiscordGatewayInput {
   connectedAt?: number;
   error?: string;
 }
+
+interface DurableRecentEvent {
+  eventId: string;
+  ordinal: number;
+  role: "human" | "assistant";
+  authorId?: string;
+  displayName?: string;
+  content: string;
+  createdAt: string;
+}
+
+interface DurableConversationTail {
+  estimatorVersion: string;
+  tokenBudget: number;
+  estimatedTokens: number;
+  compactedThroughOrdinal: number;
+  omittedEventCount: number;
+  complete: boolean;
+  firstRetainedOrdinal?: number;
+  lastRetainedOrdinal?: number;
+}
+
+interface DurableConversationContextView {
+  sourceRevision: number;
+  sourceHumanRevision: number;
+  activeCheckpointId?: string;
+  portableSummary?: z.infer<typeof portableConversationSummarySchema>;
+  recentEvents: DurableRecentEvent[];
+  tail: DurableConversationTail;
+}
+
+interface PortableCheckpointSourceEventView {
+  eventId: string;
+  ordinal: number;
+  role: "human" | "assistant";
+  authorId?: string;
+  displayName?: string;
+  content: string;
+  createdAt: string;
+  freshness?: "current" | "limited" | "unknown";
+}
+
+interface PortableCheckpointConversationView {
+  ownerId: string;
+  ownerBindingVersion: number;
+  guildId: string;
+  conversationId: string;
+  epoch: number;
+  generation: number;
+  routingGeneration: number;
+  revision: number;
+  personalityVersion: string;
+  systemPromptHash: string;
+  capabilityProfileHash: string;
+  activeCheckpointId?: string;
+}
+
+interface PortableCheckpointRequestView {
+  profile: "portable_checkpoint";
+  requestId: string;
+  conversation: PortableCheckpointConversationView;
+  sourceContextHash: string;
+  compactedThroughOrdinal: number;
+  previousSummary?: z.infer<typeof portableConversationSummarySchema>;
+  sourceEvents: PortableCheckpointSourceEventView[];
+  retainedRecentEventIds: string[];
+  inputEstimatedTokens: number;
+}
+
+interface PublicConversationIdentityView {
+  ownerId: string;
+  ownerBindingVersion: number;
+  guildId: string;
+  conversationId: string;
+  epoch: number;
+  turnId: string;
+  runId: string;
+  generation: number;
+  routingGeneration: number;
+  revision: number;
+  humanRevision: number;
+  personalityVersion: string;
+  systemPromptHash: string;
+  capabilityProfileHash: string;
+  activeCheckpointId?: string;
+}
+
+interface DurableRecoveryResearchView {
+  requestId: string;
+  normalizedRequest: string;
+  status: Doc<"discordResearchArtifacts">["status"];
+  packet?: string;
+  failureCode?: string;
+  failureDetail?: string;
+  failureRetryable?: boolean;
+  freshness?: string;
+  sourceUrls: string[];
+  trustedChartArtifactId?: string;
+  trustedChartSpec?: string;
+  serializedBytes: number;
+  estimatedTokens: number;
+  tokenEstimatorVersion: string;
+}
+
+interface DurableTurnRecoveryView {
+  stage: Doc<"discordAssistantTurns">["stage"];
+  planPayload?: string;
+  resumePayload?: string;
+  resumeRequestId?: string;
+  acknowledgementDelivery?: string;
+  eligibleThroughSequence?: number;
+  eligibleHumanRevision?: number;
+  eligibleContextHash?: string;
+  nextExplicitTriggerSequence?: number;
+  research?: DurableRecoveryResearchView;
+}
+
+const serializedJsonObjectSchema = z.record(z.string(), z.json());
 
 function gatewayUpdate(
   instanceId: string,
@@ -213,6 +400,17 @@ function requireDiscordContent(value: string): string {
   return value;
 }
 
+function requireSerializedJson(value: string, maximumBytes: number, label: string): string {
+  const normalized = value.trim();
+  const bytes = new TextEncoder().encode(normalized).byteLength;
+  if (!normalized || bytes > maximumBytes) throw new Error(`${label} is invalid.`);
+  const parsed = serializedJsonObjectSchema.safeParse(JSON.parse(normalized));
+  if (!parsed.success) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return normalized;
+}
+
 function requireDiscordImages(
   images: readonly DiscordImageAttachment[] | undefined,
 ): DiscordImageAttachment[] | undefined {
@@ -254,12 +452,6 @@ function requireDiscordImages(
     if (height !== undefined) result.height = height;
     return result;
   });
-}
-
-function requireReplyContent(value: string): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > 2_000) throw new Error("Discord reply content is invalid.");
-  return normalized;
 }
 
 const MARKET_CHART_INTERVALS = [
@@ -414,6 +606,618 @@ async function discordChannelState(
     .unique();
 }
 
+async function discordHistoryAfterMessageId(
+  ctx: DiscordReader,
+  ownerId: string,
+  guildId: string,
+  channelId: string,
+): Promise<string | null> {
+  const latestMessage = await ctx.db
+    .query("discordMessages")
+    .withIndex("by_owner_channel_sequence", (index) => index
+      .eq("ownerId", ownerId)
+      .eq("channelId", channelId))
+    .order("desc")
+    .first();
+  if (latestMessage !== null) return latestMessage.messageId;
+  const conversation = await assistantConversationByGuild(ctx, guildId);
+  return conversation?.ownerId === ownerId
+    ? conversation.privacyReconciliationAfterMessageId ?? null
+    : null;
+}
+
+async function assistantConversationByGuild(
+  ctx: DiscordReader,
+  guildId: string,
+): Promise<Doc<"discordAssistantConversations"> | null> {
+  return ctx.db
+    .query("discordAssistantConversations")
+    .withIndex("by_guild", (index) => index.eq("guildId", guildId))
+    .unique();
+}
+
+async function ensureAssistantConversation(
+  ctx: DiscordWriter & DiscordReader,
+  ownerId: string,
+  guildId: string,
+  now: number,
+  options: {
+    conversationChannelId?: string;
+    researchLogChannelId?: string;
+    migrationWatermarkSequence?: number;
+  } = {},
+): Promise<Doc<"discordAssistantConversations">> {
+  const existing = await assistantConversationByGuild(ctx, guildId);
+  if (existing !== null) {
+    if (existing.ownerId !== ownerId) {
+      throw new Error("Discord guild is already bound to another owner.");
+    }
+    return existing;
+  }
+  const conversationId = discordConversationId(guildId);
+  const record: DiscordAssistantConversationRecord = {
+    ownerId,
+    ownerBindingVersion: 1,
+    guildId,
+    conversationId,
+    epoch: 0,
+    generation: 0,
+    routingGeneration: 1,
+    revision: 0,
+    humanRevision: 0,
+    nextOrdinal: 1,
+    ...DISCORD_PERSONALITY_PROFILE,
+    migrationWatermarkSequence: options.migrationWatermarkSequence ?? 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (options.conversationChannelId !== undefined) {
+    record.conversationChannelId = options.conversationChannelId;
+  }
+  if (options.researchLogChannelId !== undefined) {
+    record.researchLogChannelId = options.researchLogChannelId;
+  }
+  const id = await ctx.db.insert("discordAssistantConversations", record);
+  const created = await ctx.db.get(id);
+  if (created === null) throw new Error("Discord conversation could not be created.");
+  return created;
+}
+
+async function canonicalCheckpointSlice(
+  ctx: DiscordReader,
+  conversation: Doc<"discordAssistantConversations">,
+  compactedThroughOrdinal: number,
+) {
+  const events = (await ctx.db
+    .query("discordConversationEvents")
+    .withIndex("by_conversation_epoch_ordinal", (index) => index
+      .eq("conversationId", conversation.conversationId)
+      .eq("epoch", conversation.epoch))
+    .order("asc")
+    .collect())
+    .filter((event) => event.status === "committed"
+      && event.ordinal <= compactedThroughOrdinal);
+  const sourceContextHash = await sha256Hex(canonicalJson(events.map((event) => ({
+    eventId: event.eventId,
+    ordinal: event.ordinal,
+    revision: event.revision,
+    humanRevision: event.humanRevision,
+    kind: event.kind,
+    visibility: event.visibility,
+    sourceChannelId: event.sourceChannelId ?? null,
+    sourceMessageId: event.sourceMessageId ?? null,
+    sourceSequence: event.sourceSequence ?? null,
+    authorId: event.authorId ?? null,
+    authorName: event.authorName ?? null,
+    content: event.content ?? null,
+    discordDeliveryId: event.discordDeliveryId ?? null,
+    freshness: event.freshness ?? null,
+    contextHash: event.contextHash,
+  }))));
+  return { events, sourceContextHash };
+}
+
+async function durableConversationContext(
+  ctx: DiscordWriter & DiscordReader,
+  conversation: Doc<"discordAssistantConversations">,
+  now: number,
+  requiredSourceMessageIds: readonly string[] = [],
+) {
+  let portableSummary: z.infer<typeof portableConversationSummarySchema> | undefined;
+  let activeCheckpointId: string | undefined;
+  let compactedThroughOrdinal = 0;
+  if (conversation.activeCheckpointId !== undefined) {
+    const checkpoint = await ctx.db
+      .query("discordCompactionCheckpoints")
+      .withIndex("by_owner_checkpoint", (index) => index
+        .eq("ownerId", conversation.ownerId)
+        .eq("checkpointId", conversation.activeCheckpointId!))
+      .unique();
+    if (
+      checkpoint !== null
+      && portableCheckpointRestorable(checkpoint, {
+        ...conversation,
+        model: conversation.lunaModel,
+      }, now)
+      && checkpoint.serializedBytes <= DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES
+    ) {
+      try {
+        const parsedSummary = portableConversationSummarySchema.parse(
+          JSON.parse(checkpoint.portableSummary),
+        );
+        const canonicalSlice = await canonicalCheckpointSlice(
+          ctx,
+          conversation,
+          checkpoint.compactedThroughOrdinal,
+        );
+        if (
+          canonicalSlice.sourceContextHash !== checkpoint.sourceContextHash
+          || !portableSummaryEvidenceMatchesEvents(parsedSummary, canonicalSlice.events)
+        ) {
+          throw new Error("Portable checkpoint source evidence is not canonical.");
+        }
+        portableSummary = parsedSummary;
+        activeCheckpointId = checkpoint.checkpointId;
+        compactedThroughOrdinal = checkpoint.compactedThroughOrdinal;
+      } catch {
+        await ctx.db.patch(checkpoint._id, { status: "invalid", updatedAt: now });
+        await ctx.db.patch(conversation._id, { activeCheckpointId: undefined, updatedAt: now });
+      }
+    } else {
+      if (checkpoint !== null && checkpoint.status === "active") {
+        await ctx.db.patch(checkpoint._id, {
+          status: checkpoint.expiresAt <= now ? "expired" : "invalid",
+          updatedAt: now,
+        });
+      }
+      await ctx.db.patch(conversation._id, { activeCheckpointId: undefined, updatedAt: now });
+    }
+  }
+  const events = await ctx.db
+    .query("discordConversationEvents")
+    .withIndex("by_conversation_epoch_ordinal", (index) => index
+      .eq("conversationId", conversation.conversationId)
+      .eq("epoch", conversation.epoch))
+    .order("asc")
+    .collect();
+  const canonicalEvents = events
+    .filter((event) => event.visibility === "conversation"
+      && event.status === "committed"
+      && event.ordinal > compactedThroughOrdinal
+      && event.content !== undefined
+      && (event.kind === "human_message"
+        || event.kind === "assistant_ack"
+        || event.kind === "assistant_final"));
+  const requiredSources = new Set(requiredSourceMessageIds);
+  const requiredEventIds = new Set(canonicalEvents
+    .filter((event) => event.sourceMessageId !== undefined
+      && requiredSources.has(event.sourceMessageId))
+    .map((event) => event.eventId));
+  const selection = selectDiscordCanonicalTail(canonicalEvents.map((event) => ({
+    event,
+    eventId: event.eventId,
+    ordinal: event.ordinal,
+    content: event.content!,
+  })), {
+    requiredEventIds,
+    maximumEvents: DISCORD_MAX_RECENT_EVENT_COUNT,
+    tokenBudget: activeCheckpointId === undefined
+      ? DISCORD_COMPACTION_THRESHOLD_TOKENS
+      : DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+  });
+  const recentEvents: DurableRecentEvent[] = selection.events
+    .map((event) => {
+      const recentEvent: DurableRecentEvent = {
+        eventId: event.event.eventId,
+        ordinal: event.event.ordinal,
+        role: event.event.kind === "human_message" ? "human" as const : "assistant" as const,
+        content: event.event.content!,
+        createdAt: new Date(event.event.createdAt).toISOString(),
+      };
+      if (event.event.authorId !== undefined) recentEvent.authorId = event.event.authorId;
+      if (event.event.authorName !== undefined) recentEvent.displayName = event.event.authorName;
+      return recentEvent;
+    });
+  const tail: DurableConversationTail = {
+    estimatorVersion: DISCORD_RECENT_TAIL_ESTIMATOR_VERSION,
+    tokenBudget: activeCheckpointId === undefined
+      ? DISCORD_COMPACTION_THRESHOLD_TOKENS
+      : DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+    estimatedTokens: selection.estimatedTokens,
+    compactedThroughOrdinal,
+    omittedEventCount: selection.omittedEventCount,
+    complete: selection.complete,
+  };
+  if (selection.firstRetainedOrdinal !== undefined) {
+    tail.firstRetainedOrdinal = selection.firstRetainedOrdinal;
+  }
+  if (selection.lastRetainedOrdinal !== undefined) {
+    tail.lastRetainedOrdinal = selection.lastRetainedOrdinal;
+  }
+  const context: DurableConversationContextView = {
+    sourceRevision: conversation.revision,
+    sourceHumanRevision: conversation.humanRevision,
+    recentEvents,
+    tail,
+  };
+  if (activeCheckpointId !== undefined) context.activeCheckpointId = activeCheckpointId;
+  if (portableSummary !== undefined) context.portableSummary = portableSummary;
+  return context;
+}
+
+function publicConversationIdentity(
+  conversation: Doc<"discordAssistantConversations">,
+  turnId: string,
+  runId: string,
+) {
+  const identity: PublicConversationIdentityView = {
+    ownerId: conversation.ownerId,
+    ownerBindingVersion: conversation.ownerBindingVersion,
+    guildId: conversation.guildId,
+    conversationId: conversation.conversationId,
+    epoch: conversation.epoch,
+    turnId,
+    runId,
+    generation: conversation.generation,
+    routingGeneration: conversation.routingGeneration,
+    revision: conversation.revision,
+    humanRevision: conversation.humanRevision,
+    personalityVersion: conversation.personalityVersion,
+    systemPromptHash: conversation.systemPromptHash,
+    capabilityProfileHash: conversation.capabilityProfileHash,
+  };
+  if (conversation.activeCheckpointId !== undefined) {
+    identity.activeCheckpointId = conversation.activeCheckpointId;
+  }
+  return identity;
+}
+
+interface DurableStageFenceInput {
+  sourceChannelId: string;
+  runId: string;
+  channelGeneration: number;
+  conversationId: string;
+  epoch: number;
+  conversationGeneration: number;
+  routingGeneration: number;
+  turnId: string;
+  conversationLeaseToken: string;
+}
+
+async function durableStageState(
+  ctx: DiscordWriter & DiscordReader,
+  ownerId: string,
+  guildId: string,
+  fence: DurableStageFenceInput,
+  now: number,
+): Promise<{
+  conversation: Doc<"discordAssistantConversations">;
+  turn: Doc<"discordAssistantTurns">;
+} | null> {
+  const sourceChannelId = requireDiscordId(fence.sourceChannelId, "sourceChannelId");
+  const runId = requireDiscordId(fence.runId, "runId");
+  const turnId = requireDiscordId(fence.turnId, "turnId");
+  const sourceState = await discordChannelState(ctx, ownerId, sourceChannelId);
+  const conversation = await assistantConversationByGuild(ctx, guildId);
+  if (
+    sourceState === null
+    || !isCurrentDiscordGeneration(sourceState, runId, fence.channelGeneration)
+    || !activeLease(sourceState, now)
+    || !isCurrentDiscordConversationFence(conversation, {
+      ownerId,
+      ownerBindingVersion: conversation?.ownerBindingVersion ?? -1,
+      conversationId: requireDiscordId(fence.conversationId, "conversationId"),
+      epoch: fence.epoch,
+      generation: fence.conversationGeneration,
+      routingGeneration: fence.routingGeneration,
+      turnId,
+      runId,
+      leaseToken: requireDiscordId(fence.conversationLeaseToken, "conversationLeaseToken"),
+    }, now)
+  ) return null;
+  const turn = await ctx.db
+    .query("discordAssistantTurns")
+    .withIndex("by_owner_turn", (index) => index
+      .eq("ownerId", ownerId)
+      .eq("turnId", turnId))
+    .unique();
+  if (
+    turn === null
+    || conversation === null
+    || turn.ownerBindingVersion !== conversation.ownerBindingVersion
+    || turn.guildId !== guildId
+    || turn.conversationId !== conversation.conversationId
+    || turn.epoch !== conversation.epoch
+    || turn.runId !== runId
+    || turn.conversationGeneration !== conversation.generation
+    || turn.routingGeneration !== conversation.routingGeneration
+  ) return null;
+  return { conversation, turn };
+}
+
+async function appendInternalConversationEvent(
+  ctx: DiscordWriter & DiscordReader,
+  conversation: Doc<"discordAssistantConversations">,
+  input: {
+    eventId: string;
+    turnId: string;
+    runId: string;
+    kind: "internal_plan" | "research_started" | "research_completed" | "research_failed";
+    contextHash: string;
+    researchArtifactId?: string;
+  },
+  now: number,
+): Promise<boolean> {
+  const existing = await ctx.db
+    .query("discordConversationEvents")
+    .withIndex("by_owner_event", (index) => index
+      .eq("ownerId", conversation.ownerId)
+      .eq("eventId", input.eventId))
+    .unique();
+  if (existing !== null) return false;
+  const revision = conversation.revision + 1;
+  const eventRecord: DiscordConversationEventRecord = {
+    ownerId: conversation.ownerId,
+    ownerBindingVersion: conversation.ownerBindingVersion,
+    guildId: conversation.guildId,
+    conversationId: conversation.conversationId,
+    epoch: conversation.epoch,
+    eventId: input.eventId,
+    ordinal: conversation.nextOrdinal,
+    revision,
+    humanRevision: conversation.humanRevision,
+    turnId: input.turnId,
+    runId: input.runId,
+    kind: input.kind,
+    visibility: "internal",
+    status: "committed",
+    contextHash: input.contextHash,
+    createdAt: now,
+    committedAt: now,
+    updatedAt: now,
+  };
+  if (input.researchArtifactId !== undefined) {
+    eventRecord.researchArtifactId = input.researchArtifactId;
+  }
+  await ctx.db.insert("discordConversationEvents", eventRecord);
+  await ctx.db.patch(conversation._id, {
+    revision,
+    nextOrdinal: conversation.nextOrdinal + 1,
+    updatedAt: now,
+  });
+  return true;
+}
+
+async function durableTurnRecoveryPayload(
+  ctx: DiscordReader,
+  turn: Doc<"discordAssistantTurns">,
+) {
+  const artifacts = await ctx.db
+    .query("discordResearchArtifacts")
+    .withIndex("by_conversation_epoch_turn", (index) => index
+      .eq("conversationId", turn.conversationId)
+      .eq("epoch", turn.epoch)
+      .eq("turnId", turn.turnId))
+    .collect();
+  const artifact = artifacts.sort((left, right) => right.updatedAt - left.updatedAt)[0];
+  const replies = await ctx.db
+    .query("discordOutbox")
+    .withIndex("by_owner_run", (index) => index
+      .eq("ownerId", turn.ownerId)
+      .eq("runId", turn.runId))
+    .collect();
+  const acknowledgement = replies.find((reply) =>
+    (reply.replyKind ?? (reply.finalizesLoop ? "final" : "research_log"))
+      === "acknowledgement"
+  );
+  const acknowledgementDelivery = acknowledgement === undefined
+    ? turn.acknowledgementDelivery
+    : acknowledgement.status === "sent" || acknowledgement.status === "finalized"
+      ? "sent" as const
+      : acknowledgement.status === "delivery_uncertain"
+        || acknowledgement.status === "needs_reconciliation"
+        ? "uncertain" as const
+        : "pending" as const;
+  const recovery: DurableTurnRecoveryView = {
+    stage: turn.stage,
+  };
+  if (turn.planPayload !== undefined) recovery.planPayload = turn.planPayload;
+  if (turn.resumePayload !== undefined) recovery.resumePayload = turn.resumePayload;
+  if (turn.resumeRequestId !== undefined) recovery.resumeRequestId = turn.resumeRequestId;
+  if (acknowledgementDelivery !== undefined) {
+    recovery.acknowledgementDelivery = acknowledgementDelivery;
+  }
+  if (turn.eligibleThroughSequence !== undefined) {
+    recovery.eligibleThroughSequence = turn.eligibleThroughSequence;
+  }
+  if (turn.eligibleHumanRevision !== undefined) {
+    recovery.eligibleHumanRevision = turn.eligibleHumanRevision;
+  }
+  if (turn.eligibleContextHash !== undefined) {
+    recovery.eligibleContextHash = turn.eligibleContextHash;
+  }
+  if (turn.nextExplicitTriggerSequence !== undefined) {
+    recovery.nextExplicitTriggerSequence = turn.nextExplicitTriggerSequence;
+  }
+  if (artifact !== undefined) {
+    const research: DurableRecoveryResearchView = {
+      requestId: artifact.requestId,
+      normalizedRequest: artifact.normalizedResearchRequest,
+      status: artifact.status,
+      sourceUrls: artifact.sourceUrls,
+      serializedBytes: artifact.serializedBytes,
+      estimatedTokens: artifact.estimatedTokens,
+      tokenEstimatorVersion: artifact.tokenEstimatorVersion,
+    };
+    if (artifact.packet !== undefined) research.packet = artifact.packet;
+    if (artifact.failureCode !== undefined) research.failureCode = artifact.failureCode;
+    if (artifact.failureDetail !== undefined) research.failureDetail = artifact.failureDetail;
+    if (artifact.failureRetryable !== undefined) {
+      research.failureRetryable = artifact.failureRetryable;
+    }
+    if (artifact.freshness !== undefined) research.freshness = artifact.freshness;
+    if (artifact.trustedChartArtifactId !== undefined) {
+      research.trustedChartArtifactId = artifact.trustedChartArtifactId;
+    }
+    if (artifact.trustedChartSpec !== undefined) {
+      research.trustedChartSpec = artifact.trustedChartSpec;
+    }
+    recovery.research = research;
+  }
+  return recovery;
+}
+
+async function resetAssistantConversation(
+  ctx: DiscordWriter & DiscordReader,
+  conversation: Doc<"discordAssistantConversations">,
+  now: number,
+  reason: "owner_reset" | "ownership_transfer",
+): Promise<number> {
+  const oldEpoch = conversation.epoch;
+  if (conversation.activeTurnId !== undefined) {
+    const turn = await ctx.db
+      .query("discordAssistantTurns")
+      .withIndex("by_owner_turn", (index) => index
+        .eq("ownerId", conversation.ownerId)
+        .eq("turnId", conversation.activeTurnId!))
+      .unique();
+    if (turn !== null && !["completed", "suppressed", "failed", "cancelled"].includes(turn.stage)) {
+      await ctx.db.patch(turn._id, {
+        stage: "cancelled",
+        failureCode: reason,
+        completedAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+  if (conversation.activeRunId !== undefined) {
+    const run = await ctx.db
+      .query("discordLoopRuns")
+      .withIndex("by_owner_run", (index) => index
+        .eq("ownerId", conversation.ownerId)
+        .eq("runId", conversation.activeRunId!))
+      .unique();
+    if (run !== null && !["completed", "error", "stale"].includes(run.status)) {
+      await ctx.db.patch(run._id, {
+        status: "stale",
+        error: reason,
+        completedAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+  const outbox = await ctx.db
+    .query("discordOutbox")
+    .withIndex("by_conversation_epoch", (index) => index
+      .eq("conversationId", conversation.conversationId)
+      .eq("epoch", oldEpoch))
+    .collect();
+  for (const reply of outbox) {
+    if (reply.status === "pending") {
+      await ctx.db.patch(reply._id, {
+        status: "cancelled",
+        lastError: reason,
+        deliveryWorkerId: undefined,
+        deliveryToken: undefined,
+        deliveryLeaseExpiresAt: undefined,
+        updatedAt: now,
+      });
+    } else if (reply.status === "delivery_uncertain") {
+      await ctx.db.patch(reply._id, {
+        status: "needs_reconciliation",
+        lastError: reason,
+        deliveryWorkerId: undefined,
+        deliveryToken: undefined,
+        deliveryLeaseExpiresAt: undefined,
+        updatedAt: now,
+      });
+      await recordActivity(ctx, conversation.ownerId, {
+        eventId: `${reply.outboxId}:delivery-reconciliation-required`,
+        guildId: reply.sourceGuildId,
+        channelId: reply.sourceChannelId,
+        runId: reply.runId,
+        eventType: "delivery_reconciliation_required",
+        replyKind: reply.replyKind
+          ?? (reply.finalizesLoop ? "final" : "research_log"),
+      }, now);
+    }
+    if (reply.canonicalEventId !== undefined) {
+      const event = await ctx.db
+        .query("discordConversationEvents")
+        .withIndex("by_owner_event", (index) => index
+          .eq("ownerId", conversation.ownerId)
+          .eq("eventId", reply.canonicalEventId!))
+        .unique();
+      if (event !== null && event.status === "pending") {
+        await ctx.db.patch(event._id, { status: "failed", updatedAt: now });
+      }
+    }
+  }
+  if (conversation.activeCheckpointId !== undefined) {
+    const checkpoint = await ctx.db
+      .query("discordCompactionCheckpoints")
+      .withIndex("by_owner_checkpoint", (index) => index
+        .eq("ownerId", conversation.ownerId)
+        .eq("checkpointId", conversation.activeCheckpointId!))
+      .unique();
+    if (checkpoint !== null && checkpoint.status === "active") {
+      await ctx.db.patch(checkpoint._id, { status: "superseded", updatedAt: now });
+    }
+  }
+  await ctx.db.insert("discordConversationEvents", {
+    ownerId: conversation.ownerId,
+    ownerBindingVersion: conversation.ownerBindingVersion,
+    guildId: conversation.guildId,
+    conversationId: conversation.conversationId,
+    epoch: oldEpoch,
+    eventId: `${conversation.conversationId}:${oldEpoch}:reset:${conversation.generation + 1}`,
+    ordinal: conversation.nextOrdinal,
+    revision: conversation.revision + 1,
+    humanRevision: conversation.humanRevision,
+    kind: "reset",
+    visibility: "internal",
+    status: "committed",
+    contextHash: discordContextHash([]),
+    createdAt: now,
+    committedAt: now,
+    updatedAt: now,
+  });
+  const channelState = conversation.conversationChannelId === undefined
+    ? null
+    : await discordChannelState(ctx, conversation.ownerId, conversation.conversationChannelId);
+  if (channelState !== null) {
+    await ctx.db.patch(channelState._id, {
+      generation: channelState.generation + 1,
+      status: "idle",
+      triggerThroughSequence: channelState.latestSequence,
+      completedThroughSequence: channelState.latestSequence,
+      recheckCount: 0,
+      recheckPending: false,
+      ...clearActiveLoop(),
+      updatedAt: now,
+    });
+  }
+  const newEpoch = oldEpoch + 1;
+  await ctx.db.patch(conversation._id, {
+    epoch: newEpoch,
+    generation: conversation.generation + 1,
+    routingGeneration: conversation.routingGeneration + 1,
+    revision: 0,
+    humanRevision: 0,
+    nextOrdinal: 1,
+    activeTurnId: undefined,
+    activeRunId: undefined,
+    activeLeaseToken: undefined,
+    activeLeaseWorkerId: undefined,
+    leaseExpiresAt: undefined,
+    activeCheckpointId: undefined,
+    migrationWatermarkSequence: channelState?.latestSequence
+      ?? conversation.migrationWatermarkSequence,
+    updatedAt: now,
+  });
+  return newEpoch;
+}
+
 function toMessageContext(message: Doc<"discordMessages">): DiscordMessageContext {
   const context: DiscordMessageContext = {
     messageId: message.messageId,
@@ -522,7 +1326,7 @@ function activeLease(state: Doc<"discordChannelStates">, now: number): boolean {
 }
 
 async function invalidateRunOutbox(
-  ctx: DiscordWriter,
+  ctx: DiscordWriter & DiscordReader,
   ownerId: string,
   runId: string,
   error: string,
@@ -542,8 +1346,28 @@ async function invalidateRunOutbox(
         deliveryLeaseExpiresAt: undefined,
         updatedAt: now,
       });
+    } else if (reply.status === "delivery_uncertain") {
+      await ctx.db.patch(reply._id, {
+        status: "needs_reconciliation",
+        lastError: error,
+        deliveryWorkerId: undefined,
+        deliveryToken: undefined,
+        deliveryLeaseExpiresAt: undefined,
+        updatedAt: now,
+      });
     } else if (reply.status === "sent") {
       await ctx.db.patch(reply._id, { status: "finalized", updatedAt: now });
+    }
+    if (reply.canonicalEventId !== undefined && reply.status === "pending") {
+      const event = await ctx.db
+        .query("discordConversationEvents")
+        .withIndex("by_owner_event", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("eventId", reply.canonicalEventId!))
+        .unique();
+      if (event !== null && event.status === "pending") {
+        await ctx.db.patch(event._id, { status: "failed", updatedAt: now });
+      }
     }
   }
 }
@@ -692,6 +1516,7 @@ export const getControlPlane = query({
       gateway: publicGateway(gateway, now),
       activity: activity.map(publicActivity),
       guilds: await Promise.all(guilds.map(async (guild) => {
+        const assistantConversation = await assistantConversationByGuild(ctx, guild.guildId);
         const channels = await ctx.db
           .query("discordChannels")
           .withIndex("by_owner_guild_available_name", (index) => index
@@ -718,6 +1543,28 @@ export const getControlPlane = query({
           iconUrl: guild.iconUrl,
           permissions: guild.permissions,
           routing,
+          conversation: assistantConversation?.ownerId === actor.id
+            ? {
+                conversationId: assistantConversation.conversationId,
+                epoch: assistantConversation.epoch,
+                revision: assistantConversation.revision,
+                humanRevision: assistantConversation.humanRevision,
+                personalityVersion: assistantConversation.personalityVersion,
+                models: {
+                  luna: {
+                    model: assistantConversation.lunaModel,
+                    reasoningEffort: assistantConversation.lunaReasoningEffort,
+                    serviceTier: assistantConversation.lunaServiceTier,
+                  },
+                  sol: {
+                    model: assistantConversation.solModel,
+                    reasoningEffort: assistantConversation.solReasoningEffort,
+                    serviceTier: assistantConversation.solServiceTier,
+                  },
+                },
+                lastSuccessfulActivityAt: assistantConversation.lastSuccessfulActivityAt,
+              }
+            : undefined,
           channels: await Promise.all(channels.map(async (channel) => {
             const state = await discordChannelState(ctx, actor.id, channel.channelId);
             const loop = state
@@ -738,6 +1585,7 @@ export const getControlPlane = query({
               canView: channel.canView,
               canSend: channel.canSend,
               canReadHistory: channel.canReadHistory,
+              ...normalizeDiscordForumCapabilities(channel),
               roles: channel.roles,
               loop,
             };
@@ -789,6 +1637,12 @@ export const setGuildRouting = mutation({
     const researchLogChannelId = args.researchLogChannelId === null
       ? null
       : requireDiscordId(args.researchLogChannelId, "researchLogChannelId");
+    if (
+      conversationChannelId !== null
+      && conversationChannelId === researchLogChannelId
+    ) {
+      throw new Error("Discord conversation and research-log channels must be different.");
+    }
     const channels = await ctx.db
       .query("discordChannels")
       .withIndex("by_owner_guild_available_name", (index) => index
@@ -815,6 +1669,10 @@ export const setGuildRouting = mutation({
     }
 
     const now = Date.now();
+    const existingConversation = await assistantConversationByGuild(ctx, guildId);
+    if (existingConversation !== null && existingConversation.ownerId !== actor.id) {
+      throw new Error("Discord guild is already bound to another owner.");
+    }
     for (const channel of channels) {
       const roles: DiscordChannelRole[] = [];
       if (channel.channelId === conversationChannelId) {
@@ -823,12 +1681,636 @@ export const setGuildRouting = mutation({
       if (channel.channelId === researchLogChannelId) roles.push("research_log");
       await applyChannelRoles(ctx, actor.id, guildId, channel, roles, now);
     }
+    let durableConversation = existingConversation;
+    if (conversationChannelId !== null) {
+      const state = await discordChannelState(ctx, actor.id, conversationChannelId);
+      const options: Parameters<typeof ensureAssistantConversation>[4] = {
+        conversationChannelId,
+        migrationWatermarkSequence: state?.latestSequence ?? 0,
+      };
+      if (researchLogChannelId !== null) options.researchLogChannelId = researchLogChannelId;
+      durableConversation ??= await ensureAssistantConversation(
+        ctx,
+        actor.id,
+        guildId,
+        now,
+        options,
+      );
+    }
+    if (durableConversation !== null) {
+      const routeChanged = durableConversation.conversationChannelId !== conversationChannelId
+        || durableConversation.researchLogChannelId !== researchLogChannelId;
+      if (routeChanged) {
+        const surfaceChanged = durableConversation.conversationChannelId !== undefined
+          && durableConversation.conversationChannelId !== conversationChannelId;
+        const revision = durableConversation.revision + (surfaceChanged ? 1 : 0);
+        const routingGeneration = durableConversation.routingGeneration + 1;
+        if (durableConversation.activeTurnId !== undefined) {
+          const activeTurn = await ctx.db
+            .query("discordAssistantTurns")
+            .withIndex("by_owner_turn", (index) => index
+              .eq("ownerId", actor.id)
+              .eq("turnId", durableConversation!.activeTurnId!))
+            .unique();
+          if (activeTurn !== null && !["completed", "suppressed", "failed", "cancelled"].includes(activeTurn.stage)) {
+            await ctx.db.patch(activeTurn._id, {
+              stage: "cancelled",
+              failureCode: "routing_changed",
+              completedAt: now,
+              updatedAt: now,
+            });
+          }
+        }
+        if (surfaceChanged) {
+          const sourceSurfaceChannelId = conversationChannelId
+            ?? durableConversation.conversationChannelId;
+          const surfaceEvent: DiscordConversationEventRecord = {
+            ownerId: actor.id,
+            ownerBindingVersion: durableConversation.ownerBindingVersion,
+            guildId,
+            conversationId: durableConversation.conversationId,
+            epoch: durableConversation.epoch,
+            eventId: `${durableConversation.conversationId}:${durableConversation.epoch}:surface:${routingGeneration}`,
+            ordinal: durableConversation.nextOrdinal,
+            revision,
+            humanRevision: durableConversation.humanRevision,
+            kind: "surface_changed",
+            visibility: "internal",
+            status: "committed",
+            contextHash: discordContextHash([]),
+            createdAt: now,
+            committedAt: now,
+            updatedAt: now,
+          };
+          if (sourceSurfaceChannelId !== undefined) {
+            surfaceEvent.sourceChannelId = sourceSurfaceChannelId;
+          }
+          await ctx.db.insert("discordConversationEvents", surfaceEvent);
+        }
+        await ctx.db.patch(durableConversation._id, {
+          conversationChannelId: conversationChannelId ?? undefined,
+          researchLogChannelId: researchLogChannelId ?? undefined,
+          routingGeneration,
+          generation: durableConversation.generation + 1,
+          revision,
+          nextOrdinal: durableConversation.nextOrdinal + (surfaceChanged ? 1 : 0),
+          activeTurnId: undefined,
+          activeRunId: undefined,
+          activeLeaseToken: undefined,
+          activeLeaseWorkerId: undefined,
+          leaseExpiresAt: undefined,
+          updatedAt: now,
+        });
+        durableConversation = await ctx.db.get(durableConversation._id);
+      }
+    }
     return {
       guildId,
       conversationChannelId,
       researchLogChannelId,
+      conversationId: durableConversation?.conversationId,
+      epoch: durableConversation?.epoch,
+      routingGeneration: durableConversation?.routingGeneration,
       updatedAt: now,
     };
+  },
+});
+
+export const resetGuildConversation = mutation({
+  args: {
+    guildId: v.string(),
+    confirmGuildId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    if (requireDiscordId(args.confirmGuildId, "confirmGuildId") !== guildId) {
+      throw new Error("Reset confirmation must name the Discord guild.");
+    }
+    const conversation = await assistantConversationByGuild(ctx, guildId);
+    if (conversation === null || conversation.ownerId !== actor.id) {
+      throw new Error("Discord conversation not found.");
+    }
+    const now = Date.now();
+    const epoch = await resetAssistantConversation(ctx, conversation, now, "owner_reset");
+    return {
+      guildId,
+      conversationId: conversation.conversationId,
+      epoch,
+      generation: conversation.generation + 1,
+      routingGeneration: conversation.routingGeneration + 1,
+      resetAt: now,
+    };
+  },
+});
+
+export const deleteGuildConversationPrivacyData = mutation({
+  args: {
+    guildId: v.string(),
+    confirmGuildId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    if (requireDiscordId(args.confirmGuildId, "confirmGuildId") !== guildId) {
+      throw new Error("Privacy-deletion confirmation must name the Discord guild.");
+    }
+    const conversation = await assistantConversationByGuild(ctx, guildId);
+    if (conversation === null || conversation.ownerId !== actor.id) {
+      throw new Error("Discord conversation not found.");
+    }
+    const now = Date.now();
+    const ownerOutbox = await ctx.db.query("discordOutbox")
+      .withIndex("by_owner_status_createdAt", (index) => index.eq("ownerId", actor.id))
+      .collect();
+    if (discordPrivacyDeletionBlocked(guildId, ownerOutbox)) {
+      throw new Error(
+        "Privacy deletion is blocked until uncertain Discord delivery is reconciled.",
+      );
+    }
+    const epoch = await resetAssistantConversation(
+      ctx,
+      conversation,
+      now,
+      "owner_reset",
+    );
+    const ownerMessages = await ctx.db.query("discordMessages")
+      .withIndex("by_owner_nonce", (index) => index.eq("ownerId", actor.id))
+      .collect();
+    const ownerChannelStates = await ctx.db.query("discordChannelStates")
+      .withIndex("by_owner_channel", (index) => index.eq("ownerId", actor.id))
+      .collect();
+    const ownerRuns = await ctx.db.query("discordLoopRuns")
+      .withIndex("by_owner_run", (index) => index.eq("ownerId", actor.id))
+      .collect();
+    const ownerActivity = await ctx.db.query("discordActivityEvents")
+      .withIndex("by_owner_createdAt", (index) => index.eq("ownerId", actor.id))
+      .collect();
+    const tables = await Promise.all([
+      ctx.db.query("discordConversationEvents")
+        .withIndex("by_conversation_epoch_ordinal", (index) => index
+          .eq("conversationId", conversation.conversationId))
+        .collect(),
+      ctx.db.query("discordAssistantTurns")
+        .withIndex("by_conversation_epoch_stage", (index) => index
+          .eq("conversationId", conversation.conversationId))
+        .collect(),
+      ctx.db.query("discordResearchArtifacts")
+        .withIndex("by_conversation_epoch_turn", (index) => index
+          .eq("conversationId", conversation.conversationId))
+        .collect(),
+      ctx.db.query("discordCompactionCheckpoints")
+        .withIndex("by_conversation_epoch_status", (index) => index
+          .eq("conversationId", conversation.conversationId))
+        .collect(),
+      Promise.resolve(ownerMessages.filter((message) => message.guildId === guildId)),
+      Promise.resolve(ownerChannelStates.filter((state) => state.guildId === guildId)),
+      Promise.resolve(ownerRuns.filter((run) => run.guildId === guildId)),
+      Promise.resolve(ownerOutbox.filter((reply) =>
+        reply.guildId === guildId || reply.sourceGuildId === guildId
+      )),
+      Promise.resolve(ownerActivity.filter((event) => event.guildId === guildId)),
+    ]);
+    for (const documents of tables) {
+      for (const document of documents) await ctx.db.delete(document._id);
+    }
+    await ctx.db.patch(conversation._id, {
+      revision: 0,
+      humanRevision: 0,
+      nextOrdinal: 1,
+      activeTurnId: undefined,
+      activeRunId: undefined,
+      activeLeaseToken: undefined,
+      activeLeaseWorkerId: undefined,
+      leaseExpiresAt: undefined,
+      activeCheckpointId: undefined,
+      migrationWatermarkSequence: 0,
+      privacyDeletedAt: now,
+      privacyReconciliationAfterMessageId: discordSnowflakeUpperBound(now),
+      updatedAt: now,
+    });
+    return {
+      guildId,
+      conversationId: conversation.conversationId,
+      deletedRecords: tables.reduce((count, documents) => count + documents.length, 0),
+      epoch,
+      deletedAt: now,
+    };
+  },
+});
+
+export const transferGuildConversationOwnership = mutation({
+  args: {
+    guildId: v.string(),
+    newOwnerId: v.string(),
+    policy: v.literal("reset"),
+  },
+  handler: async (ctx, args) => {
+    const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    const newOwnerId = requireDiscordOwnerId(args.newOwnerId);
+    const conversation = await assistantConversationByGuild(ctx, guildId);
+    if (conversation === null || conversation.ownerId !== actor.id) {
+      throw new Error("Discord conversation not found.");
+    }
+    if (newOwnerId === actor.id) throw new Error("Discord guild is already owned by this actor.");
+    const now = Date.now();
+    const epoch = await resetAssistantConversation(
+      ctx,
+      conversation,
+      now,
+      "ownership_transfer",
+    );
+    await ctx.db.patch(conversation._id, {
+      ownerId: newOwnerId,
+      ownerBindingVersion: conversation.ownerBindingVersion + 1,
+      updatedAt: now,
+    });
+    return {
+      guildId,
+      conversationId: conversation.conversationId,
+      epoch,
+      ownerBindingVersion: conversation.ownerBindingVersion + 1,
+      policy: args.policy,
+      transferredAt: now,
+    };
+  },
+});
+
+export const nextPortableCheckpoint = internalMutation({
+  args: { actorId: serviceId },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const conversations = await ctx.db
+      .query("discordAssistantConversations")
+      .withIndex("by_owner_guild", (index) => index.eq("ownerId", ownerId))
+      .collect();
+    const unresolvedDeliveries = await Promise.all(
+      (["delivery_uncertain", "needs_reconciliation"] as const).map((status) => ctx.db
+        .query("discordOutbox")
+        .withIndex("by_owner_status_createdAt", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("status", status))
+        .collect()),
+    );
+    const blockedGuildIds = new Set(unresolvedDeliveries.flat().flatMap((reply) => [
+      reply.guildId,
+      reply.sourceGuildId,
+    ]));
+    const now = Date.now();
+
+    for (const conversation of conversations.toSorted((left, right) => left.updatedAt - right.updatedAt)) {
+      if (
+        conversation.activeTurnId !== undefined
+        || conversation.leaseExpiresAt !== undefined
+        || blockedGuildIds.has(conversation.guildId)
+      ) continue;
+      const restored = await durableConversationContext(ctx, conversation, now);
+      const compactedThroughOrdinal = restored.tail.compactedThroughOrdinal;
+      const events = await ctx.db
+        .query("discordConversationEvents")
+        .withIndex("by_conversation_epoch_ordinal", (index) => index
+          .eq("conversationId", conversation.conversationId)
+          .eq("epoch", conversation.epoch))
+        .order("asc")
+        .collect();
+      const visibleEvents = events
+        .filter((event) => event.visibility === "conversation"
+          && event.status === "committed"
+          && event.ordinal > compactedThroughOrdinal
+          && event.content !== undefined
+          && (event.kind === "human_message"
+            || event.kind === "assistant_ack"
+            || event.kind === "assistant_final"))
+        .map((event) => ({
+          event,
+          eventId: event.eventId,
+          ordinal: event.ordinal,
+          content: event.content!,
+        }));
+      const previousSummaryTokens = restored.portableSummary === undefined
+        ? 0
+        : Math.ceil(new TextEncoder().encode(JSON.stringify(restored.portableSummary)).byteLength / 3) + 8;
+      const currentEstimatedTokens = previousSummaryTokens
+        + visibleEvents.reduce((total, event) => total + estimateDiscordCanonicalEventTokens(event), 0);
+      if (currentEstimatedTokens < DISCORD_COMPACTION_THRESHOLD_TOKENS) continue;
+
+      const tail = selectDiscordCheckpointTail(visibleEvents, {
+        tokenBudget: DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+        maximumEvents: DISCORD_MAX_RECENT_EVENT_COUNT,
+      });
+      if (tail.complete || tail.events.length === 0) continue;
+      const sourceEvents = visibleEvents.slice(0, visibleEvents.length - tail.events.length);
+      if (!portableCheckpointSourceBatchSupported(sourceEvents.length)) continue;
+      const lastSourceEvent = sourceEvents.at(-1);
+      if (lastSourceEvent === undefined) continue;
+      const sourceSlice = await canonicalCheckpointSlice(
+        ctx,
+        conversation,
+        lastSourceEvent.ordinal,
+      );
+      const checkpointId = [
+        "checkpoint",
+        conversation.guildId,
+        conversation.epoch,
+        conversation.revision,
+        sourceSlice.sourceContextHash.slice(0, 16),
+      ].join(":");
+      const checkpointConversation: PortableCheckpointConversationView = {
+        ownerId,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        guildId: conversation.guildId,
+        conversationId: conversation.conversationId,
+        epoch: conversation.epoch,
+        generation: conversation.generation,
+        routingGeneration: conversation.routingGeneration,
+        revision: conversation.revision,
+        personalityVersion: conversation.personalityVersion,
+        systemPromptHash: conversation.systemPromptHash,
+        capabilityProfileHash: conversation.capabilityProfileHash,
+      };
+      if (restored.activeCheckpointId !== undefined) {
+        checkpointConversation.activeCheckpointId = restored.activeCheckpointId;
+      }
+      const checkpointSourceEvents: PortableCheckpointSourceEventView[] = sourceEvents.map(
+        ({ event }) => {
+          const sourceEvent: PortableCheckpointSourceEventView = {
+            eventId: event.eventId,
+            ordinal: event.ordinal,
+            role: event.kind === "human_message" ? "human" : "assistant",
+            content: event.content!,
+            createdAt: new Date(event.createdAt).toISOString(),
+          };
+          if (event.authorId !== undefined) sourceEvent.authorId = event.authorId;
+          if (event.authorName !== undefined) sourceEvent.displayName = event.authorName;
+          if (event.freshness !== undefined) sourceEvent.freshness = event.freshness;
+          return sourceEvent;
+        },
+      );
+      const request: PortableCheckpointRequestView = {
+        profile: "portable_checkpoint" as const,
+        requestId: checkpointId,
+        conversation: checkpointConversation,
+        sourceContextHash: sourceSlice.sourceContextHash,
+        compactedThroughOrdinal: lastSourceEvent.ordinal,
+        sourceEvents: checkpointSourceEvents,
+        retainedRecentEventIds: tail.events.map((event) => event.eventId),
+        inputEstimatedTokens: previousSummaryTokens + sourceEvents.reduce(
+          (total, event) => total + estimateDiscordCanonicalEventTokens(event),
+          0,
+        ),
+      };
+      if (restored.portableSummary !== undefined) {
+        request.previousSummary = restored.portableSummary;
+      }
+      if (new TextEncoder().encode(JSON.stringify(request)).byteLength > 1_500_000) continue;
+      return { available: true as const, request };
+    }
+    return { available: false as const };
+  },
+});
+
+export const storePortableCheckpoint = internalMutation({
+  args: {
+    actorId: serviceId,
+    guildId: serviceId,
+    conversationId: serviceId,
+    epoch: v.number(),
+    expectedRevision: v.number(),
+    expectedGeneration: v.number(),
+    expectedRoutingGeneration: v.number(),
+    checkpointId: serviceId,
+    sourceContextHash: v.string(),
+    toolPolicyHash: v.string(),
+    compactedThroughOrdinal: v.number(),
+    portableSummary: v.string(),
+    retainedRecentEventIds: v.array(serviceId),
+    inputTokens: v.number(),
+    outputTokens: v.number(),
+    estimatedSavedTokens: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    const conversationId = requireDiscordId(args.conversationId, "conversationId");
+    const checkpointId = requireDiscordId(args.checkpointId, "checkpointId");
+    const conversation = await assistantConversationByGuild(ctx, guildId);
+    if (
+      conversation === null
+      || conversation.ownerId !== ownerId
+      || conversation.conversationId !== conversationId
+      || conversation.epoch !== args.epoch
+      || conversation.revision !== args.expectedRevision
+      || conversation.generation !== args.expectedGeneration
+      || conversation.routingGeneration !== args.expectedRoutingGeneration
+    ) {
+      return { accepted: false as const, reason: "checkpoint_compare_and_set_lost" as const };
+    }
+    if (conversation.activeTurnId !== undefined || conversation.leaseExpiresAt !== undefined) {
+      return { accepted: false as const, reason: "conversation_not_stable" as const };
+    }
+    if (
+      !Number.isSafeInteger(args.compactedThroughOrdinal)
+      || args.compactedThroughOrdinal <= 0
+      || args.compactedThroughOrdinal >= conversation.nextOrdinal
+      || args.retainedRecentEventIds.length > DISCORD_MAX_RECENT_EVENT_COUNT
+    ) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    let parsedSummary: z.infer<typeof portableConversationSummarySchema>;
+    try {
+      parsedSummary = portableConversationSummarySchema.parse(JSON.parse(args.portableSummary));
+    } catch {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    if (args.toolPolicyHash !== conversation.capabilityProfileHash) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    const canonicalSlice = await canonicalCheckpointSlice(
+      ctx,
+      conversation,
+      args.compactedThroughOrdinal,
+    );
+    if (
+      canonicalSlice.events.length === 0
+      || canonicalSlice.sourceContextHash !== args.sourceContextHash
+    ) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    if (!portableSummaryEvidenceMatchesEvents(parsedSummary, canonicalSlice.events)) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    const normalizedRetainedEventIds = args.retainedRecentEventIds.map((id) =>
+      requireDiscordId(id, "eventId")
+    );
+    if (new Set(normalizedRetainedEventIds).size !== normalizedRetainedEventIds.length) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    const retainedEvents = await Promise.all(normalizedRetainedEventIds.map((eventId) => ctx.db
+      .query("discordConversationEvents")
+      .withIndex("by_owner_event", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("eventId", eventId))
+      .unique()));
+    if (retainedEvents.some((event) =>
+      event === null
+      || event.conversationId !== conversationId
+      || event.epoch !== args.epoch
+      || event.status !== "committed"
+      || event.ordinal <= args.compactedThroughOrdinal
+    )) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    const canonicalRecentEvents = (await ctx.db
+      .query("discordConversationEvents")
+      .withIndex("by_conversation_epoch_ordinal", (index) => index
+        .eq("conversationId", conversationId)
+        .eq("epoch", args.epoch))
+      .order("asc")
+      .collect())
+      .filter((event) => event.visibility === "conversation"
+        && event.status === "committed"
+        && event.ordinal > args.compactedThroughOrdinal
+        && event.content !== undefined
+        && (event.kind === "human_message"
+          || event.kind === "assistant_ack"
+          || event.kind === "assistant_final"));
+    const expectedRetainedEventIds = selectDiscordCheckpointTail(
+      canonicalRecentEvents.map((event) => ({
+        eventId: event.eventId,
+        ordinal: event.ordinal,
+        content: event.content!,
+      })),
+    ).events.map((event) => event.eventId);
+    if (canonicalJson(normalizedRetainedEventIds) !== canonicalJson(expectedRetainedEventIds)) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    if (
+      !Number.isSafeInteger(args.inputTokens)
+      || args.inputTokens <= 0
+      || !Number.isSafeInteger(args.outputTokens)
+      || args.outputTokens < 0
+      || !Number.isSafeInteger(args.estimatedSavedTokens)
+      || args.estimatedSavedTokens !== args.inputTokens - args.outputTokens
+    ) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    const now = Date.now();
+    const serializedBytes = new TextEncoder().encode(args.portableSummary).byteLength;
+    try {
+      validatePortableCheckpointCandidate({
+        sourceRevision: args.expectedRevision,
+        currentRevision: conversation.revision,
+        serializedBytes,
+        createdAt: now,
+        expiresAt: now + DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
+      });
+    } catch {
+      return { accepted: false as const, reason: "checkpoint_oversize" as const };
+    }
+    const existing = await ctx.db
+      .query("discordCompactionCheckpoints")
+      .withIndex("by_owner_checkpoint", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("checkpointId", checkpointId))
+      .unique();
+    if (existing !== null) {
+      const same = existing.conversationId === conversationId
+        && existing.epoch === args.epoch
+        && existing.sourceRevision === args.expectedRevision
+        && existing.sourceContextHash === args.sourceContextHash
+        && existing.portableSummary === args.portableSummary;
+      return same
+        ? { accepted: true as const, duplicate: true, checkpointId, status: existing.status }
+        : { accepted: false as const, reason: "checkpoint_id_conflict" as const };
+    }
+    if (conversation.activeCheckpointId !== undefined) {
+      const active = await ctx.db
+        .query("discordCompactionCheckpoints")
+        .withIndex("by_owner_checkpoint", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("checkpointId", conversation.activeCheckpointId!))
+        .unique();
+      if (active !== null && active.status === "active") {
+        await ctx.db.patch(active._id, { status: "superseded", updatedAt: now });
+      }
+    }
+    await ctx.db.insert("discordCompactionCheckpoints", {
+      ownerId,
+      ownerBindingVersion: conversation.ownerBindingVersion,
+      guildId,
+      conversationId,
+      epoch: args.epoch,
+      checkpointId,
+      schemaVersion: 1,
+      implementationVersion: "portable-summary-v1",
+      provider: "openai-codex",
+      model: conversation.lunaModel,
+      personalityVersion: conversation.personalityVersion,
+      systemPromptHash: conversation.systemPromptHash,
+      capabilityProfileHash: conversation.capabilityProfileHash,
+      toolPolicyHash: args.toolPolicyHash,
+      compactedThroughOrdinal: args.compactedThroughOrdinal,
+      sourceRevision: args.expectedRevision,
+      sourceContextHash: args.sourceContextHash,
+      portableSummary: args.portableSummary,
+      retainedRecentEventIds: normalizedRetainedEventIds,
+      inputTokens: args.inputTokens,
+      outputTokens: args.outputTokens,
+      estimatedSavedTokens: args.estimatedSavedTokens,
+      serializedBytes,
+      storageProtection: "platform_default_unverified",
+      status: "active",
+      expiresAt: now + DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.patch(conversation._id, {
+      activeCheckpointId: checkpointId,
+      updatedAt: now,
+    });
+    return {
+      accepted: true as const,
+      duplicate: false,
+      checkpointId,
+      status: "active" as const,
+      serializedBytes,
+      expiresAt: now + DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
+    };
+  },
+});
+
+export const expirePortableCheckpoints = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let expired = 0;
+    for (const status of ["candidate", "active", "superseded", "invalid"] as const) {
+      const checkpoints = await ctx.db
+        .query("discordCompactionCheckpoints")
+        .withIndex("by_status_expiresAt", (index) => index
+          .eq("status", status)
+          .lte("expiresAt", now))
+        .collect();
+      for (const checkpoint of checkpoints) {
+        await ctx.db.patch(checkpoint._id, {
+          status: "expired",
+          portableSummary: "{}",
+          retainedRecentEventIds: [],
+          serializedBytes: 2,
+          updatedAt: now,
+        });
+        const conversation = await assistantConversationByGuild(ctx, checkpoint.guildId);
+        if (conversation?.activeCheckpointId === checkpoint.checkpointId) {
+          await ctx.db.patch(conversation._id, {
+            activeCheckpointId: undefined,
+            updatedAt: now,
+          });
+        }
+        expired += 1;
+      }
+    }
+    return { expired, expiredAt: now };
   },
 });
 
@@ -877,6 +2359,10 @@ export const syncGuilds = internalMutation({
     let channelCount = 0;
     for (const guildSnapshot of args.guilds) {
       const guildId = requireDiscordId(guildSnapshot.guildId, "guildId");
+      const boundConversation = await assistantConversationByGuild(ctx, guildId);
+      if (boundConversation !== null && boundConversation.ownerId !== ownerId) {
+        throw new Error("Discord guild is already bound to another owner.");
+      }
       const guild = await ctx.db
         .query("discordGuilds")
         .withIndex("by_owner_guild", (index) => index.eq("ownerId", ownerId).eq("guildId", guildId))
@@ -914,6 +2400,7 @@ export const syncGuilds = internalMutation({
           canView: channelSnapshot.canView,
           canSend: channelSnapshot.canSend,
           canReadHistory: channelSnapshot.canReadHistory,
+          ...normalizeDiscordForumCapabilities(channelSnapshot),
           available: true,
           lastSeenAt: now,
           updatedAt: now,
@@ -937,19 +2424,47 @@ export const syncGuilds = internalMutation({
     const monitoredChannels: MonitoredChannelCursor[] = [];
     for (const channel of synchronizedChannels) {
       if (!channel.available || !hasRole(channel, "conversation_monitor")) continue;
-      const latestMessage = await ctx.db
-        .query("discordMessages")
-        .withIndex("by_owner_channel_sequence", (index) => index
-          .eq("ownerId", ownerId)
-          .eq("channelId", channel.channelId))
-        .order("desc")
-        .first();
       const cursor: MonitoredChannelCursor = {
         guildId: channel.guildId,
         channelId: channel.channelId,
-        afterMessageId: latestMessage?.messageId ?? null,
+        afterMessageId: await discordHistoryAfterMessageId(
+          ctx,
+          ownerId,
+          channel.guildId,
+          channel.channelId,
+        ),
       };
       monitoredChannels.push(cursor);
+    }
+    const reconciliationReplies = (await Promise.all(
+      (["delivery_uncertain", "needs_reconciliation"] as const).map((status) => ctx.db
+        .query("discordOutbox")
+        .withIndex("by_owner_status_createdAt", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("status", status))
+        .collect()),
+    )).flat();
+    const reconciliationChannelIds = new Set(
+      reconciliationReplies.map((reply) => reply.channelId),
+    );
+    for (const channelId of reconciliationChannelIds) {
+      if (monitoredChannels.some((cursor) => cursor.channelId === channelId)) continue;
+      const channel = synchronizedChannels.find((candidate) =>
+        candidate.channelId === channelId
+        && candidate.available
+        && candidate.canReadHistory
+      );
+      if (channel === undefined) continue;
+      monitoredChannels.push({
+        guildId: channel.guildId,
+        channelId,
+        afterMessageId: await discordHistoryAfterMessageId(
+          ctx,
+          ownerId,
+          channel.guildId,
+          channelId,
+        ),
+      });
     }
     return {
       guildCount: args.guilds.length,
@@ -967,6 +2482,17 @@ export const ingestMessage = internalMutation({
     const guildId = requireDiscordId(args.guildId, "guildId");
     const channelId = requireDiscordId(args.channelId, "channelId");
     const messageId = requireDiscordId(args.messageId, "messageId");
+    const newspaperPreferences = await ctx.db
+      .query("marketResearchPreferences")
+      .withIndex("by_owner_guild", (index) => index.eq("ownerId", ownerId).eq("guildId", guildId))
+      .unique();
+    if (isMarketResearchForumIngress(
+      newspaperPreferences?.forumChannelId,
+      channelId,
+      args.parentChannelId,
+    )) {
+      return { accepted: false as const, reason: "market_research_forum" as const };
+    }
     const channel = await discordChannel(ctx, ownerId, guildId, channelId);
     if (!channel?.available) {
       return { accepted: false as const, reason: "not_monitored" as const };
@@ -976,7 +2502,8 @@ export const ingestMessage = internalMutation({
     const monitored = hasRole(channel, "conversation_monitor");
     const directMention = !args.isBot && args.mentionsBot;
     const activeConversation = state !== null && activeLease(state, now);
-    if (!monitored && !directMention && !activeConversation) {
+    const possibleNonceReconciliation = args.isBot && args.nonce !== undefined;
+    if (!monitored && !directMention && !activeConversation && !possibleNonceReconciliation) {
       return { accepted: false as const, reason: "not_monitored" as const };
     }
     const images = requireDiscordImages(args.images);
@@ -1055,7 +2582,149 @@ export const ingestMessage = internalMutation({
     };
     if (images !== undefined) messageValue.images = images;
     if (args.replyToMessageId !== undefined) messageValue.replyToMessageId = args.replyToMessageId;
+    if (args.nonce !== undefined) messageValue.nonce = requireDiscordId(args.nonce, "nonce");
+    if (args.payloadHash !== undefined) messageValue.payloadHash = args.payloadHash;
     await ctx.db.insert("discordMessages", messageValue);
+    if (args.isBot && args.nonce !== undefined) {
+      const gateway = await ctx.db
+        .query("discordGateways")
+        .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
+        .unique();
+      const outbox = await ctx.db
+        .query("discordOutbox")
+        .withIndex("by_owner_nonce", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("nonce", args.nonce))
+        .unique();
+      const candidatePayloadHash = outbox === null
+        ? undefined
+        : await sha256Hex(canonicalJson({
+            guildId,
+            channelId,
+            content,
+            chart: outbox.chart ?? null,
+            replyToMessageId: args.replyToMessageId ?? null,
+          }));
+      const matches = outbox !== null
+        && gateway?.botUserId === args.authorId
+        && outbox.guildId === guildId
+        && outbox.channelId === channelId
+        && outbox.content === content
+        && outbox.replyToMessageId === args.replyToMessageId
+        && outbox.payloadHash !== undefined
+        && candidatePayloadHash === outbox.payloadHash
+        && (args.payloadHash === undefined || outbox.payloadHash === args.payloadHash);
+      if (matches && outbox !== null) {
+        if (outbox.status !== "sent" && outbox.status !== "finalized") {
+          await ctx.db.patch(outbox._id, {
+            status: "sent",
+            discordMessageId: messageId,
+            deliveryWorkerId: undefined,
+            deliveryToken: undefined,
+            deliveryLeaseExpiresAt: undefined,
+            sentAt: now,
+            updatedAt: now,
+          });
+          await commitCanonicalAssistantDelivery(ctx, outbox, messageId, now);
+          if (outbox.turnId !== undefined) {
+            const turn = await ctx.db
+              .query("discordAssistantTurns")
+              .withIndex("by_owner_turn", (index) => index
+                .eq("ownerId", ownerId)
+                .eq("turnId", outbox.turnId!))
+              .unique();
+            if (turn !== null) {
+              await ctx.db.patch(turn._id, { deliveryState: "sent", updatedAt: now });
+            }
+          }
+        } else if (outbox.discordMessageId !== messageId) {
+          return { accepted: false as const, reason: "nonce_delivery_conflict" as const };
+        }
+      }
+    }
+    let assistantConversation = await assistantConversationByGuild(ctx, guildId);
+    if (assistantConversation !== null && assistantConversation.ownerId !== ownerId) {
+      throw new Error("Discord guild is already bound to another owner.");
+    }
+    if (assistantConversation === null && monitored) {
+      assistantConversation = await ensureAssistantConversation(
+        ctx,
+        ownerId,
+        guildId,
+        now,
+        {
+          conversationChannelId: channelId,
+          migrationWatermarkSequence: state.latestSequence,
+        },
+      );
+    }
+    const belongsToConversation = assistantConversation !== null
+      && !args.isBot
+      && decision.sequence > assistantConversation.migrationWatermarkSequence
+      && (
+        assistantConversation.conversationChannelId === channelId
+        || directMention
+        || assistantConversation.activeTurnId !== undefined
+      );
+    if (belongsToConversation && assistantConversation !== null) {
+      const existingCanonical = await ctx.db
+        .query("discordConversationEvents")
+        .withIndex("by_conversation_source", (index) => index
+          .eq("conversationId", assistantConversation!.conversationId)
+          .eq("epoch", assistantConversation!.epoch)
+          .eq("sourceChannelId", channelId)
+          .eq("sourceMessageId", messageId))
+        .unique();
+      if (existingCanonical === null) {
+        const revision = assistantConversation.revision + 1;
+        const humanRevision = assistantConversation.humanRevision + 1;
+        const messageContext: DiscordMessageContext = {
+          messageId,
+          sequence: decision.sequence,
+          authorId: messageValue.authorId,
+          authorName: messageValue.authorName,
+          content: messageValue.content,
+          mentionsBot: messageValue.mentionsBot ?? false,
+          isBot: false,
+          createdAt: messageValue.createdAt,
+        };
+        if (messageValue.images !== undefined) messageContext.images = messageValue.images;
+        if (messageValue.replyToMessageId !== undefined) {
+          messageContext.replyToMessageId = messageValue.replyToMessageId;
+        }
+        await ctx.db.insert("discordConversationEvents", {
+          ownerId,
+          ownerBindingVersion: assistantConversation.ownerBindingVersion,
+          guildId,
+          conversationId: assistantConversation.conversationId,
+          epoch: assistantConversation.epoch,
+          eventId: `${assistantConversation.conversationId}:${assistantConversation.epoch}:human:${channelId}:${messageId}`,
+          ordinal: assistantConversation.nextOrdinal,
+          revision,
+          humanRevision,
+          kind: "human_message",
+          visibility: "conversation",
+          status: "committed",
+          sourceChannelId: channelId,
+          sourceMessageId: messageId,
+          sourceSequence: decision.sequence,
+          authorId: messageValue.authorId,
+          authorName: messageValue.authorName,
+          authorIsBot: false,
+          content: messageValue.content || "[Image attached]",
+          contextHash: discordContextHash([messageContext]),
+          createdAt: args.createdAt,
+          committedAt: now,
+          updatedAt: now,
+        });
+        await ctx.db.patch(assistantConversation._id, {
+          revision,
+          humanRevision,
+          nextOrdinal: assistantConversation.nextOrdinal + 1,
+          updatedAt: now,
+        });
+      }
+    }
     const running = activeLease(state, now);
     const advancesTrigger = !args.isBot && (monitored || directMention);
     const startsNewChain = advancesTrigger
@@ -1139,6 +2808,21 @@ export const claimLoop = internalMutation({
     const state = await discordChannelState(ctx, ownerId, channelId);
     if (!state) return { claimed: false as const, reason: "not_runnable" as const };
     const now = Date.now();
+    let conversation = await assistantConversationByGuild(ctx, guildId);
+    if (conversation !== null && conversation.ownerId !== ownerId) {
+      return { claimed: false as const, reason: "owner_binding_conflict" as const };
+    }
+    conversation ??= await ensureAssistantConversation(
+      ctx,
+      ownerId,
+      guildId,
+      now,
+      {
+        conversationChannelId: channelId,
+        migrationWatermarkSequence: state.completedThroughSequence,
+      },
+    );
+    if (conversation === null) throw new Error("Discord conversation could not be acquired.");
     const hasPendingMessages = state.triggerThroughSequence > state.completedThroughSequence;
     if (
       !hasRole(channel, "conversation_monitor")
@@ -1158,6 +2842,10 @@ export const claimLoop = internalMutation({
         && state.activeRunId === existingClaim.runId
         && state.generation === existingClaim.generation
         && activeLease(state, now)
+        && conversation.activeTurnId === existingClaim.runId
+        && conversation.activeRunId === existingClaim.runId
+        && conversation.leaseExpiresAt !== undefined
+        && conversation.leaseExpiresAt > now
       ) {
         const messages = await contextWindow(
           ctx,
@@ -1178,7 +2866,20 @@ export const claimLoop = internalMutation({
           channelId,
           triggerKind === "mention",
         );
-        return {
+        const durableContext = await durableConversationContext(
+          ctx,
+          conversation,
+          now,
+          messages.filter((message) => !message.isBot).map((message) => message.messageId),
+        );
+        const activeTurnId = conversation.activeTurnId;
+        const activeTurn = await ctx.db
+          .query("discordAssistantTurns")
+          .withIndex("by_owner_turn", (index) => index
+            .eq("ownerId", ownerId)
+            .eq("turnId", activeTurnId))
+          .unique();
+        const idempotentClaim = {
           claimed: true as const,
           idempotent: true,
           runId: existingClaim.runId,
@@ -1191,11 +2892,48 @@ export const claimLoop = internalMutation({
           contextHash: existingClaim.contextHash,
           recheckCount: existingClaim.recheckCount,
           triggerKind,
+          conversation: publicConversationIdentity(
+            conversation,
+            conversation.activeTurnId,
+            existingClaim.runId,
+          ),
+          conversationGeneration: conversation.generation,
+          conversationLeaseToken: conversation.activeLeaseToken,
+          routingGeneration: conversation.routingGeneration,
+          durableContext,
           ...routing,
           messages,
         };
+        if (activeTurn === null) return idempotentClaim;
+        return {
+          ...idempotentClaim,
+          recovery: await durableTurnRecoveryPayload(ctx, activeTurn),
+        };
       }
       return { claimed: false as const, reason: "claim_already_used" as const };
+    }
+
+    if (
+      conversation.activeTurnId !== undefined
+      && conversation.leaseExpiresAt !== undefined
+      && conversation.leaseExpiresAt > now
+    ) {
+      return { claimed: false as const, reason: "guild_conversation_busy" as const };
+    }
+
+    const activeConversationId = conversation.conversationId;
+    const activeConversationEpoch = conversation.epoch;
+    const unresolvedDeliveries = await ctx.db
+      .query("discordOutbox")
+      .withIndex("by_conversation_epoch", (index) => index
+        .eq("conversationId", activeConversationId)
+        .eq("epoch", activeConversationEpoch))
+      .collect();
+    if (unresolvedDeliveries.some((reply) =>
+      reply.status === "delivery_uncertain"
+      || reply.status === "needs_reconciliation"
+    )) {
+      return { claimed: false as const, reason: "delivery_requires_reconciliation" as const };
     }
 
     const expiredRecheck = state.activeRunId !== undefined
@@ -1210,6 +2948,23 @@ export const claimLoop = internalMutation({
           .eq("ownerId", ownerId)
           .eq("runId", state.activeRunId!))
         .collect();
+    const expiredRun = state.activeRunId === undefined
+      ? null
+      : await ctx.db
+        .query("discordLoopRuns")
+        .withIndex("by_owner_run", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("runId", state.activeRunId!))
+        .unique();
+    const expiredTurnId = conversation.activeTurnId;
+    const expiredTurn = expiredTurnId === undefined
+      ? null
+      : await ctx.db
+        .query("discordAssistantTurns")
+        .withIndex("by_owner_turn", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("turnId", expiredTurnId))
+        .unique();
     if (
       state.activeRunId !== undefined
       && state.leaseExpiresAt !== undefined
@@ -1218,12 +2973,26 @@ export const claimLoop = internalMutation({
     ) {
       return { claimed: false as const, reason: "awaiting_finalization" as const };
     }
+    const recoverableExpiredTurn = expiredRun !== null
+      && expiredTurn !== null
+      && state.activeRunId === expiredRun.runId
+      && conversation.activeRunId === expiredRun.runId
+      && conversation.activeTurnId === expiredTurn.turnId
+      && expiredTurn.runId === expiredRun.runId
+      && !["completed", "suppressed", "failed", "cancelled"].includes(expiredTurn.stage)
+      && !["completed", "error", "stale"].includes(expiredRun.status);
     const claim = discordClaimDecision({
       ...state,
       recheckPending: state.recheckPending || expiredRecheck,
     }, now);
     if (!claim.claimed) return { claimed: false as const, reason: claim.reason };
-    const window = claim.window;
+    const window = recoverableExpiredTurn
+      ? {
+          mode: expiredRun.mode,
+          start: expiredRun.windowStart,
+          end: expiredRun.windowEnd,
+        }
+      : claim.window;
     if (
       window.mode === "messages"
       && state.nextEligibleAt !== undefined
@@ -1232,11 +3001,7 @@ export const claimLoop = internalMutation({
       return { claimed: false as const, reason: "debouncing" as const };
     }
 
-    if (state.activeRunId !== undefined) {
-      const expiredRun = await ctx.db
-        .query("discordLoopRuns")
-        .withIndex("by_owner_run", (index) => index.eq("ownerId", ownerId).eq("runId", state.activeRunId!))
-        .unique();
+    if (state.activeRunId !== undefined && !recoverableExpiredTurn) {
       if (expiredRun && !["completed", "error", "stale"].includes(expiredRun.status)) {
         await ctx.db.patch(expiredRun._id, { status: "stale", completedAt: now, updatedAt: now });
       }
@@ -1267,29 +3032,69 @@ export const claimLoop = internalMutation({
     const contextHash = discordContextHash(messages);
     const generation = claim.generation;
     const leaseExpiresAt = now + DISCORD_LOOP_LEASE_MS;
-    const runId = claimId;
-    await ctx.db.insert("discordLoopRuns", {
-      ownerId,
-      guildId,
-      channelId,
+    const runId = recoverableExpiredTurn ? expiredRun!.runId : claimId;
+    const turnId = recoverableExpiredTurn ? expiredTurn!.turnId : runId;
+    if (!recoverableExpiredTurn && conversation.activeTurnId !== undefined) {
+      if (expiredTurn !== null && !["completed", "suppressed", "failed", "cancelled"].includes(expiredTurn.stage)) {
+        await ctx.db.patch(expiredTurn._id, {
+          stage: "failed",
+          failureCode: "conversation_lease_expired",
+          completedAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+    const conversationGeneration = conversation.generation + 1;
+    const conversationLeaseToken = discordConversationLeaseToken(
+      conversation.conversationId,
+      conversation.epoch,
+      conversationGeneration,
       runId,
-      claimId,
       workerId,
-      generation,
-      mode: window.mode,
-      status: "triaging",
-      windowStart: window.start,
-      windowEnd: window.end,
-      contextHash,
-      recheckCount: state.recheckCount,
-      leaseExpiresAt,
-      startedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    );
+    const conversationLeaseExpiresAt = now + DISCORD_CONVERSATION_LEASE_MS;
+    const recoveredLoopStage = expiredTurn?.stage === "ack_pending"
+      ? "acknowledging" as const
+      : expiredTurn?.stage === "researching"
+        ? "researching" as const
+        : expiredTurn !== null
+          && ["research_complete", "resuming", "drafted"].includes(expiredTurn.stage)
+          ? "drafting" as const
+          : "triaging" as const;
+    if (recoverableExpiredTurn) {
+      await ctx.db.patch(expiredRun!._id, {
+        claimId,
+        workerId,
+        generation,
+        status: recoveredLoopStage,
+        leaseExpiresAt,
+        completedAt: undefined,
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert("discordLoopRuns", {
+        ownerId,
+        guildId,
+        channelId,
+        runId,
+        claimId,
+        workerId,
+        generation,
+        mode: window.mode,
+        status: "triaging",
+        windowStart: window.start,
+        windowEnd: window.end,
+        contextHash,
+        recheckCount: state.recheckCount,
+        leaseExpiresAt,
+        startedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
     await ctx.db.patch(state._id, {
       generation,
-      status: "triaging",
+      status: recoverableExpiredTurn ? recoveredLoopStage : "triaging",
       activeRunId: runId,
       activeClaimId: claimId,
       activeWorkerId: workerId,
@@ -1302,6 +3107,80 @@ export const claimLoop = internalMutation({
       lastError: undefined,
       updatedAt: now,
     });
+    if (recoverableExpiredTurn) {
+      await ctx.db.patch(expiredTurn!._id, {
+        channelGeneration: generation,
+        conversationGeneration,
+        routingGeneration: conversation.routingGeneration,
+        updatedAt: now,
+      });
+      for (const reply of expiredReplies) {
+        if (reply.status !== "pending") continue;
+        await ctx.db.patch(reply._id, {
+          generation,
+          conversationGeneration,
+          routingGeneration: conversation.routingGeneration,
+          conversationLeaseToken,
+          updatedAt: now,
+        });
+      }
+    } else {
+      await ctx.db.insert("discordAssistantTurns", {
+        ownerId,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        guildId,
+        conversationId: conversation.conversationId,
+        epoch: conversation.epoch,
+        turnId,
+        runId,
+        sourceChannelId: channelId,
+        windowStart: window.start,
+        windowEnd: window.end,
+        triggerKind,
+        channelGeneration: generation,
+        conversationGeneration,
+        routingGeneration: conversation.routingGeneration,
+        baseRevision: conversation.revision,
+        baseHumanRevision: conversation.humanRevision,
+        inputContextHash: contextHash,
+        stage: "claimed",
+        planRequestId: `${runId}:frontman-plan`,
+        lunaModel: conversation.lunaModel,
+        lunaReasoningEffort: conversation.lunaReasoningEffort,
+        lunaServiceTier: conversation.lunaServiceTier,
+        personalityVersion: conversation.personalityVersion,
+        systemPromptHash: conversation.systemPromptHash,
+        capabilityProfileHash: conversation.capabilityProfileHash,
+        autonomousPass: state.recheckCount,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    await ctx.db.patch(conversation._id, {
+      generation: conversationGeneration,
+      activeTurnId: turnId,
+      activeRunId: runId,
+      activeLeaseToken: conversationLeaseToken,
+      activeLeaseWorkerId: workerId,
+      leaseExpiresAt: conversationLeaseExpiresAt,
+      updatedAt: now,
+    });
+    conversation = (await ctx.db.get(conversation._id)) ?? conversation;
+    const activeTurn = recoverableExpiredTurn
+      ? (await ctx.db.get(expiredTurn!._id)) ?? expiredTurn!
+      : await ctx.db
+        .query("discordAssistantTurns")
+        .withIndex("by_owner_turn", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("turnId", turnId))
+        .unique();
+    if (activeTurn === null) throw new Error("Discord turn recovery state is unavailable.");
+    const durableContext = await durableConversationContext(
+      ctx,
+      conversation,
+      now,
+      messages.filter((message) => !message.isBot).map((message) => message.messageId),
+    );
     await recordActivity(ctx, ownerId, {
       eventId: `${runId}:started`,
       guildId,
@@ -1310,9 +3189,9 @@ export const claimLoop = internalMutation({
       eventType: "loop_started",
       stage: "triaging",
     }, now);
-    return {
+    const claimedLoop = {
       claimed: true as const,
-      idempotent: false,
+      idempotent: recoverableExpiredTurn,
       runId,
       generation,
       mode: window.mode,
@@ -1323,14 +3202,37 @@ export const claimLoop = internalMutation({
       contextHash,
       recheckCount: state.recheckCount,
       triggerKind,
+      conversation: publicConversationIdentity(conversation, turnId, runId),
+      conversationGeneration,
+      conversationLeaseToken,
+      routingGeneration: conversation.routingGeneration,
+      durableContext,
       ...routing,
       messages,
+    };
+    if (!recoverableExpiredTurn || activeTurn === null) return claimedLoop;
+    return {
+      ...claimedLoop,
+      recovery: await durableTurnRecoveryPayload(ctx, activeTurn),
     };
   },
 });
 
-export const getNewestContext = internalQuery({
-  args: { actorId: serviceId, guildId: serviceId, channelId: serviceId },
+export const getNewestContext = internalMutation({
+  args: {
+    actorId: serviceId,
+    guildId: serviceId,
+    channelId: serviceId,
+    run: v.optional(v.object({
+      runId: serviceId,
+      conversationId: serviceId,
+      epoch: v.number(),
+      conversationGeneration: v.number(),
+      routingGeneration: v.number(),
+      turnId: serviceId,
+      conversationLeaseToken: serviceId,
+    })),
+  },
   handler: async (ctx, args) => {
     const ownerId = requireDiscordOwnerId(args.actorId);
     const guildId = requireDiscordId(args.guildId, "guildId");
@@ -1341,6 +3243,93 @@ export const getNewestContext = internalQuery({
       throw new Error("Discord channel is not available to the bot.");
     }
     const messages = await newestContext(ctx, ownerId, channelId);
+    if (args.run === undefined) {
+      return {
+        guildId,
+        channelId,
+        throughSequence: state?.latestSequence ?? 0,
+        triggerThroughSequence: state?.triggerThroughSequence ?? 0,
+        completedThroughSequence: state?.completedThroughSequence ?? 0,
+        contextHash: discordContextHash(messages),
+        eligibleThroughSequence: state?.latestSequence ?? 0,
+        eligibleHumanRevision: 0,
+        eligibleContextHash: discordContextHash(messages),
+        catchUpMessages: [],
+        exact: true,
+        messages,
+      };
+    }
+    const now = Date.now();
+    const conversation = await assistantConversationByGuild(ctx, guildId);
+    if (
+      conversation === null
+      || !isCurrentDiscordConversationFence(conversation, {
+        ownerId,
+        ownerBindingVersion: conversation?.ownerBindingVersion ?? 0,
+        conversationId: args.run.conversationId,
+        epoch: args.run.epoch,
+        generation: args.run.conversationGeneration,
+        routingGeneration: args.run.routingGeneration,
+        turnId: args.run.turnId,
+        runId: args.run.runId,
+        leaseToken: args.run.conversationLeaseToken,
+      }, now)
+    ) {
+      throw new Error("Discord conversation fence is stale.");
+    }
+    const turn = await ctx.db
+      .query("discordAssistantTurns")
+      .withIndex("by_owner_turn", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("turnId", args.run!.turnId))
+      .unique();
+    if (turn === null || turn.runId !== args.run.runId) {
+      throw new Error("Discord assistant turn was not found.");
+    }
+    const afterWatermark = await ctx.db
+      .query("discordMessages")
+      .withIndex("by_owner_channel_sequence", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("channelId", channelId)
+        .gt("sequence", turn.windowEnd))
+      .order("asc")
+      .collect();
+    const nextExplicit = afterWatermark.find((message) => !message.isBot && message.mentionsBot);
+    const eligibleThroughSequence = nextExplicit === undefined
+      ? state?.latestSequence ?? turn.windowEnd
+      : nextExplicit.sequence - 1;
+    const catchUp = afterWatermark
+      .filter((message) => message.sequence <= eligibleThroughSequence)
+      .map(toMessageContext);
+    const expectedCatchUpCount = Math.max(0, eligibleThroughSequence - turn.windowEnd);
+    const exact = catchUp.length === expectedCatchUpCount
+      && catchUp.every((message, index) => message.sequence === turn.windowEnd + index + 1);
+    const canonicalHumans = await ctx.db
+      .query("discordConversationEvents")
+      .withIndex("by_conversation_epoch_ordinal", (index) => index
+        .eq("conversationId", conversation.conversationId)
+        .eq("epoch", conversation.epoch))
+      .filter((filter) => filter.and(
+        filter.eq(filter.field("kind"), "human_message"),
+        filter.lte(filter.field("sourceSequence"), eligibleThroughSequence),
+      ))
+      .collect();
+    const eligibleHumanRevision = canonicalHumans.reduce(
+      (revision, event) => Math.max(revision, event.humanRevision),
+      turn.baseHumanRevision,
+    );
+    const eligibleContextHash = discordContextHash([
+      ...messages.filter((message) => message.sequence <= turn.windowEnd),
+      ...catchUp,
+    ]);
+    await ctx.db.patch(turn._id, {
+      eligibleThroughSequence,
+      eligibleHumanRevision,
+      eligibleContextHash,
+      nextExplicitTriggerSequence: nextExplicit?.sequence,
+      stage: "resuming",
+      updatedAt: now,
+    });
     return {
       guildId,
       channelId,
@@ -1348,7 +3337,387 @@ export const getNewestContext = internalQuery({
       triggerThroughSequence: state?.triggerThroughSequence ?? 0,
       completedThroughSequence: state?.completedThroughSequence ?? 0,
       contextHash: discordContextHash(messages),
+      eligibleThroughSequence,
+      eligibleHumanRevision,
+      eligibleContextHash,
+      nextExplicitTriggerSequence: nextExplicit?.sequence,
+      catchUpMessages: catchUp,
+      exact,
       messages,
+    };
+  },
+});
+
+export const recordFrontmanPlan = internalMutation({
+  args: {
+    actorId: serviceId,
+    guildId: serviceId,
+    fence: durableStageFenceValidator,
+    requestId: serviceId,
+    action: v.union(
+      v.literal("silent"),
+      v.literal("reply"),
+      v.literal("clarify"),
+      v.literal("research"),
+    ),
+    reasonCode: serviceId,
+    payload: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    const requestId = requireDiscordId(args.requestId, "requestId");
+    const reasonCode = requireDiscordId(args.reasonCode, "reasonCode");
+    const payload = requireSerializedJson(args.payload, 32 * 1_024, "frontman plan");
+    const now = Date.now();
+    const state = await durableStageState(ctx, ownerId, guildId, args.fence, now);
+    if (state === null) {
+      return { accepted: false as const, reason: "stale_conversation_generation" as const };
+    }
+    if (state.turn.planRequestId !== requestId) {
+      return { accepted: false as const, reason: "stage_request_id_conflict" as const };
+    }
+    if (state.turn.planPayload !== undefined) {
+      const duplicate = state.turn.planPayload === payload
+        && state.turn.planAction === args.action
+        && state.turn.planReasonCode === reasonCode;
+      return duplicate
+        ? { accepted: true as const, duplicate: true, stage: "planned" as const }
+        : { accepted: false as const, reason: "stage_request_fingerprint_conflict" as const };
+    }
+    const contextHash = await sha256Hex(payload);
+    await appendInternalConversationEvent(ctx, state.conversation, {
+      eventId: `${state.conversation.conversationId}:${state.conversation.epoch}:plan:${requestId}`,
+      turnId: state.turn.turnId,
+      runId: state.turn.runId,
+      kind: "internal_plan",
+      contextHash,
+    }, now);
+    await ctx.db.patch(state.turn._id, {
+      stage: "planned",
+      planAction: args.action,
+      planReasonCode: reasonCode,
+      planPayload: payload,
+      updatedAt: now,
+    });
+    return { accepted: true as const, duplicate: false, stage: "planned" as const };
+  },
+});
+
+export const recordResearchStarted = internalMutation({
+  args: {
+    actorId: serviceId,
+    guildId: serviceId,
+    fence: durableStageFenceValidator,
+    requestId: serviceId,
+    normalizedRequest: v.string(),
+    inputContextHash: v.string(),
+    pass: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    const requestId = requireDiscordId(args.requestId, "requestId");
+    const normalizedRequest = requireSerializedJson(
+      args.normalizedRequest,
+      16 * 1_024,
+      "research request",
+    );
+    if (!Number.isSafeInteger(args.pass) || args.pass < 1 || args.pass > 2) {
+      return { accepted: false as const, reason: "invalid_research_pass" as const };
+    }
+    const now = Date.now();
+    const state = await durableStageState(ctx, ownerId, guildId, args.fence, now);
+    if (state === null) {
+      return { accepted: false as const, reason: "stale_conversation_generation" as const };
+    }
+    const existing = await ctx.db
+      .query("discordResearchArtifacts")
+      .withIndex("by_owner_request", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("requestId", requestId))
+      .unique();
+    if (existing !== null) {
+      const duplicate = existing.conversationId === state.conversation.conversationId
+        && existing.epoch === state.conversation.epoch
+        && existing.turnId === state.turn.turnId
+        && existing.runId === state.turn.runId
+        && existing.normalizedResearchRequest === normalizedRequest
+        && existing.inputContextHash === args.inputContextHash;
+      return duplicate
+        ? { accepted: true as const, duplicate: true, artifactId: existing.requestId }
+        : { accepted: false as const, reason: "stage_request_fingerprint_conflict" as const };
+    }
+    await ctx.db.insert("discordResearchArtifacts", {
+      ownerId,
+      ownerBindingVersion: state.conversation.ownerBindingVersion,
+      guildId,
+      conversationId: state.conversation.conversationId,
+      epoch: state.conversation.epoch,
+      turnId: state.turn.turnId,
+      runId: state.turn.runId,
+      requestId,
+      normalizedResearchRequest: normalizedRequest,
+      workerModel: DISCORD_PERSONALITY_PROFILE.solModel,
+      reasoningEffort: DISCORD_PERSONALITY_PROFILE.solReasoningEffort,
+      serviceTier: DISCORD_PERSONALITY_PROFILE.solServiceTier,
+      profileVersion: "sol-research-v1",
+      toolPolicyHash: state.conversation.capabilityProfileHash,
+      inputContextHash: args.inputContextHash,
+      sourceUrls: [],
+      serializedBytes: 0,
+      estimatedTokens: 0,
+      tokenEstimatorVersion: "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const contextHash = await sha256Hex(normalizedRequest);
+    await appendInternalConversationEvent(ctx, state.conversation, {
+      eventId: `${state.conversation.conversationId}:${state.conversation.epoch}:research-started:${requestId}`,
+      turnId: state.turn.turnId,
+      runId: state.turn.runId,
+      kind: "research_started",
+      contextHash,
+      researchArtifactId: requestId,
+    }, now);
+    await ctx.db.patch(state.turn._id, {
+      stage: "researching",
+      researchRequestId: requestId,
+      researchArtifactId: requestId,
+      autonomousPass: args.pass,
+      updatedAt: now,
+    });
+    return { accepted: true as const, duplicate: false, artifactId: requestId };
+  },
+});
+
+export const recordResearchResult = internalMutation({
+  args: {
+    actorId: serviceId,
+    guildId: serviceId,
+    fence: durableStageFenceValidator,
+    requestId: serviceId,
+    packet: v.optional(v.string()),
+    failureCode: v.optional(serviceId),
+    failureDetail: v.optional(v.string()),
+    failureRetryable: v.optional(v.boolean()),
+    freshness: v.optional(v.union(
+      v.literal("current"),
+      v.literal("limited"),
+      v.literal("unknown"),
+    )),
+    sourceUrls: v.array(v.string()),
+    trustedChartArtifactId: v.optional(serviceId),
+    trustedChartSpec: v.optional(v.string()),
+    serializedBytes: v.number(),
+    estimatedTokens: v.number(),
+    tokenEstimatorVersion: serviceId,
+  },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    const requestId = requireDiscordId(args.requestId, "requestId");
+    if ((args.packet === undefined) === (args.failureCode === undefined)) {
+      return { accepted: false as const, reason: "research_result_invalid" as const };
+    }
+    if (
+      !Number.isSafeInteger(args.serializedBytes)
+      || args.serializedBytes < 0
+      || args.serializedBytes > 16_384
+      || !Number.isSafeInteger(args.estimatedTokens)
+      || args.estimatedTokens < 0
+      || args.sourceUrls.length > 12
+      || (args.packet !== undefined && args.sourceUrls.length === 0)
+      || (args.packet !== undefined && args.freshness === undefined)
+      || args.tokenEstimatorVersion
+        !== "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1"
+    ) return { accepted: false as const, reason: "research_result_invalid" as const };
+    for (const sourceUrl of args.sourceUrls) {
+      const url = new URL(sourceUrl);
+      if (url.protocol !== "https:") {
+        return { accepted: false as const, reason: "research_result_invalid" as const };
+      }
+    }
+    const packet = args.packet === undefined
+      ? undefined
+      : requireSerializedJson(args.packet, 16_384, "research packet");
+    if (
+      packet !== undefined
+      && new TextEncoder().encode(packet).byteLength !== args.serializedBytes
+    ) return { accepted: false as const, reason: "research_result_invalid" as const };
+    const failureCode = args.failureCode === undefined
+      ? undefined
+      : requireDiscordId(args.failureCode, "failureCode");
+    const failureDetail = args.failureDetail?.trim();
+    if (
+      failureCode === undefined
+        ? failureDetail !== undefined || args.failureRetryable !== undefined
+        : !failureDetail || failureDetail.length > 500 || args.failureRetryable === undefined
+    ) return { accepted: false as const, reason: "research_result_invalid" as const };
+    const trustedChartSpec = args.trustedChartSpec === undefined
+      ? undefined
+      : requireSerializedJson(args.trustedChartSpec, 64 * 1_024, "trusted chart spec");
+    const now = Date.now();
+    const state = await durableStageState(ctx, ownerId, guildId, args.fence, now);
+    if (state === null) {
+      return { accepted: false as const, reason: "stale_conversation_generation" as const };
+    }
+    const artifact = await ctx.db
+      .query("discordResearchArtifacts")
+      .withIndex("by_owner_request", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("requestId", requestId))
+      .unique();
+    if (
+      artifact === null
+      || artifact.conversationId !== state.conversation.conversationId
+      || artifact.epoch !== state.conversation.epoch
+      || artifact.turnId !== state.turn.turnId
+      || artifact.runId !== state.turn.runId
+    ) return { accepted: false as const, reason: "research_artifact_not_found" as const };
+    if (artifact.status !== "pending") {
+      const duplicate = artifact.packet === packet
+        && artifact.failureCode === failureCode
+        && artifact.failureDetail === failureDetail
+        && artifact.failureRetryable === args.failureRetryable
+        && artifact.trustedChartSpec === trustedChartSpec
+        && artifact.serializedBytes === args.serializedBytes
+        && artifact.estimatedTokens === args.estimatedTokens;
+      return duplicate
+        ? { accepted: true as const, duplicate: true, artifactId: requestId }
+        : { accepted: false as const, reason: "stage_request_fingerprint_conflict" as const };
+    }
+    const packetHash = await sha256Hex(packet ?? `failure:${failureCode}`);
+    const artifactPatch: DiscordResearchArtifactPatch = {
+      sourceUrls: args.sourceUrls,
+      serializedBytes: args.serializedBytes,
+      estimatedTokens: args.estimatedTokens,
+      tokenEstimatorVersion: args.tokenEstimatorVersion,
+      status: packet === undefined ? "failed" : "completed",
+      updatedAt: now,
+    };
+    if (packet !== undefined) artifactPatch.packet = packet;
+    if (failureCode !== undefined) artifactPatch.failureCode = failureCode;
+    if (failureDetail !== undefined) artifactPatch.failureDetail = failureDetail;
+    if (args.failureRetryable !== undefined) {
+      artifactPatch.failureRetryable = args.failureRetryable;
+    }
+    if (args.freshness !== undefined) artifactPatch.freshness = args.freshness;
+    if (args.trustedChartArtifactId !== undefined) {
+      artifactPatch.trustedChartArtifactId = requireDiscordId(
+        args.trustedChartArtifactId,
+        "trustedChartArtifactId",
+      );
+    }
+    if (trustedChartSpec !== undefined) artifactPatch.trustedChartSpec = trustedChartSpec;
+    await ctx.db.patch(artifact._id, artifactPatch);
+    await appendInternalConversationEvent(ctx, state.conversation, {
+      eventId: `${state.conversation.conversationId}:${state.conversation.epoch}:research-result:${requestId}`,
+      turnId: state.turn.turnId,
+      runId: state.turn.runId,
+      kind: packet === undefined ? "research_failed" : "research_completed",
+      contextHash: packetHash,
+      researchArtifactId: requestId,
+    }, now);
+    await ctx.db.patch(state.turn._id, {
+      stage: "research_complete",
+      researchArtifactId: requestId,
+      researchPacketHash: packetHash,
+      updatedAt: now,
+    });
+    return { accepted: true as const, duplicate: false, artifactId: requestId };
+  },
+});
+
+export const recordFrontmanResume = internalMutation({
+  args: {
+    actorId: serviceId,
+    guildId: serviceId,
+    fence: durableStageFenceValidator,
+    requestId: serviceId,
+    action: v.union(v.literal("send"), v.literal("suppress"), v.literal("recheck")),
+    payload: v.string(),
+    acknowledgementDelivery: v.union(
+      v.literal("not_required"),
+      v.literal("pending"),
+      v.literal("sent"),
+      v.literal("uncertain"),
+    ),
+    replyHash: v.optional(v.string()),
+    eligibleThroughSequence: v.number(),
+    eligibleHumanRevision: v.number(),
+    eligibleContextHash: v.string(),
+    nextExplicitTriggerSequence: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const guildId = requireDiscordId(args.guildId, "guildId");
+    const requestId = requireDiscordId(args.requestId, "requestId");
+    const payload = requireSerializedJson(args.payload, 32 * 1_024, "frontman resume");
+    if (
+      !Number.isSafeInteger(args.eligibleThroughSequence)
+      || args.eligibleThroughSequence <= 0
+      || !Number.isSafeInteger(args.eligibleHumanRevision)
+      || args.eligibleHumanRevision < 0
+      || !/^[a-f0-9]{16,64}$/.test(args.eligibleContextHash)
+      || ((args.action === "send") !== (args.replyHash !== undefined))
+      || (args.replyHash !== undefined && !/^[a-f0-9]{64}$/.test(args.replyHash))
+    ) return { accepted: false as const, reason: "resume_result_invalid" as const };
+    const now = Date.now();
+    const state = await durableStageState(ctx, ownerId, guildId, args.fence, now);
+    if (state === null) {
+      return { accepted: false as const, reason: "stale_conversation_generation" as const };
+    }
+    if (state.turn.resumePayload !== undefined) {
+      const duplicate = state.turn.resumeRequestId === requestId
+        && state.turn.resumePayload === payload
+        && state.turn.finalAction === args.action
+        && state.turn.replyHash === args.replyHash;
+      if (duplicate) {
+        return { accepted: true as const, duplicate: true, stage: state.turn.stage };
+      }
+      if (
+        state.turn.finalAction !== "recheck"
+        || (state.turn.resumeAttempts?.length ?? 1) >= 2
+      ) {
+        return { accepted: false as const, reason: "stage_request_fingerprint_conflict" as const };
+      }
+    }
+    const resumeAttempts = [
+      ...(state.turn.resumeAttempts
+        ?? (state.turn.resumePayload === undefined ? [] : [state.turn.resumePayload])),
+      payload,
+    ];
+    const turnPatch: DiscordAssistantTurnPatch = {
+      stage: args.action === "send"
+        ? "drafted"
+        : args.action === "suppress"
+          ? "suppressed"
+          : "research_complete",
+      resumeRequestId: requestId,
+      resumePayload: payload,
+      resumeAttempts,
+      finalAction: args.action,
+      acknowledgementDelivery: args.acknowledgementDelivery,
+      eligibleThroughSequence: args.eligibleThroughSequence,
+      eligibleHumanRevision: args.eligibleHumanRevision,
+      eligibleContextHash: args.eligibleContextHash,
+      updatedAt: now,
+    };
+    if (args.replyHash !== undefined) turnPatch.replyHash = args.replyHash;
+    if (args.nextExplicitTriggerSequence !== undefined) {
+      turnPatch.nextExplicitTriggerSequence = args.nextExplicitTriggerSequence;
+    }
+    await ctx.db.patch(state.turn._id, turnPatch);
+    return {
+      accepted: true as const,
+      duplicate: false,
+      stage: args.action === "send"
+        ? "drafted" as const
+        : args.action === "suppress"
+          ? "suppressed" as const
+          : "research_complete" as const,
     };
   },
 });
@@ -1366,6 +3735,12 @@ export const heartbeat = internalMutation({
       channelId: serviceId,
       runId: serviceId,
       generation: v.number(),
+      conversationId: v.optional(serviceId),
+      epoch: v.optional(v.number()),
+      conversationGeneration: v.optional(v.number()),
+      routingGeneration: v.optional(v.number()),
+      turnId: v.optional(serviceId),
+      conversationLeaseToken: v.optional(serviceId),
       stage: v.optional(loopStageValidator),
     })),
   },
@@ -1400,7 +3775,35 @@ export const heartbeat = internalMutation({
       .withIndex("by_owner_run", (index) => index.eq("ownerId", ownerId).eq("runId", runId))
       .unique();
     if (!run) return { gatewayAccepted: true, loopAccepted: false as const, reason: "run_not_found" as const };
+    const conversation = await assistantConversationByGuild(ctx, state.guildId);
+    if (
+      conversation === null
+      || conversation.ownerId !== ownerId
+      || conversation.activeRunId !== runId
+      || conversation.activeTurnId !== (args.run.turnId ?? runId)
+      || (args.run.conversationId !== undefined && (
+        conversation.conversationId !== args.run.conversationId
+        || conversation.epoch !== args.run.epoch
+        || conversation.generation !== args.run.conversationGeneration
+        || conversation.routingGeneration !== args.run.routingGeneration
+        || conversation.activeLeaseToken !== args.run.conversationLeaseToken
+      ))
+    ) {
+      return {
+        gatewayAccepted: true,
+        loopAccepted: false as const,
+        reason: "stale_conversation_generation" as const,
+      };
+    }
+    if (conversation.leaseExpiresAt === undefined || conversation.leaseExpiresAt <= now) {
+      return {
+        gatewayAccepted: true,
+        loopAccepted: false as const,
+        reason: "conversation_lease_expired" as const,
+      };
+    }
     const leaseExpiresAt = now + DISCORD_LOOP_LEASE_MS;
+    const conversationLeaseExpiresAt = now + DISCORD_CONVERSATION_LEASE_MS;
     const nextStatus = args.run.stage;
     if (nextStatus === undefined) {
       await ctx.db.patch(state._id, { leaseExpiresAt, updatedAt: now });
@@ -1417,6 +3820,28 @@ export const heartbeat = internalMutation({
         updatedAt: now,
       });
     }
+    await ctx.db.patch(conversation._id, {
+      leaseExpiresAt: conversationLeaseExpiresAt,
+      updatedAt: now,
+    });
+    const turn = await ctx.db
+      .query("discordAssistantTurns")
+      .withIndex("by_owner_turn", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("turnId", args.run!.turnId ?? runId))
+      .unique();
+    if (turn !== null && nextStatus !== undefined) {
+      const turnStage = nextStatus === "triaging"
+        ? "planning" as const
+        : nextStatus === "acknowledging"
+          ? "ack_pending" as const
+          : nextStatus === "researching"
+            ? "researching" as const
+            : nextStatus === "drafting"
+              ? "resuming" as const
+              : "resuming" as const;
+      await ctx.db.patch(turn._id, { stage: turnStage, updatedAt: now });
+    }
     if (nextStatus !== undefined && run.status !== nextStatus) {
       await recordActivity(ctx, ownerId, {
         eventId: `${runId}:stage:${nextStatus}`,
@@ -1427,7 +3852,12 @@ export const heartbeat = internalMutation({
         stage: nextStatus,
       }, now);
     }
-    return { gatewayAccepted: true, loopAccepted: true as const, leaseExpiresAt };
+    return {
+      gatewayAccepted: true,
+      loopAccepted: true as const,
+      leaseExpiresAt,
+      conversationLeaseExpiresAt,
+    };
   },
 });
 
@@ -1437,6 +3867,15 @@ export const completeLoop = internalMutation({
     channelId: serviceId,
     runId: serviceId,
     generation: v.number(),
+    conversation: v.optional(v.object({
+      conversationId: serviceId,
+      epoch: v.number(),
+      generation: v.number(),
+      routingGeneration: v.number(),
+      turnId: serviceId,
+      leaseToken: serviceId,
+      eligibleHumanRevision: v.optional(v.number()),
+    })),
     outcome: v.union(v.literal("completed"), v.literal("error")),
     recheckRequested: v.optional(v.boolean()),
     consumesThroughSequence: v.optional(v.number()),
@@ -1458,6 +3897,28 @@ export const completeLoop = internalMutation({
     ) {
       return { accepted: false as const, reason: "stale_generation" as const };
     }
+    const conversation = await assistantConversationByGuild(ctx, state.guildId);
+    if (
+      conversation === null
+      || conversation.ownerId !== ownerId
+      || conversation.activeRunId !== runId
+      || conversation.activeTurnId !== (args.conversation?.turnId ?? runId)
+      || (args.conversation !== undefined && (
+        conversation.conversationId !== args.conversation.conversationId
+        || conversation.epoch !== args.conversation.epoch
+        || conversation.generation !== args.conversation.generation
+        || conversation.routingGeneration !== args.conversation.routingGeneration
+        || conversation.activeLeaseToken !== args.conversation.leaseToken
+      ))
+    ) {
+      return { accepted: false as const, reason: "stale_conversation_generation" as const };
+    }
+    const turn = await ctx.db
+      .query("discordAssistantTurns")
+      .withIndex("by_owner_turn", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("turnId", args.conversation?.turnId ?? runId))
+      .unique();
     const run = await ctx.db
       .query("discordLoopRuns")
       .withIndex("by_owner_run", (index) => index.eq("ownerId", ownerId).eq("runId", runId))
@@ -1468,14 +3929,23 @@ export const completeLoop = internalMutation({
       .query("discordOutbox")
       .withIndex("by_owner_run", (index) => index.eq("ownerId", ownerId).eq("runId", runId))
       .collect();
-    const hasPendingReply = runReplies.some((reply) => reply.status === "pending"
-      && reply.generation === args.generation);
+    const hasPendingReply = runReplies.some((reply) => (
+      reply.status === "pending"
+      || reply.status === "delivery_uncertain"
+      || reply.status === "needs_reconciliation"
+    ) && reply.generation === args.generation);
     const sentFinalReplies = runReplies.filter((reply) => reply.status === "sent"
       && reply.finalizesLoop
       && reply.generation === args.generation);
     const hasSentReply = sentFinalReplies.length > 0;
     if (!activeLease(state, now) && !hasSentReply) {
       return { accepted: false as const, reason: "lease_expired" as const };
+    }
+    if (
+      (conversation.leaseExpiresAt === undefined || conversation.leaseExpiresAt <= now)
+      && !hasSentReply
+    ) {
+      return { accepted: false as const, reason: "conversation_lease_expired" as const };
     }
     if (args.outcome === "completed" && hasPendingReply && !args.suppressPendingReplies) {
       return { accepted: false as const, reason: "pending_outbox" as const };
@@ -1497,6 +3967,22 @@ export const completeLoop = internalMutation({
         status: "error",
         error,
         completedAt: now,
+        updatedAt: now,
+      });
+      if (turn !== null) {
+        await ctx.db.patch(turn._id, {
+          stage: "failed",
+          failureCode: error,
+          completedAt: now,
+          updatedAt: now,
+        });
+      }
+      await ctx.db.patch(conversation._id, {
+        activeTurnId: undefined,
+        activeRunId: undefined,
+        activeLeaseToken: undefined,
+        activeLeaseWorkerId: undefined,
+        leaseExpiresAt: undefined,
         updatedAt: now,
       });
       await invalidateRunOutbox(ctx, ownerId, runId, error, now);
@@ -1581,6 +4067,24 @@ export const completeLoop = internalMutation({
       completedAt: now,
       updatedAt: now,
     });
+    if (turn !== null) {
+      await ctx.db.patch(turn._id, {
+        stage: args.suppressPendingReplies ? "suppressed" : "completed",
+        finalAction: args.suppressPendingReplies ? "suppress" : "send",
+        deliveryState: hasSentReply ? "sent" : "not_required",
+        completedAt: now,
+        updatedAt: now,
+      });
+    }
+    await ctx.db.patch(conversation._id, {
+      activeTurnId: undefined,
+      activeRunId: undefined,
+      activeLeaseToken: undefined,
+      activeLeaseWorkerId: undefined,
+      leaseExpiresAt: undefined,
+      lastSuccessfulActivityAt: now,
+      updatedAt: now,
+    });
     for (const reply of runReplies) {
       if (reply.status === "sent") {
         await ctx.db.patch(reply._id, { status: "finalized", updatedAt: now });
@@ -1614,6 +4118,15 @@ export const enqueueReply = internalMutation({
     channelId: serviceId,
     runId: serviceId,
     generation: v.number(),
+    conversation: v.optional(v.object({
+      conversationId: serviceId,
+      epoch: v.number(),
+      generation: v.number(),
+      routingGeneration: v.number(),
+      turnId: serviceId,
+      leaseToken: serviceId,
+      eligibleHumanRevision: v.optional(v.number()),
+    })),
     idempotencyKey: serviceId,
     replyKind: v.optional(discordReplyKindValidator),
     content: v.string(),
@@ -1632,14 +4145,52 @@ export const enqueueReply = internalMutation({
     const idempotencyKey = requireDiscordId(args.idempotencyKey, "idempotencyKey");
     const replyKind = args.replyKind
       ?? (args.finalizesLoop ? "final" as const : "research_log" as const);
-    const content = requireReplyContent(args.content);
+    const content = requireDiscordReplyContent(
+      args.content,
+      replyKind === "acknowledgement" ? 320 : 2_000,
+    );
     const chart = requireMarketChart(args.chart);
+    const now = Date.now();
     const sourceState = await discordChannelState(ctx, ownerId, sourceChannelId);
     if (!sourceState || !isCurrentDiscordGeneration(sourceState, runId, args.generation)) {
       return { accepted: false as const, reason: "stale_generation" as const };
     }
-    if (!activeLease(sourceState, Date.now())) {
+    if (!activeLease(sourceState, now)) {
       return { accepted: false as const, reason: "lease_expired" as const };
+    }
+    const conversation = await assistantConversationByGuild(ctx, guildId);
+    if (conversation === null || conversation.ownerId !== ownerId) {
+      return { accepted: false as const, reason: "conversation_not_found" as const };
+    }
+    if (args.conversation !== undefined && !isCurrentDiscordConversationFence(
+      conversation,
+      {
+        ownerId,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        conversationId: requireDiscordId(args.conversation.conversationId, "conversationId"),
+        epoch: args.conversation.epoch,
+        generation: args.conversation.generation,
+        routingGeneration: args.conversation.routingGeneration,
+        turnId: requireDiscordId(args.conversation.turnId, "turnId"),
+        runId,
+        leaseToken: requireDiscordId(args.conversation.leaseToken, "leaseToken"),
+      },
+      now,
+    )) {
+      return { accepted: false as const, reason: "stale_conversation_generation" as const };
+    }
+    const turn = await ctx.db
+      .query("discordAssistantTurns")
+      .withIndex("by_owner_turn", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("turnId", args.conversation?.turnId ?? runId))
+      .unique();
+    if (
+      args.finalizesLoop
+      && args.conversation?.eligibleHumanRevision !== undefined
+      && turn?.eligibleHumanRevision !== args.conversation.eligibleHumanRevision
+    ) {
+      return { accepted: false as const, reason: "stale_human_revision" as const };
     }
     if (sourceState.guildId !== guildId) {
       return { accepted: false as const, reason: "invalid_reply_target" as const };
@@ -1754,16 +4305,42 @@ export const enqueueReply = internalMutation({
         return { accepted: false as const, reason: "final_reply_already_enqueued" as const };
       }
     }
-    const now = Date.now();
     const outboxId = idempotencyKey;
+    const payloadHash = await sha256Hex(canonicalJson({
+      guildId,
+      channelId,
+      content,
+      chart: chart ?? null,
+      replyToMessageId: args.replyToMessageId ?? null,
+    }));
+    const nonce = (await sha256Hex(`discord-outbox:${ownerId}:${outboxId}`)).slice(0, 24);
+    const canonicalKind = replyKind === "acknowledgement"
+      ? "assistant_ack" as const
+      : replyKind === "final"
+        ? "assistant_final" as const
+        : undefined;
+    const canonicalEventId = canonicalKind === undefined
+      ? undefined
+      : `${conversation.conversationId}:${conversation.epoch}:${canonicalKind}:${outboxId}`;
+    const canonicalOrdinal = canonicalKind === undefined ? undefined : conversation.nextOrdinal;
+    const conversationLeaseToken = args.conversation?.leaseToken
+      ?? conversation.activeLeaseToken;
     const outboxRecord: DiscordOutboxRecord = {
       ownerId,
+      ownerBindingVersion: conversation.ownerBindingVersion,
+      conversationId: conversation.conversationId,
+      epoch: conversation.epoch,
+      conversationGeneration: conversation.generation,
+      routingGeneration: conversation.routingGeneration,
+      turnId: args.conversation?.turnId ?? runId,
       sourceGuildId: sourceState.guildId,
       sourceChannelId,
       guildId,
       channelId,
       outboxId,
       idempotencyKey,
+      nonce,
+      payloadHash,
       runId,
       generation: args.generation,
       replyKind,
@@ -1775,12 +4352,58 @@ export const enqueueReply = internalMutation({
       createdAt: now,
       updatedAt: now,
     };
+    if (conversationLeaseToken !== undefined) {
+      outboxRecord.conversationLeaseToken = conversationLeaseToken;
+    }
+    if (canonicalEventId !== undefined) outboxRecord.canonicalEventId = canonicalEventId;
+    if (canonicalOrdinal !== undefined) outboxRecord.canonicalOrdinal = canonicalOrdinal;
     if (args.replyToMessageId !== undefined) outboxRecord.replyToMessageId = args.replyToMessageId;
     if (chart !== undefined) outboxRecord.chart = chart;
     if (args.consumesThroughSequence !== undefined) {
       outboxRecord.consumesThroughSequence = args.consumesThroughSequence;
     }
     await ctx.db.insert("discordOutbox", outboxRecord);
+    if (canonicalKind !== undefined && canonicalEventId !== undefined && canonicalOrdinal !== undefined) {
+      await ctx.db.insert("discordConversationEvents", {
+        ownerId,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        guildId,
+        conversationId: conversation.conversationId,
+        epoch: conversation.epoch,
+        eventId: canonicalEventId,
+        ordinal: canonicalOrdinal,
+        revision: conversation.revision,
+        humanRevision: conversation.humanRevision,
+        turnId: args.conversation?.turnId ?? runId,
+        runId,
+        kind: canonicalKind,
+        visibility: "conversation",
+        status: "pending",
+        sourceChannelId: channelId,
+        content,
+        contextHash: payloadHash,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.patch(conversation._id, {
+        nextOrdinal: conversation.nextOrdinal + 1,
+        updatedAt: now,
+      });
+    }
+    if (turn !== null) {
+      const turnPatch: DiscordAssistantTurnPatch = {
+        stage: "delivery_pending",
+        deliveryState: "pending",
+        updatedAt: now,
+      };
+      if (replyKind === "acknowledgement") {
+        turnPatch.acknowledgementIdempotencyKey = idempotencyKey;
+      } else if (replyKind === "final") {
+        turnPatch.replyIdempotencyKey = idempotencyKey;
+        turnPatch.replyHash = payloadHash;
+      }
+      await ctx.db.patch(turn._id, turnPatch);
+    }
     await recordActivity(ctx, ownerId, {
       eventId: `${outboxId}:queued`,
       guildId,
@@ -1860,12 +4483,137 @@ async function ingestAcknowledgedBotReply(
   await ctx.db.patch(state._id, { latestSequence: sequence, updatedAt: now });
 }
 
+async function commitCanonicalAssistantDelivery(
+  ctx: DiscordWriter & DiscordReader,
+  outbox: Doc<"discordOutbox">,
+  discordMessageId: string,
+  now: number,
+): Promise<void> {
+  if (outbox.canonicalEventId === undefined) return;
+  const event = await ctx.db
+    .query("discordConversationEvents")
+    .withIndex("by_owner_event", (index) => index
+      .eq("ownerId", outbox.ownerId)
+      .eq("eventId", outbox.canonicalEventId!))
+    .unique();
+  if (event === null) throw new Error("Canonical assistant event was not reserved.");
+  if (event.status === "committed") {
+    if (event.discordDeliveryId !== discordMessageId) {
+      throw new Error("Canonical Discord delivery conflicts with the committed event.");
+    }
+    return;
+  }
+  const conversation = await assistantConversationByGuild(ctx, outbox.guildId);
+  const currentEpoch = conversation !== null
+    && conversation.ownerId === outbox.ownerId
+    && conversation.ownerBindingVersion === outbox.ownerBindingVersion
+    && conversation.conversationId === outbox.conversationId
+    && conversation.epoch === outbox.epoch;
+  const revision = currentEpoch ? conversation.revision + 1 : event.revision;
+  await ctx.db.patch(event._id, {
+    status: "committed",
+    revision,
+    discordDeliveryId: discordMessageId,
+    committedAt: now,
+    updatedAt: now,
+  });
+  if (currentEpoch) {
+    await ctx.db.patch(conversation._id, {
+      revision,
+      lastSuccessfulActivityAt: now,
+      updatedAt: now,
+    });
+  }
+}
+
+export const beginReplyDelivery = internalMutation({
+  args: {
+    actorId: serviceId,
+    outboxId: serviceId,
+    deliveryToken: serviceId,
+  },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const outboxId = requireDiscordId(args.outboxId, "outboxId");
+    const deliveryToken = requireDiscordId(args.deliveryToken, "deliveryToken");
+    const outbox = await ctx.db
+      .query("discordOutbox")
+      .withIndex("by_owner_outbox", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("outboxId", outboxId))
+      .unique();
+    if (outbox === null) {
+      return { accepted: false as const, reason: "outbox_not_found" as const };
+    }
+    if (outbox.status === "sent" || outbox.status === "finalized") {
+      return { accepted: false as const, reason: "reply_already_sent" as const };
+    }
+    if (outbox.status === "needs_reconciliation" || outbox.status === "cancelled") {
+      return { accepted: false as const, reason: "delivery_requires_reconciliation" as const };
+    }
+    if (outbox.status === "failed") {
+      return { accepted: false as const, reason: "reply_failed" as const };
+    }
+    if (outbox.deliveryToken !== deliveryToken) {
+      return { accepted: false as const, reason: "stale_delivery_lease" as const };
+    }
+    const now = Date.now();
+    const sourceState = await discordChannelState(ctx, ownerId, outbox.sourceChannelId);
+    if (
+      sourceState === null
+      || !isCurrentDiscordGeneration(sourceState, outbox.runId, outbox.generation)
+      || !activeLease(sourceState, now)
+    ) {
+      return { accepted: false as const, reason: "stale_generation" as const };
+    }
+    if (outbox.conversationId !== undefined) {
+      const conversation = await assistantConversationByGuild(ctx, outbox.sourceGuildId);
+      if (
+        conversation === null
+        || conversation.ownerId !== ownerId
+        || conversation.ownerBindingVersion !== outbox.ownerBindingVersion
+        || conversation.conversationId !== outbox.conversationId
+        || conversation.epoch !== outbox.epoch
+        || conversation.generation !== outbox.conversationGeneration
+        || conversation.routingGeneration !== outbox.routingGeneration
+        || conversation.activeTurnId !== outbox.turnId
+        || conversation.activeRunId !== outbox.runId
+        || conversation.activeLeaseToken !== outbox.conversationLeaseToken
+        || conversation.leaseExpiresAt === undefined
+        || conversation.leaseExpiresAt <= now
+      ) {
+        return { accepted: false as const, reason: "stale_conversation_generation" as const };
+      }
+    }
+    if (outbox.status === "delivery_uncertain") {
+      return {
+        accepted: true as const,
+        duplicate: true,
+        status: "delivery_uncertain" as const,
+        attempts: outbox.attempts,
+      };
+    }
+    await ctx.db.patch(outbox._id, {
+      status: "delivery_uncertain",
+      attempts: outbox.attempts + 1,
+      uncertainAt: now,
+      updatedAt: now,
+    });
+    return {
+      accepted: true as const,
+      duplicate: false,
+      status: "delivery_uncertain" as const,
+      attempts: outbox.attempts + 1,
+    };
+  },
+});
+
 export const acknowledgeReply = internalMutation({
   args: {
     actorId: serviceId,
     outboxId: serviceId,
     deliveryToken: serviceId,
-    status: v.union(v.literal("sent"), v.literal("failed")),
+    status: v.union(v.literal("sent"), v.literal("failed"), v.literal("uncertain")),
     discordMessageId: v.optional(serviceId),
     images: v.optional(v.array(discordImageAttachmentValidator)),
     error: v.optional(v.string()),
@@ -1892,16 +4640,25 @@ export const acknowledgeReply = internalMutation({
           ? { accepted: true as const, duplicate: true, status: "sent" as const }
           : { accepted: false as const, reason: "acknowledgement_conflict" as const };
       }
-      if (outbox.deliveryToken !== deliveryToken) {
+      if (
+        outbox.deliveryToken !== deliveryToken
+        && outbox.status !== "delivery_uncertain"
+        && outbox.status !== "needs_reconciliation"
+      ) {
         return { accepted: false as const, reason: "stale_delivery_lease" as const };
       }
       const sourceState = await discordChannelState(ctx, ownerId, outbox.sourceChannelId);
-      if (!isCurrentDiscordGeneration(sourceState, outbox.runId, outbox.generation)) {
+      const currentConversation = await assistantConversationByGuild(ctx, outbox.guildId);
+      const currentEpoch = currentConversation !== null
+        && currentConversation.ownerId === ownerId
+        && currentConversation.conversationId === outbox.conversationId
+        && currentConversation.epoch === outbox.epoch;
+      if (currentEpoch && !isCurrentDiscordGeneration(sourceState, outbox.runId, outbox.generation)) {
         return { accepted: false as const, reason: "stale_generation" as const };
       }
       await ctx.db.patch(outbox._id, {
         status: "sent",
-        attempts: outbox.attempts + 1,
+        attempts: outbox.status === "pending" ? outbox.attempts + 1 : outbox.attempts,
         discordMessageId,
         lastError: undefined,
         deliveryWorkerId: undefined,
@@ -1911,6 +4668,18 @@ export const acknowledgeReply = internalMutation({
         updatedAt: now,
       });
       await ingestAcknowledgedBotReply(ctx, outbox, discordMessageId, images, now);
+      await commitCanonicalAssistantDelivery(ctx, outbox, discordMessageId, now);
+      const turn = outbox.turnId === undefined
+        ? null
+        : await ctx.db
+          .query("discordAssistantTurns")
+          .withIndex("by_owner_turn", (index) => index
+            .eq("ownerId", ownerId)
+            .eq("turnId", outbox.turnId!))
+          .unique();
+      if (turn !== null) {
+        await ctx.db.patch(turn._id, { deliveryState: "sent", updatedAt: now });
+      }
       await recordActivity(ctx, ownerId, {
         eventId: `${outbox.outboxId}:sent`,
         guildId: outbox.sourceGuildId,
@@ -1933,7 +4702,34 @@ export const acknowledgeReply = internalMutation({
     if (!isCurrentDiscordGeneration(sourceState, outbox.runId, outbox.generation)) {
       return { accepted: false as const, reason: "stale_generation" as const };
     }
-    const attempts = outbox.attempts + 1;
+    const attempts = outbox.status === "pending" ? outbox.attempts + 1 : outbox.attempts;
+    if (args.status === "uncertain") {
+      await ctx.db.patch(outbox._id, {
+        status: "delivery_uncertain",
+        attempts,
+        uncertainAt: outbox.uncertainAt ?? now,
+        lastError: args.error?.trim() || "Discord delivery outcome is uncertain.",
+        deliveryWorkerId: undefined,
+        deliveryToken: undefined,
+        deliveryLeaseExpiresAt: undefined,
+        updatedAt: now,
+      });
+      await recordActivity(ctx, ownerId, {
+        eventId: `${outbox.outboxId}:delivery-uncertain`,
+        guildId: outbox.sourceGuildId,
+        channelId: outbox.sourceChannelId,
+        runId: outbox.runId,
+        eventType: "delivery_uncertain",
+        replyKind: outbox.replyKind
+          ?? (outbox.finalizesLoop ? "final" : "research_log"),
+      }, now);
+      return {
+        accepted: true as const,
+        duplicate: false,
+        status: "delivery_uncertain" as const,
+        attempts,
+      };
+    }
     const retryable = (args.retryable ?? false) && attempts < DISCORD_MAX_OUTBOX_ATTEMPTS;
     const status = retryable ? "pending" as const : "failed" as const;
     await ctx.db.patch(outbox._id, {
@@ -1945,6 +4741,31 @@ export const acknowledgeReply = internalMutation({
       deliveryLeaseExpiresAt: undefined,
       updatedAt: now,
     });
+    if (!retryable && outbox.canonicalEventId !== undefined) {
+      const event = await ctx.db
+        .query("discordConversationEvents")
+        .withIndex("by_owner_event", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("eventId", outbox.canonicalEventId!))
+        .unique();
+      if (event !== null && event.status === "pending") {
+        await ctx.db.patch(event._id, { status: "failed", updatedAt: now });
+      }
+    }
+    if (!retryable && outbox.turnId !== undefined) {
+      const turn = await ctx.db
+        .query("discordAssistantTurns")
+        .withIndex("by_owner_turn", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("turnId", outbox.turnId!))
+        .unique();
+      if (turn !== null) {
+        await ctx.db.patch(turn._id, {
+          deliveryState: "failed",
+          updatedAt: now,
+        });
+      }
+    }
     await recordActivity(ctx, ownerId, {
       eventId: `${outbox.outboxId}:failed:${attempts}`,
       guildId: outbox.sourceGuildId,
@@ -2031,19 +4852,83 @@ export const listRunnable = internalMutation({
         .eq("status", "sent"))
       .order("asc")
       .collect();
+    const uncertainReplies = await ctx.db
+      .query("discordOutbox")
+      .withIndex("by_owner_status_createdAt", (index) => index
+        .eq("ownerId", ownerId)
+        .eq("status", "delivery_uncertain"))
+      .order("asc")
+      .collect();
     const replies: RunnableOutboxReply[] = [];
-    for (const reply of [...pendingReplies, ...sentReplies]
+    for (const reply of [...pendingReplies, ...uncertainReplies, ...sentReplies]
       .sort((left, right) => left.createdAt - right.createdAt)) {
+      if (
+        reply.status === "delivery_uncertain"
+        && (reply.uncertainAt ?? reply.updatedAt) + DISCORD_NONCE_RETRY_WINDOW_MS <= now
+      ) {
+        await ctx.db.patch(reply._id, {
+          status: "needs_reconciliation",
+          deliveryWorkerId: undefined,
+          deliveryToken: undefined,
+          deliveryLeaseExpiresAt: undefined,
+          updatedAt: now,
+        });
+        await recordActivity(ctx, ownerId, {
+          eventId: `${reply.outboxId}:delivery-reconciliation-required`,
+          guildId: reply.sourceGuildId,
+          channelId: reply.sourceChannelId,
+          runId: reply.runId,
+          eventType: "delivery_reconciliation_required",
+          replyKind: reply.replyKind
+            ?? (reply.finalizesLoop ? "final" : "research_log"),
+        }, now);
+        continue;
+      }
       const state = await discordChannelState(ctx, ownerId, reply.sourceChannelId);
       if (!isCurrentDiscordGeneration(state, reply.runId, reply.generation)) continue;
+      const conversation = reply.conversationId === undefined
+        ? null
+        : await assistantConversationByGuild(ctx, reply.sourceGuildId);
+      if (
+        reply.conversationId !== undefined
+        && (
+          conversation === null
+          || conversation.ownerId !== ownerId
+          || conversation.ownerBindingVersion !== reply.ownerBindingVersion
+          || conversation.conversationId !== reply.conversationId
+          || conversation.epoch !== reply.epoch
+          || conversation.generation !== reply.conversationGeneration
+          || conversation.routingGeneration !== reply.routingGeneration
+          || conversation.activeTurnId !== reply.turnId
+          || conversation.activeRunId !== reply.runId
+          || conversation.activeLeaseToken !== reply.conversationLeaseToken
+        )
+      ) continue;
       if (reply.status === "sent") {
         if (!reply.finalizesLoop) continue;
-        if (hasPendingDiscordReply(pendingReplies, reply.runId, reply.generation)) continue;
+        if (hasPendingDiscordReply(
+          [...pendingReplies, ...uncertainReplies],
+          reply.runId,
+          reply.generation,
+        )) continue;
         replies.push({ reply });
         if (replies.length >= limit) break;
         continue;
       }
       if (!state || !activeLease(state, now)) continue;
+      let nonce = reply.nonce;
+      let payloadHash = reply.payloadHash;
+      if (nonce === undefined || payloadHash === undefined) {
+        nonce = (await sha256Hex(`discord-outbox:${ownerId}:${reply.outboxId}`)).slice(0, 24);
+        payloadHash = await sha256Hex(canonicalJson({
+          guildId: reply.guildId,
+          channelId: reply.channelId,
+          content: reply.content,
+          chart: reply.chart ?? null,
+          replyToMessageId: reply.replyToMessageId ?? null,
+        }));
+        await ctx.db.patch(reply._id, { nonce, payloadHash, updatedAt: now });
+      }
       const deliveryLeaseActive = reply.deliveryToken !== undefined
         && reply.deliveryLeaseExpiresAt !== undefined
         && reply.deliveryLeaseExpiresAt > now;
@@ -2058,7 +4943,7 @@ export const listRunnable = internalMutation({
           updatedAt: now,
         });
       }
-      replies.push({ reply, deliveryToken });
+      replies.push({ reply: { ...reply, nonce, payloadHash }, deliveryToken });
       if (replies.length >= limit) break;
     }
     return {
@@ -2071,8 +4956,15 @@ export const listRunnable = internalMutation({
         channelId: reply.channelId,
         runId: reply.runId,
         generation: reply.generation,
+        conversationId: reply.conversationId,
+        epoch: reply.epoch,
+        conversationGeneration: reply.conversationGeneration,
+        routingGeneration: reply.routingGeneration,
+        turnId: reply.turnId,
+        conversationLeaseToken: reply.conversationLeaseToken,
         replyKind: reply.replyKind,
         status: reply.status === "sent" ? "sent" as const : "pending" as const,
+        deliveryState: reply.status,
         content: reply.content,
         chart: reply.chart,
         replyToMessageId: reply.replyToMessageId,
@@ -2081,6 +4973,8 @@ export const listRunnable = internalMutation({
         finalizesLoop: reply.finalizesLoop,
         discordMessageId: reply.discordMessageId,
         deliveryToken,
+        nonce: reply.nonce,
+        payloadHash: reply.payloadHash,
         attempts: reply.attempts,
         createdAt: reply.createdAt,
       })),

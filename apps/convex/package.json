@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "test": "vitest run",
+    "test:personality": "vitest run test/discord_conversation.test.ts test/discord_contract.test.ts test/discord_state.test.ts test/discord.test.ts",
     "typecheck": "tsc --noEmit",
     "convex:codegen": "convex codegen",
     "convex:deploy": "convex deploy"

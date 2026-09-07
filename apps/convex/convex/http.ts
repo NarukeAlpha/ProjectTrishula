@@ -23,6 +23,7 @@ import {
 import { executionRequest } from "./lib/execution.js";
 import { authorizedServiceRequest, constantTimeEqual } from "./lib/service_auth.js";
 import { discordGateway } from "./discord_http.js";
+import { marketResearchDiscord, marketResearchPi } from "./market_research_http.js";
 
 const jsonHeaders = {
   "cache-control": "no-store",
@@ -664,5 +665,7 @@ http.route({
   handler: robinhoodCallback,
 });
 http.route({ path: "/discord", method: "POST", handler: discordGateway });
+http.route({ path: "/market-research/pi", method: "POST", handler: marketResearchPi });
+http.route({ path: "/market-research/discord", method: "POST", handler: marketResearchDiscord });
 
 export default http;
