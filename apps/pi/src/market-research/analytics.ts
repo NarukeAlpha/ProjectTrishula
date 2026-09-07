@@ -157,4 +157,3 @@ export function calculateAnalytics(bars: readonly MarketBar[]): AnalyticsBundle 
     slope: linearTrendSlope(validated),
   };
 }
-
