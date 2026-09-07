@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { storedNativeCompactionValidator } from "./lib/discord_native_checkpoint.js";
 
 export const commandTypeValidator = v.union(
   v.literal("thread.prompt"),
@@ -594,6 +595,7 @@ export default defineSchema({
     activeLeaseWorkerId: v.optional(v.string()),
     leaseExpiresAt: v.optional(v.number()),
     activeCheckpointId: v.optional(v.string()),
+    candidateCheckpointId: v.optional(v.string()),
     personalityVersion: v.string(),
     systemPromptHash: v.string(),
     capabilityProfileHash: v.string(),
@@ -769,8 +771,12 @@ export default defineSchema({
     toolPolicyHash: v.string(),
     compactedThroughOrdinal: v.number(),
     sourceRevision: v.number(),
+    sourceGeneration: v.optional(v.number()),
+    sourceRoutingGeneration: v.optional(v.number()),
     sourceContextHash: v.string(),
     portableSummary: v.string(),
+    nativeCompaction: v.optional(storedNativeCompactionValidator),
+    nativeInvalidatedAt: v.optional(v.number()),
     retainedRecentEventIds: v.array(v.string()),
     inputTokens: v.number(),
     outputTokens: v.number(),

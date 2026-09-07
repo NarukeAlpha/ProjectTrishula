@@ -172,6 +172,13 @@ export const discordGateway = httpAction(async (ctx, request) => {
           ? success(operation, result)
           : json({ ok: false, operation, error: result.reason }, 409);
       }
+      case "invalidateNativeCheckpoint": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(internal.discord.invalidateNativeCheckpoint, args);
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
       case "enqueueReply": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(internal.discord.enqueueReply, withoutUndefined(args));

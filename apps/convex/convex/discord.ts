@@ -11,6 +11,14 @@ import {
 import { actorFromIdentity, requireAllowedWorkosUserId } from "./lib/auth.js";
 import { canonicalJson, sha256Hex } from "./lib/canonical_json.js";
 import {
+  checkpointUtf8Bytes,
+  nativeCheckpointView,
+  restoreNativeCompaction,
+  validateNativeCompaction,
+  type NativeCheckpointView,
+  type StoredNativeCompaction,
+} from "./lib/discord_native_checkpoint.js";
+import {
   DISCORD_AMBIENT_COOLDOWN_MS,
   DISCORD_AMBIENT_DEBOUNCE_MS,
   DISCORD_CONTEXT_SIZE,
@@ -57,7 +65,7 @@ import {
   discordSnowflakeUpperBound,
   isCurrentDiscordConversationFence,
   portableCheckpointRestorable,
-  portableCheckpointSourceBatchSupported,
+  selectDiscordCheckpointSourceBatch,
   portableConversationSummarySchema,
   portableSummaryEvidenceMatchesEvents,
   estimateDiscordCanonicalEventTokens,
@@ -239,7 +247,11 @@ interface DurableConversationContextView {
   sourceRevision: number;
   sourceHumanRevision: number;
   activeCheckpointId?: string;
+  activeCheckpointSourceRevision?: number;
+  activeCheckpointSourceContextHash?: string;
+  activeCheckpointCompactedThroughOrdinal?: number;
   portableSummary?: z.infer<typeof portableConversationSummarySchema>;
+  nativeCheckpoint?: NativeCheckpointView;
   recentEvents: DurableRecentEvent[];
   tail: DurableConversationTail;
 }
@@ -268,6 +280,9 @@ interface PortableCheckpointConversationView {
   systemPromptHash: string;
   capabilityProfileHash: string;
   activeCheckpointId?: string;
+  activeCheckpointSourceRevision?: number;
+  activeCheckpointSourceContextHash?: string;
+  activeCheckpointCompactedThroughOrdinal?: number;
 }
 
 interface PortableCheckpointRequestView {
@@ -277,6 +292,7 @@ interface PortableCheckpointRequestView {
   sourceContextHash: string;
   compactedThroughOrdinal: number;
   previousSummary?: z.infer<typeof portableConversationSummarySchema>;
+  previousNativeCheckpoint?: NativeCheckpointView;
   sourceEvents: PortableCheckpointSourceEventView[];
   retainedRecentEventIds: string[];
   inputEstimatedTokens: number;
@@ -669,7 +685,7 @@ async function ensureAssistantConversation(
   return created;
 }
 
-async function canonicalCheckpointSlice(
+export async function canonicalCheckpointSlice(
   ctx: DiscordReader,
   conversation: Doc<"discordAssistantConversations">,
   compactedThroughOrdinal: number,
@@ -703,14 +719,17 @@ async function canonicalCheckpointSlice(
   return { events, sourceContextHash };
 }
 
-async function durableConversationContext(
+export async function durableConversationContext(
   ctx: DiscordWriter & DiscordReader,
   conversation: Doc<"discordAssistantConversations">,
   now: number,
   requiredSourceMessageIds: readonly string[] = [],
 ) {
   let portableSummary: z.infer<typeof portableConversationSummarySchema> | undefined;
+  let nativeCheckpoint: NativeCheckpointView | undefined;
   let activeCheckpointId: string | undefined;
+  let activeCheckpointSourceRevision: number | undefined;
+  let activeCheckpointSourceContextHash: string | undefined;
   let compactedThroughOrdinal = 0;
   if (conversation.activeCheckpointId !== undefined) {
     const checkpoint = await ctx.db
@@ -728,6 +747,9 @@ async function durableConversationContext(
       && checkpoint.serializedBytes <= DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES
     ) {
       try {
+        if (checkpointUtf8Bytes(checkpoint.portableSummary) > DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES) {
+          throw new Error("Portable checkpoint stored size exceeds the boundary.");
+        }
         const parsedSummary = portableConversationSummarySchema.parse(
           JSON.parse(checkpoint.portableSummary),
         );
@@ -743,16 +765,39 @@ async function durableConversationContext(
           throw new Error("Portable checkpoint source evidence is not canonical.");
         }
         portableSummary = parsedSummary;
+        if (checkpoint.nativeCompaction !== undefined) {
+          try {
+            const artifact = await restoreNativeCompaction(checkpoint.nativeCompaction, checkpoint.portableSummary);
+            if (checkpoint.serializedBytes !== checkpointUtf8Bytes(checkpoint.portableSummary) + artifact.serializedBytes) {
+              throw new Error("Native checkpoint stored size mismatch.");
+            }
+            nativeCheckpoint = nativeCheckpointView(checkpoint, artifact);
+          } catch {
+            // A valid portable summary remains usable if the optional opaque artifact is corrupt.
+            await ctx.db.patch(checkpoint._id, {
+              nativeCompaction: undefined,
+              serializedBytes: checkpointUtf8Bytes(checkpoint.portableSummary),
+              updatedAt: now,
+            });
+          }
+        } else if (checkpoint.serializedBytes !== checkpointUtf8Bytes(checkpoint.portableSummary)) {
+          throw new Error("Portable checkpoint stored size mismatch.");
+        }
         activeCheckpointId = checkpoint.checkpointId;
+        activeCheckpointSourceRevision = checkpoint.sourceRevision;
+        activeCheckpointSourceContextHash = checkpoint.sourceContextHash;
         compactedThroughOrdinal = checkpoint.compactedThroughOrdinal;
       } catch {
-        await ctx.db.patch(checkpoint._id, { status: "invalid", updatedAt: now });
+        portableSummary = undefined;
+        nativeCheckpoint = undefined;
+        await ctx.db.patch(checkpoint._id, { status: "invalid", nativeCompaction: undefined, updatedAt: now });
         await ctx.db.patch(conversation._id, { activeCheckpointId: undefined, updatedAt: now });
       }
     } else {
       if (checkpoint !== null && checkpoint.status === "active") {
         await ctx.db.patch(checkpoint._id, {
           status: checkpoint.expiresAt <= now ? "expired" : "invalid",
+          nativeCompaction: undefined,
           updatedAt: now,
         });
       }
@@ -827,8 +872,70 @@ async function durableConversationContext(
     tail,
   };
   if (activeCheckpointId !== undefined) context.activeCheckpointId = activeCheckpointId;
+  if (activeCheckpointSourceRevision !== undefined) context.activeCheckpointSourceRevision = activeCheckpointSourceRevision;
+  if (activeCheckpointSourceContextHash !== undefined) context.activeCheckpointSourceContextHash = activeCheckpointSourceContextHash;
+  if (activeCheckpointId !== undefined) context.activeCheckpointCompactedThroughOrdinal = compactedThroughOrdinal;
   if (portableSummary !== undefined) context.portableSummary = portableSummary;
+  if (nativeCheckpoint !== undefined) context.nativeCheckpoint = nativeCheckpoint;
   return context;
+}
+
+export async function stagedCheckpointContext(
+  ctx: DiscordWriter & DiscordReader,
+  conversation: Doc<"discordAssistantConversations">,
+  now: number,
+): Promise<DurableConversationContextView | undefined> {
+  if (conversation.candidateCheckpointId === undefined) return undefined;
+  const checkpoint = await ctx.db.query("discordCompactionCheckpoints")
+    .withIndex("by_owner_checkpoint", (index) => index
+      .eq("ownerId", conversation.ownerId).eq("checkpointId", conversation.candidateCheckpointId!))
+    .unique();
+  try {
+    if (
+      checkpoint === null
+      || !portableCheckpointRestorable(checkpoint, { ...conversation, model: conversation.lunaModel }, now, "candidate")
+      || checkpoint.sourceRevision !== conversation.revision
+      || checkpoint.sourceGeneration !== conversation.generation
+      || checkpoint.sourceRoutingGeneration !== conversation.routingGeneration
+      || checkpoint.compactedThroughOrdinal >= conversation.nextOrdinal
+    ) throw new Error("Staged checkpoint identity changed.");
+    const summary = portableConversationSummarySchema.parse(JSON.parse(checkpoint.portableSummary));
+    const canonicalSlice = await canonicalCheckpointSlice(ctx, conversation, checkpoint.compactedThroughOrdinal);
+    if (canonicalSlice.sourceContextHash !== checkpoint.sourceContextHash
+      || !portableSummaryEvidenceMatchesEvents(summary, canonicalSlice.events)) {
+      throw new Error("Staged checkpoint source changed.");
+    }
+    const context: DurableConversationContextView = {
+      sourceRevision: conversation.revision,
+      sourceHumanRevision: conversation.humanRevision,
+      portableSummary: summary,
+      recentEvents: [],
+      tail: {
+        estimatorVersion: DISCORD_RECENT_TAIL_ESTIMATOR_VERSION,
+        tokenBudget: DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+        estimatedTokens: 0,
+        compactedThroughOrdinal: checkpoint.compactedThroughOrdinal,
+        omittedEventCount: 0,
+        complete: false,
+      },
+    };
+    let actualBytes = checkpointUtf8Bytes(checkpoint.portableSummary);
+    if (checkpoint.nativeCompaction !== undefined) {
+      const artifact = await restoreNativeCompaction(checkpoint.nativeCompaction, checkpoint.portableSummary);
+      actualBytes += artifact.serializedBytes;
+      context.nativeCheckpoint = nativeCheckpointView(checkpoint, artifact);
+    }
+    if (actualBytes !== checkpoint.serializedBytes || actualBytes > DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES) {
+      throw new Error("Staged checkpoint size changed.");
+    }
+    return context;
+  } catch {
+    if (checkpoint !== null) await ctx.db.patch(checkpoint._id, {
+      status: checkpoint.expiresAt <= now ? "expired" : "invalid", nativeCompaction: undefined, updatedAt: now,
+    });
+    await ctx.db.patch(conversation._id, { candidateCheckpointId: undefined, updatedAt: now });
+    return undefined;
+  }
 }
 
 function publicConversationIdentity(
@@ -1139,16 +1246,16 @@ async function resetAssistantConversation(
       }
     }
   }
-  if (conversation.activeCheckpointId !== undefined) {
-    const checkpoint = await ctx.db
-      .query("discordCompactionCheckpoints")
-      .withIndex("by_owner_checkpoint", (index) => index
-        .eq("ownerId", conversation.ownerId)
-        .eq("checkpointId", conversation.activeCheckpointId!))
-      .unique();
-    if (checkpoint !== null && checkpoint.status === "active") {
-      await ctx.db.patch(checkpoint._id, { status: "superseded", updatedAt: now });
-    }
+  const checkpoints = await ctx.db.query("discordCompactionCheckpoints")
+    .withIndex("by_conversation_epoch_status", (index) => index.eq("conversationId", conversation.conversationId))
+    .collect();
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.ownerId !== conversation.ownerId) continue;
+    await ctx.db.patch(checkpoint._id, {
+      nativeCompaction: undefined,
+      status: checkpoint.status === "active" || checkpoint.status === "candidate" ? "superseded" : checkpoint.status,
+      updatedAt: now,
+    });
   }
   await ctx.db.insert("discordConversationEvents", {
     ownerId: conversation.ownerId,
@@ -1197,6 +1304,7 @@ async function resetAssistantConversation(
     activeLeaseWorkerId: undefined,
     leaseExpiresAt: undefined,
     activeCheckpointId: undefined,
+    candidateCheckpointId: undefined,
     migrationWatermarkSequence: channelState?.latestSequence
       ?? conversation.migrationWatermarkSequence,
     updatedAt: now,
@@ -1950,7 +2058,12 @@ export const nextPortableCheckpoint = internalMutation({
         || conversation.leaseExpiresAt !== undefined
         || blockedGuildIds.has(conversation.guildId)
       ) continue;
-      const restored = await durableConversationContext(ctx, conversation, now);
+      const active = await durableConversationContext(ctx, conversation, now);
+      const staged = await stagedCheckpointContext(ctx, conversation, now);
+      const restored = staged ?? active;
+      // Staged opaque artifacts have no independent active lineage on the wire. Until that
+      // contract exists, staged progress carries the verified readable summary only.
+      const previousNativeCheckpoint = staged === undefined ? active.nativeCheckpoint : undefined;
       const compactedThroughOrdinal = restored.tail.compactedThroughOrdinal;
       const events = await ctx.db
         .query("discordConversationEvents")
@@ -1976,17 +2089,30 @@ export const nextPortableCheckpoint = internalMutation({
       const previousSummaryTokens = restored.portableSummary === undefined
         ? 0
         : Math.ceil(new TextEncoder().encode(JSON.stringify(restored.portableSummary)).byteLength / 3) + 8;
-      const currentEstimatedTokens = previousSummaryTokens
+      const previousNativeTokens = previousNativeCheckpoint === undefined
+        ? 0
+        : Math.ceil(previousNativeCheckpoint.artifact.serializedBytes / 3) + 8;
+      const previousContextTokens = previousSummaryTokens + previousNativeTokens;
+      const currentEstimatedTokens = previousContextTokens
         + visibleEvents.reduce((total, event) => total + estimateDiscordCanonicalEventTokens(event), 0);
-      if (currentEstimatedTokens < DISCORD_COMPACTION_THRESHOLD_TOKENS) continue;
+      if (staged === undefined && currentEstimatedTokens < DISCORD_COMPACTION_THRESHOLD_TOKENS) continue;
 
       const tail = selectDiscordCheckpointTail(visibleEvents, {
         tokenBudget: DISCORD_RECENT_TAIL_TOKEN_BUDGET,
         maximumEvents: DISCORD_MAX_RECENT_EVENT_COUNT,
       });
       if (tail.complete || tail.events.length === 0) continue;
-      const sourceEvents = visibleEvents.slice(0, visibleEvents.length - tail.events.length);
-      if (!portableCheckpointSourceBatchSupported(sourceEvents.length)) continue;
+      const retainedRecentEventIds = tail.events.map((event) => event.eventId);
+      const previousContextBytes = checkpointUtf8Bytes(JSON.stringify({
+        previousSummary: restored.portableSummary,
+        previousNativeCheckpoint,
+        retainedRecentEventIds,
+      }));
+      const sourceEvents = selectDiscordCheckpointSourceBatch(visibleEvents, tail.events.length, {
+        // Reserve the exact previous artifacts and retained IDs, plus bounded identity/hash metadata.
+        maximumBytes: Math.min(900_000, 1_500_000 - previousContextBytes - 8_192),
+        tokenBudget: DISCORD_COMPACTION_THRESHOLD_TOKENS - previousContextTokens,
+      });
       const lastSourceEvent = sourceEvents.at(-1);
       if (lastSourceEvent === undefined) continue;
       const sourceSlice = await canonicalCheckpointSlice(
@@ -2014,8 +2140,11 @@ export const nextPortableCheckpoint = internalMutation({
         systemPromptHash: conversation.systemPromptHash,
         capabilityProfileHash: conversation.capabilityProfileHash,
       };
-      if (restored.activeCheckpointId !== undefined) {
-        checkpointConversation.activeCheckpointId = restored.activeCheckpointId;
+      if (active.activeCheckpointId !== undefined) {
+        checkpointConversation.activeCheckpointId = active.activeCheckpointId;
+        checkpointConversation.activeCheckpointSourceRevision = active.activeCheckpointSourceRevision!;
+        checkpointConversation.activeCheckpointSourceContextHash = active.activeCheckpointSourceContextHash!;
+        checkpointConversation.activeCheckpointCompactedThroughOrdinal = active.activeCheckpointCompactedThroughOrdinal!;
       }
       const checkpointSourceEvents: PortableCheckpointSourceEventView[] = sourceEvents.map(
         ({ event }) => {
@@ -2039,14 +2168,17 @@ export const nextPortableCheckpoint = internalMutation({
         sourceContextHash: sourceSlice.sourceContextHash,
         compactedThroughOrdinal: lastSourceEvent.ordinal,
         sourceEvents: checkpointSourceEvents,
-        retainedRecentEventIds: tail.events.map((event) => event.eventId),
-        inputEstimatedTokens: previousSummaryTokens + sourceEvents.reduce(
+        retainedRecentEventIds,
+        inputEstimatedTokens: previousContextTokens + sourceEvents.reduce(
           (total, event) => total + estimateDiscordCanonicalEventTokens(event),
           0,
         ),
       };
       if (restored.portableSummary !== undefined) {
         request.previousSummary = restored.portableSummary;
+      }
+      if (previousNativeCheckpoint !== undefined) {
+        request.previousNativeCheckpoint = previousNativeCheckpoint;
       }
       if (new TextEncoder().encode(JSON.stringify(request)).byteLength > 1_500_000) continue;
       return { available: true as const, request };
@@ -2069,6 +2201,7 @@ export const storePortableCheckpoint = internalMutation({
     toolPolicyHash: v.string(),
     compactedThroughOrdinal: v.number(),
     portableSummary: v.string(),
+    nativeCompaction: v.optional(v.any()),
     retainedRecentEventIds: v.array(serviceId),
     inputTokens: v.number(),
     outputTokens: v.number(),
@@ -2088,11 +2221,20 @@ export const storePortableCheckpoint = internalMutation({
       || conversation.revision !== args.expectedRevision
       || conversation.generation !== args.expectedGeneration
       || conversation.routingGeneration !== args.expectedRoutingGeneration
+      || conversation.capabilityProfileHash !== args.toolPolicyHash
     ) {
       return { accepted: false as const, reason: "checkpoint_compare_and_set_lost" as const };
     }
     if (conversation.activeTurnId !== undefined || conversation.leaseExpiresAt !== undefined) {
       return { accepted: false as const, reason: "conversation_not_stable" as const };
+    }
+    for (const status of ["delivery_uncertain", "needs_reconciliation"] as const) {
+      const unresolved = await ctx.db.query("discordOutbox")
+        .withIndex("by_owner_status_createdAt", (index) => index.eq("ownerId", ownerId).eq("status", status))
+        .collect();
+      if (unresolved.some((reply) => reply.guildId === guildId || reply.sourceGuildId === guildId)) {
+        return { accepted: false as const, reason: "conversation_not_stable" as const };
+      }
     }
     if (
       !Number.isSafeInteger(args.compactedThroughOrdinal)
@@ -2160,13 +2302,14 @@ export const storePortableCheckpoint = internalMutation({
         && (event.kind === "human_message"
           || event.kind === "assistant_ack"
           || event.kind === "assistant_final"));
-    const expectedRetainedEventIds = selectDiscordCheckpointTail(
+    const retainedTail = selectDiscordCheckpointTail(
       canonicalRecentEvents.map((event) => ({
         eventId: event.eventId,
         ordinal: event.ordinal,
         content: event.content!,
       })),
-    ).events.map((event) => event.eventId);
+    );
+    const expectedRetainedEventIds = retainedTail.events.map((event) => event.eventId);
     if (canonicalJson(normalizedRetainedEventIds) !== canonicalJson(expectedRetainedEventIds)) {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
@@ -2181,7 +2324,16 @@ export const storePortableCheckpoint = internalMutation({
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
     const now = Date.now();
-    const serializedBytes = new TextEncoder().encode(args.portableSummary).byteLength;
+    let nativeCompaction: StoredNativeCompaction | undefined;
+    try {
+      if (args.nativeCompaction !== undefined) {
+        nativeCompaction = await validateNativeCompaction(args.nativeCompaction, args.portableSummary);
+        if (nativeCompaction.model !== conversation.lunaModel) throw new Error("Native checkpoint model mismatch.");
+      }
+    } catch {
+      return { accepted: false as const, reason: "checkpoint_native_invalid" as const };
+    }
+    const serializedBytes = checkpointUtf8Bytes(args.portableSummary) + (nativeCompaction?.serializedBytes ?? 0);
     try {
       validatePortableCheckpointCandidate({
         sourceRevision: args.expectedRevision,
@@ -2204,12 +2356,14 @@ export const storePortableCheckpoint = internalMutation({
         && existing.epoch === args.epoch
         && existing.sourceRevision === args.expectedRevision
         && existing.sourceContextHash === args.sourceContextHash
-        && existing.portableSummary === args.portableSummary;
+        && existing.portableSummary === args.portableSummary
+        && canonicalJson(existing.nativeCompaction ?? null) === canonicalJson(nativeCompaction ?? null);
       return same
         ? { accepted: true as const, duplicate: true, checkpointId, status: existing.status }
         : { accepted: false as const, reason: "checkpoint_id_conflict" as const };
     }
-    if (conversation.activeCheckpointId !== undefined) {
+    const checkpointStatus = retainedTail.complete ? "active" as const : "candidate" as const;
+    if (checkpointStatus === "active" && conversation.activeCheckpointId !== undefined) {
       const active = await ctx.db
         .query("discordCompactionCheckpoints")
         .withIndex("by_owner_checkpoint", (index) => index
@@ -2220,7 +2374,16 @@ export const storePortableCheckpoint = internalMutation({
         await ctx.db.patch(active._id, { status: "superseded", updatedAt: now });
       }
     }
-    await ctx.db.insert("discordCompactionCheckpoints", {
+    if (conversation.candidateCheckpointId !== undefined) {
+      const staged = await ctx.db.query("discordCompactionCheckpoints")
+        .withIndex("by_owner_checkpoint", (index) => index
+          .eq("ownerId", ownerId).eq("checkpointId", conversation.candidateCheckpointId!))
+        .unique();
+      if (staged?.status === "candidate") await ctx.db.patch(staged._id, {
+        status: "superseded", nativeCompaction: undefined, updatedAt: now,
+      });
+    }
+    const checkpointRecord: Omit<Doc<"discordCompactionCheckpoints">, "_id" | "_creationTime"> = {
       ownerId,
       ownerBindingVersion: conversation.ownerBindingVersion,
       guildId,
@@ -2237,6 +2400,8 @@ export const storePortableCheckpoint = internalMutation({
       toolPolicyHash: args.toolPolicyHash,
       compactedThroughOrdinal: args.compactedThroughOrdinal,
       sourceRevision: args.expectedRevision,
+      sourceGeneration: args.expectedGeneration,
+      sourceRoutingGeneration: args.expectedRoutingGeneration,
       sourceContextHash: args.sourceContextHash,
       portableSummary: args.portableSummary,
       retainedRecentEventIds: normalizedRetainedEventIds,
@@ -2245,20 +2410,24 @@ export const storePortableCheckpoint = internalMutation({
       estimatedSavedTokens: args.estimatedSavedTokens,
       serializedBytes,
       storageProtection: "platform_default_unverified",
-      status: "active",
+      status: checkpointStatus,
       expiresAt: now + DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
       createdAt: now,
       updatedAt: now,
-    });
-    await ctx.db.patch(conversation._id, {
-      activeCheckpointId: checkpointId,
-      updatedAt: now,
-    });
+    };
+    if (nativeCompaction !== undefined) checkpointRecord.nativeCompaction = nativeCompaction;
+    await ctx.db.insert("discordCompactionCheckpoints", checkpointRecord);
+    if (checkpointStatus === "active") {
+      await ctx.db.patch(conversation._id, { activeCheckpointId: checkpointId, candidateCheckpointId: undefined, updatedAt: now });
+    } else {
+      // Advancing updatedAt moves this guild behind other ready guilds on the next pass.
+      await ctx.db.patch(conversation._id, { candidateCheckpointId: checkpointId, updatedAt: now });
+    }
     return {
       accepted: true as const,
       duplicate: false,
       checkpointId,
-      status: "active" as const,
+      status: checkpointStatus,
       serializedBytes,
       expiresAt: now + DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
     };
@@ -2281,6 +2450,7 @@ export const expirePortableCheckpoints = internalMutation({
         await ctx.db.patch(checkpoint._id, {
           status: "expired",
           portableSummary: "{}",
+          nativeCompaction: undefined,
           retainedRecentEventIds: [],
           serializedBytes: 2,
           updatedAt: now,
@@ -2292,10 +2462,64 @@ export const expirePortableCheckpoints = internalMutation({
             updatedAt: now,
           });
         }
+        if (conversation?.candidateCheckpointId === checkpoint.checkpointId) {
+          await ctx.db.patch(conversation._id, { candidateCheckpointId: undefined, updatedAt: now });
+        }
         expired += 1;
       }
     }
     return { expired, expiredAt: now };
+  },
+});
+
+export const invalidateNativeCheckpoint = internalMutation({
+  args: {
+    actorId: serviceId,
+    guildId: serviceId,
+    conversationId: serviceId,
+    checkpointId: serviceId,
+    epoch: v.number(),
+    expectedOwnerBindingVersion: v.number(),
+    expectedRevision: v.number(),
+    expectedGeneration: v.number(),
+    expectedRoutingGeneration: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const conversation = await assistantConversationByGuild(ctx, requireDiscordId(args.guildId, "guildId"));
+    if (
+      conversation === null || conversation.ownerId !== ownerId
+      || conversation.conversationId !== args.conversationId
+      || conversation.epoch !== args.epoch
+      || conversation.ownerBindingVersion !== args.expectedOwnerBindingVersion
+      || conversation.revision !== args.expectedRevision
+      || conversation.generation !== args.expectedGeneration
+      || conversation.routingGeneration !== args.expectedRoutingGeneration
+      || (conversation.activeCheckpointId !== args.checkpointId && conversation.candidateCheckpointId !== args.checkpointId)
+    ) return { accepted: false as const, reason: "checkpoint_compare_and_set_lost" as const };
+    const checkpoint = await ctx.db.query("discordCompactionCheckpoints")
+      .withIndex("by_owner_checkpoint", (index) => index
+        .eq("ownerId", ownerId).eq("checkpointId", requireDiscordId(args.checkpointId, "checkpointId")))
+      .unique();
+    if (
+      checkpoint === null || checkpoint.guildId !== conversation.guildId
+      || checkpoint.conversationId !== conversation.conversationId || checkpoint.epoch !== conversation.epoch
+      || checkpoint.ownerBindingVersion !== conversation.ownerBindingVersion
+      || (checkpoint.status !== "active" && checkpoint.status !== "candidate")
+    ) return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    const now = Date.now();
+    const invalidated = checkpoint.nativeCompaction !== undefined;
+    await ctx.db.patch(checkpoint._id, {
+      nativeCompaction: undefined,
+      nativeInvalidatedAt: now,
+      serializedBytes: checkpointUtf8Bytes(checkpoint.portableSummary),
+      status: checkpoint.status === "candidate" ? "invalid" : "active",
+      updatedAt: now,
+    });
+    if (conversation.candidateCheckpointId === checkpoint.checkpointId) {
+      await ctx.db.patch(conversation._id, { candidateCheckpointId: undefined, updatedAt: now });
+    }
+    return { accepted: true as const, invalidated };
   },
 });
 

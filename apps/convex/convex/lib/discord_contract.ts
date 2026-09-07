@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { nativeCompactionArtifactSchema } from "./discord_native_checkpoint.js";
 import {
   DISCORD_CONTEXT_SIZE,
   DISCORD_LOOP_LEASE_MS,
@@ -500,10 +501,23 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     toolPolicyHash: z.string().regex(/^[a-f0-9]{64}$/),
     compactedThroughOrdinal: z.number().int().positive(),
     portableSummary: z.string().trim().min(2).max(512 * 1_024),
+    nativeCompaction: nativeCompactionArtifactSchema.optional(),
     retainedRecentEventIds: z.array(id).max(2_000),
     inputTokens: z.number().int().positive(),
     outputTokens: z.number().int().nonnegative(),
     estimatedSavedTokens: z.number().int(),
+  }).strict(),
+  z.object({
+    operation: z.literal("invalidateNativeCheckpoint"),
+    actorId: id,
+    guildId: id,
+    conversationId: id,
+    checkpointId: id,
+    epoch: z.number().int().nonnegative(),
+    expectedOwnerBindingVersion: z.number().int().positive(),
+    expectedRevision: z.number().int().positive(),
+    expectedGeneration: z.number().int().positive(),
+    expectedRoutingGeneration: z.number().int().positive(),
   }).strict(),
   z.object({
     operation: z.literal("enqueueReply"),
