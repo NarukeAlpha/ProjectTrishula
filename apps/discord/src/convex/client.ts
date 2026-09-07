@@ -346,7 +346,7 @@ const portableCheckpointStoreResponseSchema = z.object({
   accepted: z.literal(true),
   duplicate: z.boolean(),
   checkpointId: stableIdSchema,
-  status: z.enum(["active", "superseded", "invalid", "expired"]),
+  status: z.enum(["candidate", "active", "superseded", "invalid", "expired"]),
 }).passthrough();
 
 export interface MonitoredChannelCursor extends ChannelReference {
@@ -1147,6 +1147,7 @@ export class ConvexDiscordClient {
         inputTokens: validatedResponse.estimator.inputEstimatedTokens,
         outputTokens: validatedResponse.estimator.outputEstimatedTokens,
         estimatedSavedTokens: validatedResponse.estimator.estimatedSavedTokens,
+        nativeCompaction: validatedResponse.nativeCompaction,
       },
       portableCheckpointStoreResponseSchema,
       signal,

@@ -97,11 +97,95 @@ export const portableConversationSummarySchema = z.object({
   }).strict()).max(100),
 }).strict();
 
+const nativeRetainedUserMessageSchema = z.object({
+  type: z.literal("message"),
+  role: z.literal("user"),
+  content: z.array(z.object({
+    type: z.literal("input_text"),
+    text: z.string().min(1).max(16_384),
+  }).strict()).min(1).max(4),
+}).strict();
+
+const nativeCompactionItemSchema = z.object({
+  type: z.literal("compaction"),
+}).passthrough();
+
+export const nativeReplacementHistorySchema = z.array(z.json())
+  .min(1)
+  .max(2_001)
+  .superRefine((history, context) => {
+    let compactionItems = 0;
+    for (const [index, item] of history.entries()) {
+      const compaction = nativeCompactionItemSchema.safeParse(item);
+      if (compaction.success) {
+        compactionItems += 1;
+        if (index !== history.length - 1) {
+          context.addIssue({
+            code: "custom",
+            path: [index],
+            message: "The opaque compaction item must be last.",
+          });
+        }
+        continue;
+      }
+      if (!nativeRetainedUserMessageSchema.safeParse(item).success) {
+        context.addIssue({
+          code: "custom",
+          path: [index],
+          message: "Replacement history contains an unsupported item.",
+        });
+      }
+    }
+    if (compactionItems !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "Replacement history requires exactly one opaque compaction item.",
+      });
+    }
+  });
+
+export const nativeCompactionArtifactSchema = z.object({
+  schemaVersion: z.literal(1),
+  implementationVersion: z.literal("responses-compaction-v2-pi-0_84_1-v1"),
+  provider: z.literal("openai-codex"),
+  model: z.literal("gpt-5.6-luna"),
+  replacementHistory: nativeReplacementHistorySchema,
+  artifactSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  serializedBytes: z.number().int().positive().max(512 * 1_024),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }).strict(),
+  requestEvidence: z.object({
+    store: z.literal(false),
+    transport: z.literal("sse"),
+    betaFeature: z.literal("remote_compaction_v2"),
+    endpoint: z.literal("chatgpt-codex-responses"),
+  }).strict(),
+}).strict();
+
+export const nativeCheckpointSchema = z.object({
+  checkpointId: stableIdSchema,
+  ownerId: stableIdSchema,
+  ownerBindingVersion: z.number().int().positive(),
+  guildId: snowflakeSchema,
+  conversationId: z.string().regex(/^discord:\d{1,32}$/),
+  epoch: z.number().int().nonnegative(),
+  sourceRevision: z.number().int().positive(),
+  sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
+  personalityVersion: stableIdSchema,
+  systemPromptHash: z.string().regex(/^[a-f0-9]{64}$/),
+  capabilityProfileHash: z.string().regex(/^[a-f0-9]{64}$/),
+  artifact: nativeCompactionArtifactSchema,
+}).strict();
+
 export const durableConversationContextSchema = z.object({
   sourceRevision: z.number().int().nonnegative(),
   sourceHumanRevision: z.number().int().nonnegative(),
   activeCheckpointId: stableIdSchema.optional(),
   portableSummary: portableConversationSummarySchema.optional(),
+  nativeCheckpoint: nativeCheckpointSchema.optional(),
   recentEvents: z.array(z.object({
     eventId: stableIdSchema,
     ordinal: z.number().int().positive(),
@@ -160,6 +244,7 @@ export const portableCheckpointRequestSchema = z.object({
   sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
   compactedThroughOrdinal: z.number().int().positive(),
   previousSummary: portableConversationSummarySchema.optional(),
+  previousNativeCheckpoint: nativeCheckpointSchema.optional(),
   sourceEvents: z.array(portableCheckpointEventSchema).min(1).max(5_000),
   retainedRecentEventIds: z.array(stableIdSchema).max(2_000),
   inputEstimatedTokens: z.number().int().positive(),
@@ -219,6 +304,7 @@ export const portableCheckpointResponseSchema = z.object({
     estimatedSavedTokens: z.number().int(),
     serializedBytes: z.number().int().positive().max(512 * 1_024),
   }).strict(),
+  nativeCompaction: nativeCompactionArtifactSchema.optional(),
 }).strict();
 
 export const frontmanResearchRequestSchema = z.object({
@@ -463,6 +549,8 @@ export const durableTurnRecoverySchema = z.object({
 export type ConversationIdentity = z.infer<typeof conversationIdentitySchema>;
 export type PortableCheckpointRequest = z.infer<typeof portableCheckpointRequestSchema>;
 export type PortableCheckpointResponse = z.infer<typeof portableCheckpointResponseSchema>;
+export type NativeCompactionArtifact = z.infer<typeof nativeCompactionArtifactSchema>;
+export type NativeCheckpoint = z.infer<typeof nativeCheckpointSchema>;
 export type DurableConversationContext = z.infer<typeof durableConversationContextSchema>;
 export type FrontmanResearchRequest = z.infer<typeof frontmanResearchRequestSchema>;
 export type FrontmanPlanRequest = z.infer<typeof frontmanPlanRequestSchema>;
