@@ -51,6 +51,10 @@ grep -Fq 'PI_DISCORD_SHARED_SECRET=${{pi.PI_DISCORD_SHARED_SECRET}}' "$SCRIPT_DI
   printf 'Discord must use Pi agent-only credentials.\n' >&2
   exit 1
 }
+grep -Fq 'TRISHULA_SOL_REASONING_EFFORT=max' "$SCRIPT_DIR/connect-github.sh" || {
+  printf 'The Sol profile must use the verified Codex wire effort max.\n' >&2
+  exit 1
+}
 grep -Fq 'ensure_generated_secret convex-backend "$backend_id" DISCORD_GATEWAY_SHARED_SECRET' "$SCRIPT_DIR/connect-github.sh" \
   && grep -Fq 'ensure_generated_secret pi "$pi_id" PI_DISCORD_SHARED_SECRET' "$SCRIPT_DIR/connect-github.sh" || {
   printf 'Railway must generate separate Convex and Pi credentials for Discord.\n' >&2
