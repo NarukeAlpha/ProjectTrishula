@@ -301,6 +301,48 @@ describe("native checkpoint CAS, restore, and removal", () => {
       }
     }
   });
+
+  it("invalidates the same active artifact after plan and research writes advance the claim revision", async () => {
+    const db = database(); const conversation = db.conversation("123", 3);
+    const stored = await storeArgs(db, conversation, 1);
+    await invoke(storePortableCheckpoint, db.ctx, stored);
+    const args = {
+      actorId: ownerId, guildId: "123", conversationId: "discord:123", checkpointId: stored.checkpointId,
+      epoch: 1, expectedOwnerBindingVersion: 1, expectedRevision: 3, expectedGeneration: 1, expectedRoutingGeneration: 1,
+    };
+    // recordFrontmanPlan, recordResearchStarted, and recordResearchResult advance
+    // the canonical revision without changing the claimed generation or checkpoint.
+    conversation.revision = 6;
+    for (const change of [
+      { expectedRevision: 7 }, { expectedRevision: 0 }, { expectedRevision: 2.5 },
+      { actorId: "owner_2" }, { guildId: "456" }, { conversationId: "discord:456" },
+      { expectedOwnerBindingVersion: 2 }, { expectedGeneration: 2 }, { expectedRoutingGeneration: 2 },
+      { epoch: 2 }, { checkpointId: "different" },
+    ]) expect(await invoke(invalidateNativeCheckpoint, db.ctx, { ...args, ...change })).toMatchObject({ accepted: false });
+    const checkpoint = db.rows("discordCompactionCheckpoints")[0]!;
+    expect(checkpoint.nativeCompaction).toBeDefined();
+    expect(await invoke(invalidateNativeCheckpoint, db.ctx, args)).toEqual({ accepted: true, invalidated: true });
+    expect(checkpoint.nativeCompaction).toBeUndefined();
+    expect(checkpoint.portableSummary).toBe(portableSummary);
+    expect(checkpoint.status).toBe("active");
+    expect(conversation.activeCheckpointId).toBe(stored.checkpointId);
+    expect(await invoke(invalidateNativeCheckpoint, db.ctx, args)).toEqual({ accepted: true, invalidated: false });
+  });
+
+  it("never invalidates a replacement checkpoint with a stale claim", async () => {
+    const db = database(); const conversation = db.conversation("123", 3);
+    const first = await storeArgs(db, conversation, 1);
+    await invoke(storePortableCheckpoint, db.ctx, first);
+    conversation.revision = 6;
+    const replacement = await storeArgs(db, conversation, 2);
+    await invoke(storePortableCheckpoint, db.ctx, replacement);
+    expect(await invoke(invalidateNativeCheckpoint, db.ctx, {
+      actorId: ownerId, guildId: "123", conversationId: "discord:123", checkpointId: first.checkpointId,
+      epoch: 1, expectedOwnerBindingVersion: 1, expectedRevision: 3, expectedGeneration: 1, expectedRoutingGeneration: 1,
+    })).toMatchObject({ accepted: false, reason: "checkpoint_compare_and_set_lost" });
+    expect(conversation.activeCheckpointId).toBe(replacement.checkpointId);
+    expect(db.rows("discordCompactionCheckpoints").at(-1)?.nativeCompaction).toBeDefined();
+  });
 });
 
 describe("bounded staged compaction", () => {
