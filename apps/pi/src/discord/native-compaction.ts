@@ -29,12 +29,20 @@ const DISCORD_NATIVE_RETAINED_USER_TOKEN_BUDGET = 20_000;
 const DISCORD_NATIVE_RETAINED_USER_LIMIT = 2_000;
 const REMOTE_COMPACTION_BETA_FEATURE = "remote_compaction_v2";
 
-const providerPayloadSchema = z.object({
+const rawProviderPayloadObjectSchema = z.record(z.string(), z.unknown());
+const providerPayloadSchema = z.preprocess((rawPayload) => {
+  const object = rawProviderPayloadObjectSchema.safeParse(rawPayload);
+  if (!object.success || object.data.prompt_cache_key !== undefined) return rawPayload;
+  // Pi 0.84.1 keeps this key on the pre-serialization payload when cache
+  // retention is disabled. Match JSON.stringify by removing that one value.
+  const { prompt_cache_key: _promptCacheKey, ...payload } = object.data;
+  return payload;
+}, z.object({
   model: z.string(),
   store: z.boolean(),
   stream: z.literal(true),
   input: z.array(z.json()),
-}).catchall(z.json());
+}).catchall(z.json()));
 
 const sseEventSchema = z.object({ type: z.string() }).passthrough();
 const createdEventSchema = z.object({
