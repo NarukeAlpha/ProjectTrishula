@@ -72,7 +72,11 @@ function database() {
         order(value: string) { descending = value === "desc"; return query; },
         async collect() { return found(); },
         async take(count: number) { return found().slice(0, count); },
-        async unique() { if (found().length > 1) throw new Error("fixture_duplicate"); return found()[0] ?? null; },
+        async unique() {
+          const matches = found();
+          if (matches.length > 1) throw new Error("fixture_duplicate");
+          return matches[0] ?? null;
+        },
       };
       return query;
     },
