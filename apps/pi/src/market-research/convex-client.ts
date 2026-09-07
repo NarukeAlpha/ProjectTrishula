@@ -10,12 +10,18 @@ import {
   type MarketResearchSafeErrorCode,
 } from "./contracts.js";
 
+type ResearchLease = Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">;
+
+function leaseFields({ editionId, generation, claimToken }: ResearchLease): ResearchLease {
+  return { editionId, generation, claimToken };
+}
+
 export interface MarketResearchCallbacks {
-  heartbeat(request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">, stage: string, signal?: AbortSignal): Promise<boolean>;
-  appendEvidence(request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">, sequence: number, evidence: readonly MarketResearchEvidenceItem[], signal?: AbortSignal): Promise<boolean>;
-  loadEvidence(request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">, signal?: AbortSignal): Promise<readonly MarketResearchEvidenceItem[]>;
+  heartbeat(request: ResearchLease, stage: string, signal?: AbortSignal): Promise<boolean>;
+  appendEvidence(request: ResearchLease, sequence: number, evidence: readonly MarketResearchEvidenceItem[], signal?: AbortSignal): Promise<boolean>;
+  loadEvidence(request: ResearchLease, signal?: AbortSignal): Promise<readonly MarketResearchEvidenceItem[]>;
   complete(result: MarketResearchJobResult, signal?: AbortSignal): Promise<boolean>;
-  fail(request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">, code: MarketResearchSafeErrorCode, retryable: boolean, signal?: AbortSignal): Promise<void>;
+  fail(request: ResearchLease, code: MarketResearchSafeErrorCode, retryable: boolean, signal?: AbortSignal): Promise<void>;
 }
 
 export interface ConvexMarketResearchClientOptions {
@@ -89,29 +95,29 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
   }
 
   async heartbeat(
-    request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">,
+    request: ResearchLease,
     stage: string,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    const response = await this.request({ operation: "heartbeat", ...request, stage }, signal);
+    const response = await this.request({ operation: "heartbeat", ...leaseFields(request), stage }, signal);
     return response.accepted === true;
   }
 
   async appendEvidence(
-    request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">,
+    request: ResearchLease,
     sequence: number,
     evidence: readonly MarketResearchEvidenceItem[],
     signal?: AbortSignal,
   ): Promise<boolean> {
-    const response = await this.request({ operation: "appendEvidence", ...request, sequence, evidence }, signal);
+    const response = await this.request({ operation: "appendEvidence", ...leaseFields(request), sequence, evidence }, signal);
     return response.accepted === true;
   }
 
   async loadEvidence(
-    request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">,
+    request: ResearchLease,
     signal?: AbortSignal,
   ): Promise<readonly MarketResearchEvidenceItem[]> {
-    const response = await this.request({ operation: "loadEvidence", ...request }, signal);
+    const response = await this.request({ operation: "loadEvidence", ...leaseFields(request) }, signal);
     if (response.accepted !== true || !Array.isArray(response.evidence)) throw new Error("edition_lease_lost");
     return response.evidence.map((item) => marketResearchEvidenceItemSchema.parse(item));
   }
@@ -122,19 +128,20 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
   }
 
   async fail(
-    request: Pick<MarketResearchJobRequest, "editionId" | "generation" | "claimToken">,
+    request: ResearchLease,
     code: MarketResearchSafeErrorCode,
     retryable: boolean,
     signal?: AbortSignal,
   ): Promise<void> {
-    await this.request({ operation: "fail", ...request, code, retryable }, signal);
+    await this.request({ operation: "fail", ...leaseFields(request), code, retryable }, signal);
   }
 
-  private async request(body: unknown, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  private async request(body: Readonly<Record<string, unknown>> & { readonly operation: string }, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
+    let httpStatus: number | null = null;
     try {
       const response = await this.fetchImpl(this.endpoint, {
         method: "POST",
@@ -146,12 +153,15 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      httpStatus = response.status;
       if (!response.ok) throw new Error("market_research_convex_rejected");
       const parsed = await response.json() as unknown;
       if (typeof parsed !== "object" || parsed === null) throw new Error("market_research_convex_invalid_response");
       return parsed as Record<string, unknown>;
     } catch (error) {
       this.options.logger.error("market_research_convex_operation_failed", {
+        operation: body.operation,
+        httpStatus,
         code: error instanceof Error ? error.message.slice(0, 100) : "market_research_convex_failed",
       });
       throw error;
