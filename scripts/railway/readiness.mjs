@@ -7,6 +7,8 @@ const { values } = parseArgs({
   options: {
     "expected-commit": { type: "string" },
     "expected-source": { type: "string" },
+    service: { type: "string" },
+    "require-market-research": { type: "boolean", default: false },
     environment: { type: "string", default: "production" },
   },
 });
@@ -55,7 +57,10 @@ function main() {
   )?.node;
   if (!environment) throw new Error("Requested Railway environment not found.");
   const services = ["convex-functions", "pi", "discord", "web"];
-  const deploymentChecks = services.map((name) => {
+  if (values.service && !services.includes(values.service)) {
+    throw new Error("--service must be convex-functions, pi, discord, or web.");
+  }
+  const deploymentChecks = services.filter((name) => !values.service || name === values.service).map((name) => {
     const id = state.services.edges.find(({ node }) => node.name === name)?.node.id;
     const instance = environment.serviceInstances.edges.find(
       ({ node }) => node.serviceId === id,
@@ -120,6 +125,13 @@ function main() {
       chartsConfigured: Boolean(discord.CHART_IMG_API_KEY),
     },
   };
+  if (values["require-market-research"]) {
+    configurationChecks.push(
+      check("Pi market research is enabled", pi.MARKET_RESEARCH_ENABLED === "true"),
+      check("Discord market publication is enabled", discord.MARKET_RESEARCH_ENABLED === "true"),
+      check("Exa credential is configured", Boolean(pi.EXA_API_KEY?.trim())),
+    );
+  }
   const passed = deploymentChecks.every((item) => item.passed)
     && configurationChecks.every((item) => item.passed);
   console.log(JSON.stringify({

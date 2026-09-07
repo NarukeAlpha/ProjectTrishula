@@ -44,6 +44,8 @@ and verify that the owner can test them through the website and Discord.
 node scripts/railway/readiness.mjs
 node scripts/railway/readiness.mjs --expected-commit FULL_GIT_COMMIT
 node scripts/railway/readiness.mjs --expected-source FULL_GIT_COMMIT
+node scripts/railway/readiness.mjs --service pi --expected-source FULL_GIT_COMMIT
+node scripts/railway/readiness.mjs --require-market-research
 ```
 
 The check reads linked Railway deployment and variable state. Its output contains
@@ -55,6 +57,10 @@ Use `--expected-source` after a staged release. It verifies that each deployed
 service has the same Docker build inputs as the target commit. GitHub watch paths
 can leave services on different commit IDs even when their code is current. The
 check fails if a required Git object is not available locally.
+
+The market-research requirement fails if its Pi runtime, Discord publisher, or
+Exa credential is unavailable. Passing infrastructure checks alone does not make
+the newspaper ready. Per-server automatic scheduling remains a separate setting.
 
 ## Activation gates
 
