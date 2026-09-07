@@ -54,6 +54,24 @@ function controlPlane(
             canReadHistory: true,
             roles: ["research_log"],
           },
+          {
+            channelId: "channel_3",
+            name: "morning-paper",
+            type: "forum",
+            canView: true,
+            canSend: true,
+            canReadHistory: true,
+            canCreateForumPost: true,
+            canSendInThreads: true,
+            canReadThreadHistory: true,
+            canAttachFiles: true,
+            requiresTag: true,
+            availableTags: [
+              { id: "tag_1", name: "Morning", moderated: false, emoji: "📰" },
+              { id: "tag_2", name: "Moderated", moderated: true },
+            ],
+            roles: [],
+          },
         ],
       },
     ],
@@ -82,7 +100,7 @@ describe("Discord control surface", () => {
     ).toHaveAttribute("href", discordInstallUrl("1114379702015111228"));
   });
 
-  it("shows exactly two server-level routes instead of channel cards", () => {
+  it("shows three independent server-level routes instead of channel cards", () => {
     render(
       <DiscordControlView model={controlPlane()} onSetGuildRouting={vi.fn()} />,
     );
@@ -93,8 +111,39 @@ describe("Discord control surface", () => {
     expect(
       screen.getByRole("combobox", { name: "Research log channel" }),
     ).toHaveValue("channel_2");
-    expect(screen.getAllByRole("combobox")).toHaveLength(3);
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Morning newspaper forum" }),
+    ).toHaveValue("");
+    expect(screen.getAllByRole("combobox")).toHaveLength(6);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(4);
+  });
+
+  it("saves the forum route without changing either conversational route", async () => {
+    const onSetGuildRouting = vi.fn().mockResolvedValue(undefined);
+    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={onSetGuildRouting}
+        onSaveMarketResearch={onSaveMarketResearch}
+      />,
+    );
+
+    const forum = screen.getByRole("combobox", { name: "Morning newspaper forum" });
+    expect(forum.querySelector('option[value="channel_1"]')).toBeNull();
+    fireEvent.change(forum, { target: { value: "channel_3" } });
+    const tag = screen.getByRole("combobox", { name: "Morning newspaper tag" });
+    expect(tag.querySelector('option[value="tag_2"]')).toBeNull();
+    fireEvent.change(tag, { target: { value: "tag_1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save morning newspaper" }));
+
+    await waitFor(() => expect(onSaveMarketResearch).toHaveBeenCalledWith(expect.objectContaining({
+      guildId: "guild_1",
+      forumChannelId: "channel_3",
+      forumTagIds: ["tag_1"],
+      enabled: false,
+    })));
+    expect(onSetGuildRouting).not.toHaveBeenCalled();
   });
 
   it("does not present split legacy roles as a configured conversation", () => {

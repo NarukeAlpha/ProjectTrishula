@@ -333,6 +333,17 @@ export interface DiscordChannelReadModel {
   canView: boolean;
   canSend: boolean;
   canReadHistory: boolean;
+  canCreateForumPost?: boolean;
+  canSendInThreads?: boolean;
+  canReadThreadHistory?: boolean;
+  canAttachFiles?: boolean;
+  requiresTag?: boolean;
+  availableTags?: Array<{
+    id: string;
+    name: string;
+    moderated: boolean;
+    emoji?: string;
+  }>;
   roles: DiscordChannelRole[];
   loop?: DiscordLoopReadModel;
 }
@@ -368,3 +379,70 @@ export interface DiscordGuildRoutingReadModel {
   researchLogChannelId: string | null;
   updatedAt: number;
 }
+
+export type MarketResearchEditionStatus =
+  | "queued"
+  | "collecting"
+  | "researching"
+  | "calculating"
+  | "composing"
+  | "ready_to_publish"
+  | "creating_thread"
+  | "publishing_replies"
+  | "published"
+  | "retry_wait"
+  | "partial"
+  | "failed"
+  | "cancelled"
+  | "skipped_late";
+
+export interface MarketResearchPreferencesReadModel {
+  guildId: string;
+  enabled: boolean;
+  forumChannelId: string | null;
+  forumTagIds: string[];
+  timezone: string;
+  timezoneConfirmed: boolean;
+  localHour: number;
+  localMinute: number;
+  includeWeekends: boolean;
+  includeCharts: boolean;
+  chartsAcceptancePassed: boolean;
+  editionDepth: "full" | "concise";
+  maximumRankedSetups: number;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface MarketResearchCurrentEditionReadModel {
+  editionId: string;
+  editionDate: string;
+  status: MarketResearchEditionStatus;
+  stage: string;
+  lastErrorCode?: string;
+  sourceCount: number;
+  acceptedSourceCount: number;
+  exaCostUsd: number;
+  forumUrl?: string;
+  updatedAt: number;
+}
+
+export interface MarketResearchControlStatusReadModel {
+  guildId: string;
+  preferences: MarketResearchPreferencesReadModel;
+  current: MarketResearchCurrentEditionReadModel | null;
+}
+
+export type SaveMarketResearchControlSettings = {
+  guildId: string;
+  forumChannelId: string | null;
+  forumTagIds: string[];
+  timezone: string;
+  timezoneConfirmed: boolean;
+  localHour: number;
+  localMinute: number;
+  includeWeekends: boolean;
+  editionDepth: "full" | "concise";
+  maximumRankedSetups: number;
+  enabled: boolean;
+};

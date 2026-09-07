@@ -12,6 +12,9 @@ uses a separate agent-only secret. The browser never calls Pi directly.
 - `GET /discord/agents/jobs/:jobId` returns the job status and its strict result after completion.
 - `DELETE /discord/agents/jobs/:jobId` cancels a running job.
 - `POST /discord/agents/run` keeps the earlier synchronous contract for rolling deployment compatibility.
+- `POST /market-research/jobs` accepts one actor-bound, fenced newspaper job and starts it asynchronously.
+- `GET /market-research/jobs/:jobId` returns only the bounded newspaper job status.
+- `DELETE /market-research/jobs/:jobId` cancels a running newspaper job in this Pi process.
 - `POST /runs/:runId/cancel` accepts `{ "commandId": "...", "runId": "...", "actorId": "..." }`. The body `runId` must match the path.
 - `POST /connections/robinhood/start` accepts `{ "actorId": "..." }`.
 - `POST /connections/robinhood/complete` accepts `{ "actorId": "...", "code": "...", "state": "..." }`.
@@ -27,6 +30,10 @@ runtime rejects a different actor before it starts, cancels, reads brokerage
 data, changes a connection, creates a proposal, or submits an order.
 The service exposes only application trading tools. It does not expose a
 generic MCP proxy and never returns credentials or OAuth tokens.
+
+The `/market-research/jobs` routes use `SERVICE_SHARED_SECRET`, not the Discord agent secret. They have a dedicated registry and do not call a Discord conversation profile. The runner creates one isolated tool-free composer session and does not import, construct, or receive a trading broker.
+
+The feature is disabled by default. Pi requires `EXA_API_KEY` only when `MARKET_RESEARCH_ENABLED=true`. Health reports only the feature flag, `exaConfigured` boolean, and runner readiness. It never returns the key, provider authorization, prompts, evidence bodies, or edition text.
 
 ## Discord agent profiles
 
@@ -101,6 +108,7 @@ missing.
 | `PI_DISCORD_SHARED_SECRET` | Agent-only credential for the Discord gateway. It must differ from the service secret. |
 | `CONVEX_SITE_URL` | Full Convex HTTP Actions prefix. It must end in `/http`. |
 | `BOUND_ACTOR_ID` | Exact WorkOS subject served by this runtime. Required in production. |
+| `EXA_API_KEY` | Pi-only Exa credential. Required only when morning research is enabled. |
 
 ## Runtime variables
 
@@ -122,6 +130,14 @@ missing.
 | `ROBINHOOD_OAUTH_REDIRECT_URI` | `${CONVEX_SITE_URL}/broker/robinhood/callback` |
 | `ROBINHOOD_OAUTH_CLIENT_ID` | unset; MCP dynamic registration is used when supported |
 | `LIVE_TRADING_ENABLED` | `false` |
+| `MARKET_RESEARCH_ENABLED` | `false` |
+| `PI_MARKET_RESEARCH_MODEL` | `gpt-5.6-sol` |
+| `EXA_SEARCH_CONCURRENCY` | `2` |
+| `EXA_CONTENTS_CONCURRENCY` | `5` |
+| `EXA_REQUEST_TIMEOUT_MS` | `20000` |
+| `EXA_MAX_SEARCH_REQUESTS_PER_EDITION` | `12` |
+| `EXA_MAX_CONTENT_PAGES_PER_EDITION` | `24` |
+| `EXA_MAX_COST_USD_PER_EDITION` | unset; set a reviewed cost ceiling before enablement |
 
 `PI_CREDENTIAL_ENCRYPTION_KEY` is required when `BROKER_MODE=robinhood`. Use an
 independent 32-character-or-longer secret. The service never falls back to

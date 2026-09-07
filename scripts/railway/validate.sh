@@ -143,6 +143,26 @@ grep -Fq 'PUBLIC_DISCORD_APPLICATION_ID: preserve()' "$iac" || {
   exit 1
 }
 
+grep -Fq 'EXA_API_KEY: preserve()' "$iac" || {
+  printf 'Railway IaC must preserve the Pi-only Exa API key.\n' >&2
+  exit 1
+}
+
+if grep -Eq 'EXA_API_KEY:[[:space:]]*["'"'"']' "$iac"; then
+  printf 'Railway IaC must never contain a literal Exa API key.\n' >&2
+  exit 1
+fi
+
+[ "$(grep -c 'MARKET_RESEARCH_ENABLED: "false"' "$iac")" -eq 2 ] || {
+  printf 'Pi and Discord market research must stay disabled by default.\n' >&2
+  exit 1
+}
+
+grep -Fq 'MARKET_RESEARCH_CHARTS_ENABLED: "false"' "$iac" || {
+  printf 'Market-research charts must stay disabled by default.\n' >&2
+  exit 1
+}
+
 grep -Fq 'npm ci --include=dev' "$REPO_ROOT/infra/railway/convex-functions/Dockerfile" || {
   printf 'The Convex function deployer must install TypeScript for deploy-time typechecking.\n' >&2
   exit 1

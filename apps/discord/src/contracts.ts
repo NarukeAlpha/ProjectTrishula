@@ -245,6 +245,17 @@ export const discoveredChannelSchema = z
     canView: z.boolean(),
     canSend: z.boolean(),
     canReadHistory: z.boolean(),
+    canCreateForumPost: z.boolean(),
+    canSendInThreads: z.boolean(),
+    canReadThreadHistory: z.boolean(),
+    canAttachFiles: z.boolean(),
+    requiresTag: z.boolean(),
+    availableTags: z.array(z.object({
+      id: snowflakeSchema,
+      name: z.string().trim().min(1).max(100),
+      moderated: z.boolean(),
+      emoji: z.string().trim().min(1).max(100).optional(),
+    }).strict()).max(20),
   })
   .strict();
 
@@ -265,6 +276,7 @@ export const storedMessageSchema = z
   .object({
     guildId: snowflakeSchema,
     channelId: snowflakeSchema,
+    parentChannelId: snowflakeSchema.optional(),
     messageId: snowflakeSchema,
     authorId: snowflakeSchema,
     authorName: z.string().trim().min(1).max(200),

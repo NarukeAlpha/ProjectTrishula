@@ -1,7 +1,8 @@
 import {
   marketChartSpecSchema,
+  providerMarketChartSpecSchema,
   MAX_DISCORD_GENERATED_FILE_BYTES,
-  type MarketChartSpec,
+  type RenderableMarketChartSpec,
   type RenderedMarketChart,
 } from "./market-chart.js";
 
@@ -34,7 +35,7 @@ export class ChartImageError extends Error {
 }
 
 export interface MarketChartRenderer {
-  render(chart: MarketChartSpec): Promise<RenderedMarketChart>;
+  render(chart: RenderableMarketChartSpec): Promise<RenderedMarketChart>;
 }
 
 interface ChartImgClientOptions {
@@ -60,7 +61,7 @@ function boundedFilename(symbol: string): string {
   return `${name || "market"}-chart.png`;
 }
 
-function cacheKey(chart: MarketChartSpec): string {
+function cacheKey(chart: RenderableMarketChartSpec): string {
   return JSON.stringify({
     sourceSymbol: chart.symbol,
     title: chart.title,
@@ -72,7 +73,7 @@ function cacheKey(chart: MarketChartSpec): string {
   });
 }
 
-function requestBody(chart: MarketChartSpec) {
+function requestBody(chart: RenderableMarketChartSpec) {
   if (chart.tradingViewSymbol === undefined) {
     throw new ChartImageError(
       "missing_provider_symbol",
@@ -205,8 +206,10 @@ export class ChartImgClient implements MarketChartRenderer {
       });
   }
 
-  async render(input: MarketChartSpec): Promise<RenderedMarketChart> {
-    const chart = marketChartSpecSchema.parse(input);
+  async render(input: RenderableMarketChartSpec): Promise<RenderedMarketChart> {
+    const chart = "points" in input
+      ? marketChartSpecSchema.parse(input)
+      : providerMarketChartSpecSchema.parse(input);
     if (chart.tradingViewSymbol === undefined) {
       throw new ChartImageError(
         "missing_provider_symbol",
@@ -243,7 +246,7 @@ export class ChartImgClient implements MarketChartRenderer {
     }
   }
 
-  private enqueue(chart: MarketChartSpec): Promise<RenderedMarketChart> {
+  private enqueue(chart: RenderableMarketChartSpec): Promise<RenderedMarketChart> {
     const task = this.queue.then(async () => {
       const waitMs = Math.max(0, this.nextRequestAt - this.now());
       if (waitMs > 0) await this.sleep(waitMs);
@@ -257,7 +260,7 @@ export class ChartImgClient implements MarketChartRenderer {
     return task;
   }
 
-  private async request(chart: MarketChartSpec): Promise<RenderedMarketChart> {
+  private async request(chart: RenderableMarketChartSpec): Promise<RenderedMarketChart> {
     let response: Response;
     try {
       response = await this.fetch(CHART_IMG_ENDPOINT, {

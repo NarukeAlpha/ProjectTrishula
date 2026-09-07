@@ -10,6 +10,8 @@ import type { TradingBroker } from "./broker/types.js";
 import { createTradingBroker } from "./broker/trading-broker.js";
 import type { DiscordAgentRunner } from "./discord/runner.js";
 import { DiscordAgentJobRegistry } from "./discord/jobs.js";
+import type { MarketResearchRunner } from "./market-research/runner.js";
+import { MarketResearchJobRegistry } from "./market-research/jobs.js";
 
 export interface RunningExecutionService {
   server: Server;
@@ -23,6 +25,7 @@ export async function startExecutionService(
   logger: Logger,
   broker: TradingBroker = createTradingBroker(config),
   discordAgents?: DiscordAgentRunner,
+  marketResearch?: MarketResearchRunner,
 ): Promise<RunningExecutionService> {
   await executor.initialize();
   if (!executor.readiness().ready) {
@@ -32,6 +35,12 @@ export async function startExecutionService(
     await discordAgents.initialize();
     if (!discordAgents.readiness().ready) {
       throw new Error(`Discord agents are not ready: ${discordAgents.readiness().reason ?? "unknown reason"}`);
+    }
+  }
+  if (marketResearch) {
+    await marketResearch.initialize();
+    if (!marketResearch.readiness().ready) {
+      throw new Error(`Market research is not ready: ${marketResearch.readiness().reason ?? "unknown reason"}`);
     }
   }
 
@@ -55,16 +64,25 @@ export async function startExecutionService(
   const discordAgentJobs = discordAgents
     ? new DiscordAgentJobRegistry({ runner: discordAgents, logger })
     : undefined;
+  const marketResearchJobs = marketResearch
+    ? new MarketResearchJobRegistry({ runner: marketResearch, logger })
+    : undefined;
   const appDependencies: AppDependencies = {
     sharedSecret: config.sharedSecret,
     discordSharedSecret: config.discordSharedSecret,
     executor,
     registry,
     broker,
+    marketResearchEnabled: config.marketResearchEnabled,
+    exaConfigured: config.exaApiKey !== undefined,
   };
   if (discordAgents && discordAgentJobs) {
     appDependencies.discordAgents = discordAgents;
     appDependencies.discordAgentJobs = discordAgentJobs;
+  }
+  if (marketResearch && marketResearchJobs) {
+    appDependencies.marketResearch = marketResearch;
+    appDependencies.marketResearchJobs = marketResearchJobs;
   }
   const app = createApp(config.boundActorId
     ? { ...appDependencies, boundActorId: config.boundActorId }
@@ -86,11 +104,13 @@ export async function startExecutionService(
         const closed = new Promise<void>((resolve) => server.close(() => resolve()));
         const work = (async () => {
           await discordAgentJobs?.dispose();
+          await marketResearchJobs?.dispose();
           await registry.shutdown();
           await registry.waitForIdle();
           await sessions.dispose();
           await broker.dispose();
           await discordAgents?.dispose();
+          await marketResearch?.dispose();
           await executor.dispose();
         })();
         await Promise.race([

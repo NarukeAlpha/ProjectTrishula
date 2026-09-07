@@ -24,6 +24,9 @@ const config: DiscordGatewayConfig = {
   requestTimeoutMs: 30_000,
   agentTimeoutMs: 600_000,
   maxReconcileMessages: 500,
+  marketResearchEnabled: false,
+  marketResearchChartsEnabled: false,
+  marketResearchPollIntervalMs: 5_000,
 };
 
 const triageRequest: TriageRequest = {

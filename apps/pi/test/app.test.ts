@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
-import type { AppRunRegistry } from "../src/app.js";
+import type { AppRunRegistry, MarketResearchJobRegistryBoundary } from "../src/app.js";
 import type { TradingBroker } from "../src/broker/types.js";
 import { TestExecutor, runRequest } from "./helpers.js";
 
@@ -40,6 +40,14 @@ function makeBroker(): TradingBroker {
     executeOrder: vi.fn(async () => ({ status: "failed" as const, errorCode: "not_enabled" })),
     callApplicationTool: vi.fn(async () => ({})),
     dispose: vi.fn(async () => undefined),
+  };
+}
+
+function makeMarketResearchJobs(): MarketResearchJobRegistryBoundary {
+  return {
+    submit: vi.fn(() => ({ type: "not_accepting" as const })),
+    get: vi.fn(() => ({ jobId: "edition-1:research:1", status: "running" as const })),
+    cancel: vi.fn(() => "cancelled" as const),
   };
 }
 
@@ -119,6 +127,86 @@ describe("execution HTTP API", () => {
       .get("/health");
     expect(response.status).toBe(503);
     expect(response.body).toMatchObject({ ok: false });
+  });
+
+  it("reports only the Exa configured boolean in health", async () => {
+    const executor = new TestExecutor();
+    const registry = makeRegistry();
+    const response = await request(createApp({
+      sharedSecret: secret,
+      discordSharedSecret: discordSecret,
+      executor,
+      registry,
+      marketResearchEnabled: true,
+      exaConfigured: true,
+    })).get("/health");
+    expect(response.status).toBe(200);
+    expect(response.body.marketResearch).toEqual({ enabled: true, exaConfigured: true });
+    expect(JSON.stringify(response.body)).not.toMatch(/api.?key|key.?prefix|key.?suffix|fingerprint/i);
+  });
+
+  it("requires the bound owner on market-research job reads and cancellation", async () => {
+    const marketResearchJobs = makeMarketResearchJobs();
+    const app = createApp({
+      sharedSecret: secret,
+      discordSharedSecret: discordSecret,
+      executor: new TestExecutor(),
+      registry: makeRegistry(),
+      marketResearchJobs,
+      boundActorId: runRequest.actorId,
+    });
+    const read = await request(app)
+      .get("/market-research/jobs/edition-1:research:1")
+      .query({ ownerId: "other_actor" })
+      .set("authorization", `Bearer ${secret}`);
+    const cancel = await request(app)
+      .delete("/market-research/jobs/edition-1:research:1")
+      .query({ ownerId: "other_actor" })
+      .set("authorization", `Bearer ${secret}`);
+    expect(read.status).toBe(403);
+    expect(cancel.status).toBe(403);
+    expect(marketResearchJobs.get).not.toHaveBeenCalled();
+    expect(marketResearchJobs.cancel).not.toHaveBeenCalled();
+  });
+
+  it("returns only the bound owner's market-research job and cancels with the same owner", async () => {
+    const marketResearchJobs = makeMarketResearchJobs();
+    const app = createApp({
+      sharedSecret: secret,
+      discordSharedSecret: discordSecret,
+      executor: new TestExecutor(),
+      registry: makeRegistry(),
+      marketResearchJobs,
+      boundActorId: runRequest.actorId,
+    });
+    const read = await request(app)
+      .get("/market-research/jobs/edition-1:research:1")
+      .query({ ownerId: runRequest.actorId })
+      .set("authorization", `Bearer ${secret}`);
+    const cancel = await request(app)
+      .delete("/market-research/jobs/edition-1:research:1")
+      .query({ ownerId: runRequest.actorId })
+      .set("authorization", `Bearer ${secret}`);
+    expect(read.status).toBe(200);
+    expect(cancel.status).toBe(200);
+    expect(marketResearchJobs.get).toHaveBeenCalledWith("edition-1:research:1", runRequest.actorId);
+    expect(marketResearchJobs.cancel).toHaveBeenCalledWith("edition-1:research:1", runRequest.actorId);
+  });
+
+  it("rejects a market-research job lookup without an owner", async () => {
+    const marketResearchJobs = makeMarketResearchJobs();
+    const response = await request(createApp({
+      sharedSecret: secret,
+      discordSharedSecret: discordSecret,
+      executor: new TestExecutor(),
+      registry: makeRegistry(),
+      marketResearchJobs,
+      boundActorId: runRequest.actorId,
+    }))
+      .get("/market-research/jobs/edition-1:research:1")
+      .set("authorization", `Bearer ${secret}`);
+    expect(response.status).toBe(400);
+    expect(marketResearchJobs.get).not.toHaveBeenCalled();
   });
 
   it("accepts cancellation without waiting for Pi to stop", async () => {

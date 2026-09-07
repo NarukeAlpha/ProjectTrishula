@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const positiveInteger = z.coerce.number().int().positive();
+const environmentBoolean = z.enum(["true", "false"]).transform((value) => value === "true");
 const stableId = z
   .string()
   .trim()
@@ -53,6 +54,12 @@ const environmentSchema = z
       .min(10)
       .max(1_000)
       .default(500),
+    MARKET_RESEARCH_ENABLED: environmentBoolean.default(false),
+    MARKET_RESEARCH_CHARTS_ENABLED: environmentBoolean.default(false),
+    MARKET_RESEARCH_POLL_INTERVAL_MS: positiveInteger
+      .min(1_000)
+      .max(60_000)
+      .default(5_000),
   })
   .superRefine((value, context) => {
     if (value.CONVEX_DISCORD_SHARED_SECRET === value.PI_DISCORD_SHARED_SECRET) {
@@ -82,6 +89,9 @@ export interface DiscordGatewayConfig {
   requestTimeoutMs: number;
   agentTimeoutMs: number;
   maxReconcileMessages: number;
+  marketResearchEnabled: boolean;
+  marketResearchChartsEnabled: boolean;
+  marketResearchPollIntervalMs: number;
 }
 
 function normalizeBaseUrl(raw: string, label: string): string {
@@ -145,5 +155,8 @@ export function loadConfig(
     requestTimeoutMs: value.REQUEST_TIMEOUT_MS,
     agentTimeoutMs: value.AGENT_TIMEOUT_MS,
     maxReconcileMessages: value.DISCORD_MAX_RECONCILE_MESSAGES,
+    marketResearchEnabled: value.MARKET_RESEARCH_ENABLED,
+    marketResearchChartsEnabled: value.MARKET_RESEARCH_CHARTS_ENABLED,
+    marketResearchPollIntervalMs: value.MARKET_RESEARCH_POLL_INTERVAL_MS,
   };
 }

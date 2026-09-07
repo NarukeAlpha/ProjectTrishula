@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { serviceHealth } from "../src/service.js";
+import { describe, expect, it, vi } from "vitest";
+import { pollMarketResearchSafely, serviceHealth } from "../src/service.js";
 
 describe("serviceHealth", () => {
   it("stays healthy but not ready before the Discord token is configured", () => {
@@ -20,7 +20,20 @@ describe("serviceHealth", () => {
           guildCount: 0,
           readyAt: null,
         },
+        marketResearch: {
+          enabled: false,
+          chartsEnabled: false,
+        },
       },
     });
+  });
+
+  it("observes a rejected initial or interval market-research poll", async () => {
+    const onFailure = vi.fn();
+    pollMarketResearchSafely(
+      vi.fn().mockRejectedValue(new Error("publication unavailable")),
+      onFailure,
+    );
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledOnce());
   });
 });

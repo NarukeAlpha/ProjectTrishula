@@ -9,6 +9,8 @@ import type {
   DiscordGatewayStatus,
   DiscordGuildReadModel,
   DiscordLoopStatus,
+  MarketResearchControlStatusReadModel,
+  SaveMarketResearchControlSettings,
 } from "../../convex/types";
 import { formatAge } from "../../shared/formatting/values";
 import { discordInstallUrl } from "./discordInstall";
@@ -312,10 +314,231 @@ function ChannelRouteField({
   );
 }
 
+type MarketResearchAction = "preview" | "publish" | "retry" | "reconcile" | "cancel";
+
+function MarketResearchSettings({
+  guild,
+  status,
+  onSave,
+  onAction,
+}: {
+  guild: DiscordGuildReadModel;
+  status: MarketResearchControlStatusReadModel | undefined;
+  onSave: (settings: SaveMarketResearchControlSettings) => Promise<void>;
+  onAction: (
+    guildId: string,
+    action: MarketResearchAction,
+    editionId?: string,
+  ) => Promise<void>;
+}) {
+  const preferences = status?.preferences;
+  const [forumChannelId, setForumChannelId] = useState(
+    preferences?.forumChannelId ?? "",
+  );
+  const [forumTagId, setForumTagId] = useState(
+    preferences?.forumTagIds[0] ?? "",
+  );
+  const [timezone, setTimezone] = useState(
+    preferences?.timezone ?? "America/New_York",
+  );
+  const [timezoneConfirmed, setTimezoneConfirmed] = useState(
+    preferences?.timezoneConfirmed ?? false,
+  );
+  const [localTime, setLocalTime] = useState(
+    `${String(preferences?.localHour ?? 8).padStart(2, "0")}:${String(preferences?.localMinute ?? 0).padStart(2, "0")}`,
+  );
+  const [includeWeekends, setIncludeWeekends] = useState(
+    preferences?.includeWeekends ?? true,
+  );
+  const [editionDepth, setEditionDepth] = useState<"full" | "concise">(
+    preferences?.editionDepth ?? "full",
+  );
+  const [maximumRankedSetups, setMaximumRankedSetups] = useState(
+    preferences?.maximumRankedSetups ?? 5,
+  );
+  const [enabled, setEnabled] = useState(preferences?.enabled ?? false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const forums = guild.channels.filter((channel) => channel.type === "forum");
+  const selectedForum = forums.find(
+    (channel) => channel.channelId === forumChannelId,
+  );
+  const validTags = (selectedForum?.availableTags ?? []).filter(
+    (tag) => !tag.moderated,
+  );
+  const forumReady = selectedForum !== undefined
+    && selectedForum.canView
+    && selectedForum.canCreateForumPost
+    && selectedForum.canSendInThreads
+    && selectedForum.canReadThreadHistory
+    && (!selectedForum.requiresTag || forumTagId !== "");
+
+  async function save() {
+    const [hourText, minuteText] = localTime.split(":");
+    setBusy(true);
+    setMessage(null);
+    try {
+      await onSave({
+        guildId: guild.guildId,
+        forumChannelId: forumChannelId || null,
+        forumTagIds: forumTagId ? [forumTagId] : [],
+        timezone,
+        timezoneConfirmed,
+        localHour: Number(hourText),
+        localMinute: Number(minuteText),
+        includeWeekends,
+        editionDepth,
+        maximumRankedSetups,
+        enabled,
+      });
+      setMessage("Morning newspaper settings saved.");
+    } catch {
+      setMessage("Morning newspaper settings could not be saved. Check the forum, calendar, and provider gates.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runAction(action: MarketResearchAction) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await onAction(guild.guildId, action, status?.current?.editionId);
+      setMessage(action === "preview" ? "Preview request recorded." : action === "publish" ? "Edition queued." : "Edition updated.");
+    } catch {
+      setMessage("The morning newspaper action could not be completed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="discord-newspaper" aria-labelledby={`newspaper-${guild.guildId}`}>
+      <div className="discord-section-heading">
+        <div>
+          <p className="section-kicker">03 · Scheduled research</p>
+          <h3 id={`newspaper-${guild.guildId}`}>Morning newspaper forum</h3>
+        </div>
+        <span className="status-pill" data-status={preferences?.enabled ? "online" : "offline"}>
+          {preferences?.enabled ? "Enabled" : "Disabled"}
+        </span>
+      </div>
+      <p>
+        Publish one independent research edition in a Discord forum. This route does not change either conversation channel.
+      </p>
+      <div className="discord-newspaper-grid">
+        <label>
+          <span>Morning newspaper forum</span>
+          <select
+            aria-label="Morning newspaper forum"
+            value={forumChannelId}
+            disabled={busy}
+            onChange={(event) => {
+              setForumChannelId(event.target.value);
+              setForumTagId("");
+            }}
+          >
+            <option value="">Choose a forum</option>
+            {forums.map((channel) => (
+              <option
+                key={channel.channelId}
+                value={channel.channelId}
+                disabled={
+                  !channel.canView
+                  || !channel.canCreateForumPost
+                  || !channel.canSendInThreads
+                  || !channel.canReadThreadHistory
+                }
+              >
+                #{channel.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedForum && (selectedForum.requiresTag || validTags.length > 0) && (
+          <label>
+            <span>Forum tag</span>
+            <select
+              aria-label="Morning newspaper tag"
+              value={forumTagId}
+              disabled={busy}
+              onChange={(event) => setForumTagId(event.target.value)}
+            >
+              <option value="">Choose a tag</option>
+              {validTags.map((tag) => (
+                <option key={tag.id} value={tag.id}>{tag.emoji ? `${tag.emoji} ` : ""}{tag.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label>
+          <span>Schedule timezone</span>
+          <select aria-label="Schedule timezone" value={timezone} disabled={busy} onChange={(event) => setTimezone(event.target.value)}>
+            <option value="America/New_York">America/New_York</option>
+            <option value="America/Puerto_Rico">America/Puerto_Rico</option>
+          </select>
+        </label>
+        <label>
+          <span>Local publish time</span>
+          <input aria-label="Local publish time" type="time" value={localTime} disabled={busy} onChange={(event) => setLocalTime(event.target.value)} />
+        </label>
+        <label>
+          <span>Edition depth</span>
+          <select aria-label="Edition depth" value={editionDepth} disabled={busy} onChange={(event) => {
+            const value = event.target.value;
+            if (value === "full" || value === "concise") setEditionDepth(value);
+          }}>
+            <option value="full">Full</option>
+            <option value="concise">Concise</option>
+          </select>
+        </label>
+        <label>
+          <span>Maximum ranked setups</span>
+          <input aria-label="Maximum ranked setups" type="number" min="1" max="5" value={maximumRankedSetups} disabled={busy} onChange={(event) => setMaximumRankedSetups(Number(event.target.value))} />
+        </label>
+      </div>
+      <div className="discord-newspaper-checks">
+        <label><input type="checkbox" checked={timezoneConfirmed} disabled={busy} onChange={(event) => setTimezoneConfirmed(event.target.checked)} />I confirm this schedule timezone.</label>
+        <label><input type="checkbox" checked={includeWeekends} disabled={busy} onChange={(event) => setIncludeWeekends(event.target.checked)} />Publish weekend outlooks.</label>
+        <label><input type="checkbox" checked={enabled} disabled={busy || !forumReady || !timezoneConfirmed} onChange={(event) => setEnabled(event.target.checked)} />Enable the scheduled newspaper.</label>
+        <label><input type="checkbox" checked={preferences?.includeCharts ?? false} disabled />Charts stay disabled until MR-016 acceptance passes.</label>
+      </div>
+      {selectedForum && !forumReady && (
+        <p className="discord-route-warning">This forum is missing a required permission or valid required tag.</p>
+      )}
+      <div className="discord-gateway-actions">
+        <button type="button" disabled={busy} onClick={() => void save()}>Save morning newspaper</button>
+        <button type="button" disabled={busy || !forumReady} onClick={() => void runAction("preview")}>Run preview</button>
+        <button type="button" disabled={busy || !forumReady} onClick={() => void runAction("publish")}>Publish now</button>
+        {status?.current?.status === "queued" && (
+          <button type="button" disabled={busy} onClick={() => void runAction("cancel")}>Cancel queued edition</button>
+        )}
+        {status?.current?.lastErrorCode === "discord_thread_reconcile_ambiguous" && (
+          <button type="button" disabled={busy} onClick={() => void runAction("reconcile")}>Reconcile forum thread</button>
+        )}
+        {status?.current && status.current.lastErrorCode !== "discord_thread_reconcile_ambiguous" && ["failed", "partial", "retry_wait"].includes(status.current.status) && (
+          <button type="button" disabled={busy} onClick={() => void runAction("retry")}>Retry edition</button>
+        )}
+      </div>
+      {status?.current && (
+        <p className="discord-fine-print">
+          Latest: {status.current.editionDate} · {status.current.status} · {status.current.acceptedSourceCount}/{status.current.sourceCount} accepted sources
+          {status.current.forumUrl && <> · <a href={status.current.forumUrl} target="_blank" rel="noreferrer">Open forum thread</a></>}
+          {status.current.lastErrorCode && <> · {status.current.lastErrorCode}</>}
+        </p>
+      )}
+      {message && <p role="status">{message}</p>}
+    </section>
+  );
+}
+
 function GuildCard({
   guild,
   busyPurpose,
   onSetPurpose,
+  marketResearch,
+  onSaveMarketResearch,
+  onMarketResearchAction,
 }: {
   guild: DiscordGuildReadModel;
   busyPurpose: ServerChannelPurpose | null;
@@ -323,6 +546,13 @@ function GuildCard({
     guild: DiscordGuildReadModel,
     purpose: ServerChannelPurpose,
     channelId: string | null,
+  ) => Promise<void>;
+  marketResearch: MarketResearchControlStatusReadModel | undefined;
+  onSaveMarketResearch: (settings: SaveMarketResearchControlSettings) => Promise<void>;
+  onMarketResearchAction: (
+    guildId: string,
+    action: MarketResearchAction,
+    editionId?: string,
   ) => Promise<void>;
 }) {
   const conversationChannel = channelForPurpose("conversation", guild);
@@ -417,6 +647,12 @@ function GuildCard({
           channel…
         </p>
       )}
+      <MarketResearchSettings
+        guild={guild}
+        status={marketResearch}
+        onSave={onSaveMarketResearch}
+        onAction={onMarketResearchAction}
+      />
     </article>
   );
 }
@@ -478,6 +714,9 @@ export function DiscordControlView({
   applicationId,
   model,
   onSetGuildRouting,
+  marketResearch = [],
+  onSaveMarketResearch = async () => undefined,
+  onMarketResearchAction = async () => undefined,
 }: {
   applicationId?: string;
   model: DiscordControlPlaneReadModel;
@@ -485,6 +724,13 @@ export function DiscordControlView({
     guildId: string,
     conversationChannelId: string | null,
     researchLogChannelId: string | null,
+  ) => Promise<void>;
+  marketResearch?: MarketResearchControlStatusReadModel[];
+  onSaveMarketResearch?: (settings: SaveMarketResearchControlSettings) => Promise<void>;
+  onMarketResearchAction?: (
+    guildId: string,
+    action: MarketResearchAction,
+    editionId?: string,
   ) => Promise<void>;
 }) {
   const [busyPurpose, setBusyPurpose] = useState<ServerChannelPurpose | null>(
@@ -593,6 +839,9 @@ export function DiscordControlView({
                 guild={selectedGuild}
                 busyPurpose={busyPurpose}
                 onSetPurpose={setPurpose}
+                marketResearch={marketResearch.find((status) => status.guildId === selectedGuild.guildId)}
+                onSaveMarketResearch={onSaveMarketResearch}
+                onMarketResearchAction={onMarketResearchAction}
               />
               <ActivityFeed guild={selectedGuild} events={selectedActivity} />
             </>
@@ -609,7 +858,13 @@ export function DiscordControlPage({
   applicationId?: string;
 }) {
   const model = useQuery(publicApi.discord.getControlPlane, {});
+  const marketResearch = useQuery(publicApi.marketResearch.getControlStatuses, {});
   const setGuildRouting = useMutation(publicApi.discord.setGuildRouting);
+  const saveMarketResearch = useMutation(publicApi.marketResearch.saveControlSettings);
+  const manualMarketResearch = useMutation(publicApi.marketResearch.manualTrigger);
+  const retryMarketResearch = useMutation(publicApi.marketResearch.retryEdition);
+  const reconcileMarketResearch = useMutation(publicApi.marketResearch.requestReconciliation);
+  const cancelMarketResearch = useMutation(publicApi.marketResearch.cancelUnstarted);
 
   if (model === undefined) {
     return (
@@ -626,6 +881,7 @@ export function DiscordControlPage({
     <DiscordControlView
       applicationId={applicationId}
       model={model}
+      marketResearch={marketResearch ?? []}
       onSetGuildRouting={(
         guildId,
         conversationChannelId,
@@ -637,6 +893,29 @@ export function DiscordControlPage({
           researchLogChannelId,
         }).then(() => undefined)
       }
+      onSaveMarketResearch={(settings) => saveMarketResearch(settings).then(() => undefined)}
+      onMarketResearchAction={(guildId, action, editionId) => {
+        if (action === "preview") {
+          return manualMarketResearch({
+            guildId,
+            dryRun: true,
+            publish: false,
+            regeneratePublishedEdition: false,
+          }).then(() => undefined);
+        }
+        if (action === "publish") {
+          return manualMarketResearch({
+            guildId,
+            dryRun: false,
+            publish: true,
+            regeneratePublishedEdition: false,
+          }).then(() => undefined);
+        }
+        if (!editionId) return Promise.reject(new Error("Edition is unavailable."));
+        if (action === "retry") return retryMarketResearch({ editionId }).then(() => undefined);
+        if (action === "reconcile") return reconcileMarketResearch({ editionId }).then(() => undefined);
+        return cancelMarketResearch({ editionId }).then(() => undefined);
+      }}
     />
   );
 }

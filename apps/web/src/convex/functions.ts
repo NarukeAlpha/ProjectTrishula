@@ -7,6 +7,9 @@ import type {
   DiscordChannelRole,
   DiscordControlPlaneReadModel,
   DiscordGuildRoutingReadModel,
+  MarketResearchControlStatusReadModel,
+  MarketResearchPreferencesReadModel,
+  SaveMarketResearchControlSettings,
   MessageReadModel,
   Page,
   PortfolioSnapshotReadModel,
@@ -111,6 +114,44 @@ export const publicApi = {
       },
       DiscordGuildRoutingReadModel
     >("discord:setGuildRouting"),
+  },
+  marketResearch: {
+    getControlStatuses: makeFunctionReference<
+      "query",
+      NoArguments,
+      MarketResearchControlStatusReadModel[]
+    >("market_research:getControlStatuses"),
+    saveControlSettings: makeFunctionReference<
+      "mutation",
+      SaveMarketResearchControlSettings,
+      MarketResearchPreferencesReadModel
+    >("market_research:saveControlSettings"),
+    manualTrigger: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        dryRun: boolean;
+        publish: boolean;
+        regeneratePublishedEdition: boolean;
+      },
+      | { kind: "preview"; previewId: string; status: "failed"; safeFailure: "market_data_not_configured" }
+      | { kind: "edition"; editionId: string; duplicate: boolean }
+    >("market_research:manualTrigger"),
+    retryEdition: makeFunctionReference<
+      "mutation",
+      { editionId: string },
+      { status: string; editionId: string }
+    >("market_research:retryEdition"),
+    requestReconciliation: makeFunctionReference<
+      "mutation",
+      { editionId: string },
+      { status: "retry_wait"; editionId: string }
+    >("market_research:requestReconciliation"),
+    cancelUnstarted: makeFunctionReference<
+      "mutation",
+      { editionId: string },
+      { status: "cancelled" }
+    >("market_research:cancelUnstarted"),
   },
   trading: {
     getDashboard: makeFunctionReference<

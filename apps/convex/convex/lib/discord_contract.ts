@@ -112,6 +112,17 @@ const channel = z.object({
   canView: z.boolean(),
   canSend: z.boolean(),
   canReadHistory: z.boolean(),
+  canCreateForumPost: z.boolean(),
+  canSendInThreads: z.boolean(),
+  canReadThreadHistory: z.boolean(),
+  canAttachFiles: z.boolean(),
+  requiresTag: z.boolean(),
+  availableTags: z.array(z.object({
+    id,
+    name: z.string().trim().min(1).max(100),
+    moderated: z.boolean(),
+    emoji: z.string().trim().min(1).max(100).optional(),
+  }).strict()).max(20),
 }).strict();
 const guild = z.object({
   guildId: id,
@@ -138,6 +149,7 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     actorId: id,
     guildId: id,
     channelId: id,
+    parentChannelId: id.optional(),
     messageId: id,
     authorId: id,
     authorName: z.string().trim().min(1).max(200),
