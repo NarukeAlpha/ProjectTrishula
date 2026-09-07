@@ -4,6 +4,10 @@ import {
   ConvexDiscordClient,
   type RunIdentity,
 } from "../src/convex/client.js";
+import type {
+  PortableCheckpointRequest,
+  PortableCheckpointResponse,
+} from "../src/personality-contracts.js";
 
 const config: DiscordGatewayConfig = {
   environment: "test",
@@ -94,5 +98,104 @@ describe("Convex Discord heartbeats", () => {
       },
     ]);
     expect(protocolHeaders).toEqual(["durable-v1", "durable-v1"]);
+  });
+});
+
+describe("Convex portable checkpoints", () => {
+  it("forwards a validated opaque artifact only on the durable protocol", async () => {
+    let body: unknown;
+    let protocol: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        // SAFETY: The client serializes this request body as JSON immediately before fetch.
+        body = JSON.parse(String(init?.body)) as unknown;
+        protocol = new Headers(init?.headers).get("x-trishula-discord-protocol");
+        return new Response(JSON.stringify({
+          ok: true,
+          operation: "storePortableCheckpoint",
+          result: {
+            accepted: true,
+            duplicate: false,
+            checkpointId: "checkpoint:native:1",
+            status: "active",
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    const request: PortableCheckpointRequest = {
+      profile: "portable_checkpoint",
+      requestId: "checkpoint:native:1",
+      conversation: {
+        ownerId: "owner-1",
+        ownerBindingVersion: 1,
+        guildId: "123456789012345678",
+        conversationId: "discord:123456789012345678",
+        epoch: 1,
+        generation: 2,
+        routingGeneration: 3,
+        revision: 4,
+        personalityVersion: "trishula-discord-v1",
+        systemPromptHash: "a".repeat(64),
+        capabilityProfileHash: "b".repeat(64),
+      },
+      sourceContextHash: "c".repeat(64),
+      compactedThroughOrdinal: 3,
+      sourceEvents: [{
+        eventId: "event:3",
+        ordinal: 3,
+        role: "human",
+        authorId: "234567890123456789",
+        content: "Keep the correction.",
+        createdAt: "2026-09-07T12:00:00.000Z",
+      }],
+      retainedRecentEventIds: ["event:4"],
+      inputEstimatedTokens: 100,
+    };
+    const response: PortableCheckpointResponse = {
+      profile: "portable_checkpoint",
+      checkpointId: request.requestId,
+      portableSummary: {
+        participants: [{ authorId: "234567890123456789" }],
+        acceptedFacts: [],
+        corrections: [],
+        unresolvedQuestions: [],
+        commitments: [],
+        conversationPreferences: [],
+        sourceFreshnessNotes: [],
+      },
+      estimator: {
+        exact: false,
+        version: "utf8-bytes-div-3-plus-message-overhead:v1",
+        inputEstimatedTokens: 100,
+        outputEstimatedTokens: 20,
+        estimatedSavedTokens: 80,
+        serializedBytes: 100,
+      },
+      nativeCompaction: {
+        schemaVersion: 1,
+        implementationVersion: "responses-compaction-v2-pi-0_84_1-v1",
+        provider: "openai-codex",
+        model: "gpt-5.6-luna",
+        replacementHistory: [{ type: "compaction", encrypted_content: "opaque" }],
+        artifactSha256: "d".repeat(64),
+        serializedBytes: 52,
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+        requestEvidence: {
+          store: false,
+          transport: "sse",
+          betaFeature: "remote_compaction_v2",
+          endpoint: "chatgpt-codex-responses",
+        },
+      },
+    };
+
+    const client = new ConvexDiscordClient(config, "discord-instance-1");
+    await expect(client.storePortableCheckpoint(request, response)).resolves.toBeUndefined();
+    expect(protocol).toBe("durable-v1");
+    expect(body).toMatchObject({
+      operation: "storePortableCheckpoint",
+      nativeCompaction: response.nativeCompaction,
+    });
   });
 });

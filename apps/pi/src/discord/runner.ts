@@ -6,7 +6,11 @@ import {
   SettingsManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { JsonValue, StopReason } from "@earendil-works/pi-ai";
+import type {
+  JsonValue,
+  ModelsSimpleStreamOptions,
+  StopReason,
+} from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { z } from "zod";
 import type { ExecutorReadiness } from "../execution/executor.js";
@@ -30,6 +34,7 @@ import {
   type DiscordFrontmanPlanRequest,
   type DiscordFrontmanPlanResponse,
   type DiscordFrontmanResumeRequest,
+  type DiscordNativeCheckpoint,
   type DiscordPortableCheckpointRequest,
   type DiscordReplyRequest,
   type DiscordResearchRequest,
@@ -40,6 +45,12 @@ import {
 } from "./contracts.js";
 import { buildPortableCheckpointResponse } from "./compaction.js";
 import { LunaConversationStore, type LunaConversationIdentity } from "./conversations.js";
+import {
+  generateNativeCompaction,
+  injectNativeCheckpoint,
+  type GenerateNativeCompactionOptions,
+  type NativeCheckpointCompatibilityIdentity,
+} from "./native-compaction.js";
 import {
   DiscordAgentOutputError,
   type DiscordAgentOutputErrorCode,
@@ -953,6 +964,32 @@ const DEFAULT_DISCORD_RUNNER_CONFIG: DiscordRunnerConfig = {
 
 type DiscordModelRole = "luna" | "sol";
 
+interface NativeCompactionTurnState {
+  enabled: boolean;
+  applied: boolean;
+  fallbackUsed: boolean;
+  checkpoint?: DiscordNativeCheckpoint;
+  expected?: NativeCheckpointCompatibilityIdentity;
+}
+
+function nativePayloadInjector(
+  existingOnPayload: ModelsSimpleStreamOptions["onPayload"],
+  checkpoint: DiscordNativeCheckpoint,
+  expected: NativeCheckpointCompatibilityIdentity,
+  markApplied: () => void,
+): NonNullable<ModelsSimpleStreamOptions["onPayload"]> {
+  return async (payload, payloadModel) => {
+    const priorResult = await existingOnPayload?.(payload, payloadModel);
+    const injection = injectNativeCheckpoint(
+      z.json().parse(priorResult ?? payload),
+      checkpoint,
+      expected,
+    );
+    if (injection.applied) markApplied();
+    return injection.payload;
+  };
+}
+
 function lunaConversationIdentity(
   request: DiscordFrontmanPlanRequest | DiscordFrontmanResumeRequest,
 ): LunaConversationIdentity {
@@ -978,6 +1015,7 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
   >();
   private readonly imageLoader = new DiscordImageInputLoader();
   private readonly lunaConversations: LunaConversationStore;
+  private readonly nativeTurnStates = new WeakMap<AgentSession, NativeCompactionTurnState>();
   private initializationError: string | undefined;
   private disposed = false;
 
@@ -985,9 +1023,6 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
     private readonly runtime: CodexRuntime,
     private readonly config: DiscordRunnerConfig,
   ) {
-    if (config.trishulaNativeCompactionEnabled) {
-      throw new Error("Native Pi compaction is not compatible with the locked 0.84.1 profile.");
-    }
     this.lunaConversations = new LunaConversationStore({
       idleTtlMs: config.trishulaHotSessionIdleMs,
       reuseEnabled: config.trishulaHotSessionReuseEnabled,
@@ -1131,9 +1166,34 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
         sessionManager: SessionManager.inMemory(IN_MEMORY_RUNTIME_CWD),
         settingsManager,
       });
+      const nativeTurnState: NativeCompactionTurnState = {
+        enabled: false,
+        applied: false,
+        fallbackUsed: false,
+      };
+      this.nativeTurnStates.set(session, nativeTurnState);
       const standardStream = session.agent.streamFunction;
       session.agent.streamFunction = (activeModel, context, options) => {
-        const priorityOptions = { ...options, serviceTier: profile.serviceTier };
+        const existingOnPayload = options?.onPayload;
+        const checkpoint = nativeTurnState.checkpoint;
+        const expected = nativeTurnState.expected;
+        const priorityOptions = nativeTurnState.enabled
+          && checkpoint !== undefined
+          && expected !== undefined
+          ? {
+              ...options,
+              serviceTier: profile.serviceTier,
+              transport: "sse" as const,
+              onPayload: nativePayloadInjector(
+                existingOnPayload,
+                checkpoint,
+                expected,
+                () => {
+                  nativeTurnState.applied = true;
+                },
+              ),
+            }
+          : { ...options, serviceTier: profile.serviceTier };
         return standardStream(activeModel, context, priorityOptions);
       };
       const activeToolNames = session.getActiveToolNames().sort();
@@ -1167,6 +1227,36 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
           },
         );
     const session = acquired.session;
+    const nativeTurnState = this.nativeTurnStates.get(session);
+    if (nativeTurnState === undefined) {
+      throw new Error("Discord session is missing native compaction state.");
+    }
+    nativeTurnState.enabled = false;
+    nativeTurnState.applied = false;
+    nativeTurnState.fallbackUsed = false;
+    delete nativeTurnState.checkpoint;
+    delete nativeTurnState.expected;
+    if (
+      this.config.trishulaNativeCompactionEnabled
+      && (request.profile === "frontman_plan" || request.profile === "frontman_resume")
+      && request.conversation.activeCheckpointId !== undefined
+      && request.durableContext.nativeCheckpoint !== undefined
+    ) {
+      nativeTurnState.enabled = true;
+      nativeTurnState.checkpoint = request.durableContext.nativeCheckpoint;
+      nativeTurnState.expected = {
+        checkpointId: request.conversation.activeCheckpointId,
+        ownerId: request.conversation.ownerId,
+        ownerBindingVersion: request.conversation.ownerBindingVersion,
+        guildId: request.conversation.guildId,
+        conversationId: request.conversation.conversationId,
+        epoch: request.conversation.epoch,
+        sourceRevision: request.conversation.revision,
+        personalityVersion: request.conversation.personalityVersion,
+        systemPromptHash: request.conversation.systemPromptHash,
+        capabilityProfileHash: request.conversation.capabilityProfileHash,
+      };
+    }
     const abort = () => {
       void session.abort();
     };
@@ -1198,13 +1288,30 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
           if (attempt === "initial" && images.length > 0) {
             promptOptions.images = images;
           }
-          await session.prompt(
-            attempt === "initial"
-              ? prompt
-              : outputRepairPrompt(failureCode ?? "invalid_response_schema"),
-            promptOptions,
-          );
-          return assistantText(session, signal);
+          const activePrompt = attempt === "initial"
+            ? prompt
+            : outputRepairPrompt(failureCode ?? "invalid_response_schema");
+          const runPrompt = async () => {
+            await session.prompt(activePrompt, promptOptions);
+            return assistantText(session, signal);
+          };
+          try {
+            return await runPrompt();
+          } catch (error) {
+            if (
+              !nativeTurnState.enabled
+              || !nativeTurnState.applied
+              || nativeTurnState.fallbackUsed
+              || signal?.aborted
+            ) {
+              throw error;
+            }
+            nativeTurnState.enabled = false;
+            nativeTurnState.fallbackUsed = true;
+            session.agent.reset();
+            if (attempt === "repair") session.setActiveToolsByName([]);
+            return runPrompt();
+          }
         },
         () => trustedResearchChart,
         {
@@ -1214,8 +1321,24 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
           ambientMinimumAdditiveValue: this.config.trishulaAmbientMinAdditiveValue,
         },
       );
+      if (request.profile === "portable_checkpoint" && result.profile === "portable_checkpoint") {
+        if (this.config.trishulaNativeCompactionEnabled) {
+          const nativeOptions: GenerateNativeCompactionOptions = {
+            runtime: await this.runtime.get(),
+            model,
+            request,
+            instructions: portableCheckpointSystemPrompt,
+          };
+          if (signal !== undefined) nativeOptions.signal = signal;
+          const nativeCompaction = await generateNativeCompaction(nativeOptions);
+          result = { ...result, nativeCompaction };
+        }
+      }
       return result;
     } finally {
+      nativeTurnState.enabled = false;
+      delete nativeTurnState.checkpoint;
+      delete nativeTurnState.expected;
       signal?.removeEventListener("abort", abort);
       if (session.isStreaming) await session.abort();
       if (lunaIdentity === undefined) {

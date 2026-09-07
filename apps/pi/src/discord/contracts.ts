@@ -360,12 +360,96 @@ export const portableConversationSummarySchema = z
   })
   .strict();
 
+const nativeRetainedUserMessageSchema = z.object({
+  type: z.literal("message"),
+  role: z.literal("user"),
+  content: z.array(z.object({
+    type: z.literal("input_text"),
+    text: z.string().min(1).max(16_384),
+  }).strict()).min(1).max(4),
+}).strict();
+
+const nativeCompactionItemSchema = z.object({
+  type: z.literal("compaction"),
+}).passthrough();
+
+export const discordNativeReplacementHistorySchema = z.array(z.json())
+  .min(1)
+  .max(2_001)
+  .superRefine((history, context) => {
+    let compactionItems = 0;
+    for (const [index, item] of history.entries()) {
+      const compaction = nativeCompactionItemSchema.safeParse(item);
+      if (compaction.success) {
+        compactionItems += 1;
+        if (index !== history.length - 1) {
+          context.addIssue({
+            code: "custom",
+            path: [index],
+            message: "The opaque compaction item must be last.",
+          });
+        }
+        continue;
+      }
+      if (!nativeRetainedUserMessageSchema.safeParse(item).success) {
+        context.addIssue({
+          code: "custom",
+          path: [index],
+          message: "Replacement history contains an unsupported item.",
+        });
+      }
+    }
+    if (compactionItems !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "Replacement history requires exactly one opaque compaction item.",
+      });
+    }
+  });
+
+export const discordNativeCompactionArtifactSchema = z.object({
+  schemaVersion: z.literal(1),
+  implementationVersion: z.literal("responses-compaction-v2-pi-0_84_1-v1"),
+  provider: z.literal("openai-codex"),
+  model: z.literal("gpt-5.6-luna"),
+  replacementHistory: discordNativeReplacementHistorySchema,
+  artifactSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  serializedBytes: z.number().int().positive().max(512 * 1_024),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  }).strict(),
+  requestEvidence: z.object({
+    store: z.literal(false),
+    transport: z.literal("sse"),
+    betaFeature: z.literal("remote_compaction_v2"),
+    endpoint: z.literal("chatgpt-codex-responses"),
+  }).strict(),
+}).strict();
+
+export const discordNativeCheckpointSchema = z.object({
+  checkpointId: stableId,
+  ownerId: stableId,
+  ownerBindingVersion: z.number().int().positive(),
+  guildId: snowflake,
+  conversationId: z.string().regex(/^discord:\d{1,32}$/),
+  epoch: z.number().int().nonnegative(),
+  sourceRevision: z.number().int().positive(),
+  sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
+  personalityVersion: stableId,
+  systemPromptHash: z.string().regex(/^[a-f0-9]{64}$/),
+  capabilityProfileHash: z.string().regex(/^[a-f0-9]{64}$/),
+  artifact: discordNativeCompactionArtifactSchema,
+}).strict();
+
 export const durableConversationContextSchema = z
   .object({
     sourceRevision: z.number().int().nonnegative(),
     sourceHumanRevision: z.number().int().nonnegative(),
     activeCheckpointId: stableId.optional(),
     portableSummary: portableConversationSummarySchema.optional(),
+    nativeCheckpoint: discordNativeCheckpointSchema.optional(),
     recentEvents: z.array(canonicalConversationMessageSchema).max(2_000),
     tail: z.object({
       estimatorVersion: z.literal("utf8-bytes-div-3-plus-message-overhead:v1"),
@@ -427,6 +511,7 @@ export const discordPortableCheckpointRequestSchema = z
     sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
     compactedThroughOrdinal: z.number().int().positive(),
     previousSummary: portableConversationSummarySchema.optional(),
+    previousNativeCheckpoint: discordNativeCheckpointSchema.optional(),
     sourceEvents: z.array(discordPortableCheckpointEventSchema).min(1).max(5_000),
     retainedRecentEventIds: z.array(stableId).max(2_000),
     inputEstimatedTokens: z.number().int().positive(),
@@ -489,6 +574,7 @@ export const discordPortableCheckpointResponseSchema = z
       estimatedSavedTokens: z.number().int(),
       serializedBytes: z.number().int().positive().max(512 * 1_024),
     }).strict(),
+    nativeCompaction: discordNativeCompactionArtifactSchema.optional(),
   })
   .strict();
 
@@ -789,6 +875,10 @@ export type DiscordPortableCheckpointRequest = z.infer<
 export type DiscordPortableCheckpointResponse = z.infer<
   typeof discordPortableCheckpointResponseSchema
 >;
+export type DiscordNativeCompactionArtifact = z.infer<
+  typeof discordNativeCompactionArtifactSchema
+>;
+export type DiscordNativeCheckpoint = z.infer<typeof discordNativeCheckpointSchema>;
 export type DiscordTriageRequest = z.infer<typeof discordTriageRequestSchema>;
 export type DiscordTriageResponse = z.infer<typeof discordTriageResponseSchema>;
 export type DiscordResearchRequest = z.infer<

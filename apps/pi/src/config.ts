@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { discordCompactionThreshold } from "./discord/compaction.js";
+import { DISCORD_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION } from "./discord/native-compaction.js";
 
 const positiveInteger = z.coerce.number().int().positive();
 const stableActorId = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
@@ -51,9 +52,9 @@ const environmentSchema = z.object({
     .transform((value) => value === "true"),
   TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: z.enum(["true", "false"]).default("false")
     .transform((value) => value === "true"),
-  // Native opaque compaction is locked off until the Pi 0.84.1 Codex OAuth spike passes.
-  TRISHULA_NATIVE_COMPACTION_ENABLED: z.literal("false").default("false")
-    .transform((): false => false),
+  TRISHULA_NATIVE_COMPACTION_ENABLED: z.enum(["true", "false"]).default("false")
+    .transform((value) => value === "true"),
+  TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION: z.string().trim().min(1).optional(),
   BROKER_MODE: z.enum(["mock", "robinhood"]).default("mock"),
   ROBINHOOD_OAUTH_REDIRECT_URI: z.string().url().optional(),
   ROBINHOOD_OAUTH_CLIENT_ID: z.string().trim().min(1).optional(),
@@ -102,7 +103,7 @@ export interface AppConfig {
   trishulaDurableConversationsEnabled: boolean;
   trishulaHotSessionReuseEnabled: boolean;
   trishulaPortableCheckpointsEnabled: boolean;
-  trishulaNativeCompactionEnabled: false;
+  trishulaNativeCompactionEnabled: boolean;
   brokerMode: "mock" | "robinhood";
   robinhoodOAuthRedirectUri: string;
   robinhoodOAuthClientId?: string;
@@ -129,6 +130,23 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
   if (value.PI_DISCORD_SHARED_SECRET === value.SERVICE_SHARED_SECRET) {
     throw new Error("PI_DISCORD_SHARED_SECRET must be independent from SERVICE_SHARED_SECRET.");
+  }
+  if (
+    value.TRISHULA_NATIVE_COMPACTION_ENABLED
+    && value.TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION
+      !== DISCORD_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION
+  ) {
+    throw new Error(
+      "TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION must match the reviewed live probe before native compaction is enabled.",
+    );
+  }
+  if (
+    value.TRISHULA_NATIVE_COMPACTION_ENABLED
+    && !value.TRISHULA_PORTABLE_CHECKPOINTS_ENABLED
+  ) {
+    throw new Error(
+      "TRISHULA_PORTABLE_CHECKPOINTS_ENABLED must be true before native compaction is enabled.",
+    );
   }
   if (value.BROKER_MODE === "robinhood" && value.PI_CREDENTIAL_ENCRYPTION_KEY === undefined) {
     throw new Error("PI_CREDENTIAL_ENCRYPTION_KEY is required in Robinhood mode.");
