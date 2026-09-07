@@ -122,8 +122,15 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
   }
 
   async complete(result: MarketResearchJobResult, signal?: AbortSignal): Promise<boolean> {
-    const response = await this.request(result.editionId, { operation: "complete", result }, signal);
-    return response.accepted === true;
+    try {
+      const response = await this.request(result.editionId, { operation: "complete", result }, signal);
+      return response.accepted === true;
+    } catch (error) {
+      if (error instanceof Error && error.message === "market_research_convex_rejected") {
+        throw new Error("composition_schema_invalid", { cause: error });
+      }
+      throw error;
+    }
   }
 
   async fail(

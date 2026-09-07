@@ -25,6 +25,7 @@ function starterContent(edition: MorningPaperEditionV1): string {
   const dataWarning = edition.dataQuality[0]?.text;
   return [
     `${edition.editionLabel} - ${edition.editionDate}`,
+    `Edition ID: MR-${edition.editionId}`,
     `As of ${edition.asOf} | ${edition.regime}`,
     ...edition.regimeLines.map((line) => line.text),
     "Stories",
@@ -34,7 +35,6 @@ function starterContent(edition: MorningPaperEditionV1): string {
     "Long-only research board",
     setups,
     ...(dataWarning ? [`Data quality: ${dataWarning}`] : []),
-    `Edition ID: MR-${edition.editionId}`,
   ].join("\n");
 }
 
@@ -45,7 +45,7 @@ export function materializeDeliveryParts(
   const starterParts = fullStarter.length <= 2_000
     ? [fullStarter]
     : splitSemanticContent(fullStarter, MAX_REPLY_BODY_CHARACTERS);
-  const starter = starterParts[0];
+  const starter = starterParts[0]?.trim();
   if (starter === undefined) throw new Error("composition_schema_invalid");
   const chartRequestsBySection = new Map<string, string[]>();
   for (const request of edition.chartRequests) {
@@ -83,7 +83,7 @@ export function materializeDeliveryParts(
   rawReplies.forEach((reply, index) => {
     const sequence = index + 1;
     const prefix = `Part ${sequence}/${total} - ${reply.heading}\n`;
-    const content = `${prefix}${reply.content}`;
+    const content = `${prefix}${reply.content}`.trim();
     if (content.length > 2_000) throw new Error("composition_schema_invalid");
     deliveries.push(deliveryPartSchema.parse({
       deliveryId: `${edition.editionId}:reply:${String(sequence).padStart(4, "0")}`,

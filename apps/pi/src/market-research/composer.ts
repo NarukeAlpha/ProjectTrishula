@@ -92,7 +92,11 @@ export function validateComposedEdition(
   evidence: MorningPaperEvidenceV1,
   preferences: MarketResearchPreferencesV1,
 ): MorningPaperEditionV1 {
-  const edition = morningPaperEditionSchema.parse(value);
+  const parsed = morningPaperEditionSchema.parse(value);
+  const edition = {
+    ...parsed,
+    sections: parsed.sections.map((section) => ({ ...section, sourceIds: [...new Set(section.sourceIds)] })),
+  };
   const operationalUnavailableEdition = edition.editionLabel === "Data unavailable"
     && evidence.evidence.some((item) =>
       item.evidenceId === "operational-market-data-unavailable"
@@ -121,6 +125,9 @@ export function validateComposedEdition(
   }
   const allowedDynamic = new Set(preferences.discoverySymbols);
   const primarySymbols = new Set(preferences.primarySymbols);
+  if (edition.tickerDossiers.some((dossier) => !primarySymbols.has(dossier.symbol) && !allowedDynamic.has(dossier.symbol))) {
+    throw new Error("composition_schema_invalid");
+  }
   if (edition.primaryBoard.some((setup) => !primarySymbols.has(setup.symbol))) {
     throw new Error("composition_schema_invalid");
   }

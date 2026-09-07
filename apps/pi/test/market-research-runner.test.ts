@@ -395,6 +395,7 @@ describe("agent-led newspaper research", () => {
     edition.topStories = [{ text: "Material story. ".repeat(100), sourceIds: edition.sourceIds }];
     const deliveries = materializeDeliveryParts(edition);
     expect(deliveries.every((part) => part.content.length <= 2_000)).toBe(true);
+    expect(deliveries[0]?.content).toContain(`Edition ID: MR-${edition.editionId}`);
     expect(deliveries.some((part) => part.content.includes("Market summary continued"))).toBe(true);
     expect(deliveries.map((part) => part.content).join("\n")).toContain("Material story.");
     expect(deliveries.map((part) => part.sequence)).toEqual(deliveries.map((_, index) => index));
@@ -407,6 +408,7 @@ describe("agent-led newspaper research", () => {
     edition.topStories = [{ text, sourceIds: edition.sourceIds }];
     const deliveries = materializeDeliveryParts(morningPaperEditionSchema.parse(edition));
     expect(deliveries.every((part) => part.content.length <= 2_000)).toBe(true);
+    expect(deliveries[0]?.content).toContain(`Edition ID: MR-${edition.editionId}`);
     expect(deliveries.map((part) => part.content).join("\n")).toContain("Reported market context.");
   });
 

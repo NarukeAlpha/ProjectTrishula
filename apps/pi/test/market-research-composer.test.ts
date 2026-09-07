@@ -330,11 +330,19 @@ describe("agent-led morning newspaper composer", () => {
     expect(validateComposedEdition(edition, packet, preferences)).toEqual(edition);
   });
 
+  it("deduplicates section citations before the backend handoff", () => {
+    const packet = evidence([source]);
+    const edition = usefulEdition(packet);
+    edition.sections[0]!.sourceIds = [source.evidenceId, source.evidenceId];
+    expect(validateComposedEdition(edition, packet, preferences).sections[0]?.sourceIds).toEqual([source.evidenceId]);
+  });
+
   it("keeps frozen identity, primary universe, and research-only language enforced", () => {
     const packet = evidence([source]);
     const edition = usefulEdition(packet);
     expect(() => validateComposedEdition({ ...edition, editionId: "different-edition" }, packet, preferences)).toThrow("composition_schema_invalid");
     expect(() => validateComposedEdition({ ...edition, primaryBoard: [setup("TSLA")] }, packet, preferences)).toThrow("composition_schema_invalid");
+    expect(() => validateComposedEdition({ ...edition, tickerDossiers: [{ ...edition.tickerDossiers[0], symbol: "UNLISTED" }] }, packet, preferences)).toThrow("composition_schema_invalid");
     expect(() => validateComposedEdition({ ...edition, topStories: [{ text: "I placed an order.", sourceIds: [source.evidenceId] }] }, packet, preferences)).toThrow("composition_schema_invalid");
   });
 });
