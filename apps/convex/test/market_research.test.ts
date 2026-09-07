@@ -18,6 +18,7 @@ import {
   marketSessionCloseInstant,
   mayDeleteRetainedEvidence,
   nextRetryAt,
+  publicationCandidateDisposition,
   resolveCalendarWindow,
   resolveMarketSession,
   scheduleDayEnabled,
@@ -362,6 +363,7 @@ describe("market-research recovery and record bounds", () => {
     expect(isNonGlobalIpHostname("fe80::1")).toBe(true);
     expect(isNonGlobalIpHostname("2001:2::1")).toBe(true);
     expect(isNonGlobalIpHostname("2001:db8::1")).toBe(true);
+    expect(isNonGlobalIpHostname("4000::1")).toBe(true);
     expect(isNonGlobalIpHostname("2606:4700:4700::1111")).toBe(false);
     expect(isNonGlobalIpHostname("93.184.216.34")).toBe(false);
     expect(isNonGlobalIpHostname("www.nyse.com")).toBe(false);
@@ -381,6 +383,30 @@ describe("market-research recovery and record bounds", () => {
       { sequence: 5, status: "pending" },
       { sequence: 6, status: "pending" },
     ])).toBe(4);
+  });
+
+  it("defers blocked publication rows and terminalizes impossible reply state", () => {
+    expect(publicationCandidateDisposition({
+      deliverySequence: 51,
+      deliveryKind: "reply",
+      firstMissingSequence: 0,
+      threadId: undefined,
+      starterMessageId: undefined,
+    })).toBe("defer_until_prior_delivery");
+    expect(publicationCandidateDisposition({
+      deliverySequence: 1,
+      deliveryKind: "reply",
+      firstMissingSequence: 1,
+      threadId: undefined,
+      starterMessageId: undefined,
+    })).toBe("terminal_invalid_state");
+    expect(publicationCandidateDisposition({
+      deliverySequence: 0,
+      deliveryKind: "starter",
+      firstMissingSequence: 0,
+      threadId: undefined,
+      starterMessageId: undefined,
+    })).toBe("ready");
   });
 
   it("expires only terminal evidence and preserves final summaries and receipts", () => {
