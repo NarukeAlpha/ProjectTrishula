@@ -41,10 +41,10 @@ Luna is locked to `gpt-5.6-luna`, `xhigh`, and the priority service tier. Sol is
 
 - `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` selects the durable gateway path. Keep the Discord and Pi values aligned during rollout.
 - `TRISHULA_HOT_SESSION_REUSE_ENABLED` disables or enables only the Pi in-memory cache. Durable Convex continuity remains authoritative.
-- `TRISHULA_NATIVE_COMPACTION_ENABLED` is hard-locked to `false`. The reviewed native opaque-compaction adapter is not compatible with the pinned Pi `0.84.1` runtime.
+- `TRISHULA_NATIVE_COMPACTION_ENABLED` defaults to `false`. Pi accepts `true` only when portable checkpoints are also enabled and `TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION` matches the reviewed live-probe version.
 - `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` defaults to `false`. When both Pi and the gateway set it to `true`, the gateway can generate and compare-and-set activate first-party portable checkpoints at stable boundaries.
 
-Portable checkpoint generation, bounded storage, expiry, source validation, compare-and-set activation, and restart reconstruction exist. Keep the opt-in flag off until the live long-context and storage-protection gates in `docs/personality-rollout-readiness.md` pass. Checkpoint storage is labeled `platform_default_unverified`; the repository does not claim verified encryption at rest. Native opaque compaction remains unavailable.
+Portable checkpoint generation, bounded staged storage, expiry, source validation, compare-and-set activation, and restart reconstruction exist. The first-party native adapter uses Pi `0.84.1` public request hooks and the reviewed Codex remote-compaction SSE contract. Native fields use the negotiated `native-v2` gateway protocol; older protocol projections remain strict. Keep both compaction paths off until their live continuity, storage-protection, and measurement gates in `docs/personality-rollout-readiness.md` pass. Checkpoint storage is labeled `platform_default_unverified`; the repository does not claim verified encryption at rest.
 
 The owner can reset a server conversation. Reset keeps `conversationId`, increments the epoch and fences, cancels old unsent work, and starts clean memory. Reset does not delete source Discord data. Privacy deletion is a separate owner-authorized operation that fences active work and removes retained conversation data.
 
@@ -86,6 +86,7 @@ Pi:
 - `TRISHULA_DURABLE_CONVERSATIONS_ENABLED=true`
 - `TRISHULA_HOT_SESSION_REUSE_ENABLED=true`
 - `TRISHULA_NATIVE_COMPACTION_ENABLED=false`
+- `TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION` must remain unset until the reviewed native probe passes
 - `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED=false`
 
 Web:
