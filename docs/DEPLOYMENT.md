@@ -110,7 +110,8 @@ Pi service:
 | `PI_AUTH_PATH` | `/data/auth.json` on the mounted volume |
 | `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` | `true`; align with the Discord service |
 | `TRISHULA_HOT_SESSION_REUSE_ENABLED` | `true` initially; can be disabled independently |
-| `TRISHULA_NATIVE_COMPACTION_ENABLED` | `false` only |
+| `TRISHULA_NATIVE_COMPACTION_ENABLED` | `false` until the reviewed native live probe and storage gates pass |
+| `TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION` | Unset until the exact reviewed native probe passes |
 | `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` | `false` during initial rollout; `true` only after the documented portable gates pass |
 
 The runtime supplies defaults for the locked profile values below. Set them explicitly only when deployment visibility is useful. Any different locked literal fails startup.
@@ -187,12 +188,12 @@ Local type checks, tests, builds, and IaC validation do not prove production rea
 - cross-guild isolation, activity-feed redaction, explicit failure closure, source grounding, and newest-context suppression;
 - one shadow guild and one noncritical pilot with recorded latency, token, cost, ambient-chatter, and naturalness results.
 
-Keep native opaque compaction off. Its Pi `0.84.1` Codex OAuth compatibility, continuation, restart, privacy, and measurement spike is incomplete. Keep portable automatic checkpoints off for the initial pilot. The execution path exists, but live long-context quality, savings, failure-recovery, and storage-encryption evidence remain open. The stored protection label is `platform_default_unverified`.
+Keep native opaque compaction off until its Pi `0.84.1` Codex OAuth continuation and restart probe passes and the attestation is recorded. Keep portable automatic checkpoints off for the initial pilot. The execution paths exist, but live long-context quality, savings, failure-recovery, privacy, and storage-encryption evidence remain open. The stored protection label is `platform_default_unverified`.
 
 Rollback controls are independent:
 
 - Disable Pi hot-session reuse without losing durable Convex history.
 - Disable the durable Discord gateway path to return to the compatibility runner without deleting canonical data.
-- Keep native compaction at its only accepted value, `false`. Disable portable checkpoints independently without deleting canonical data.
+- Disable native compaction independently by setting it to `false` and removing its live-probe attestation. Disable portable checkpoints independently without deleting canonical data.
 
 Do not delete canonical conversation records during rollback. The activity feed reports `delivery_uncertain` and `delivery_reconciliation_required` without message content. Investigate either state before another final delivery or privacy deletion for that guild.

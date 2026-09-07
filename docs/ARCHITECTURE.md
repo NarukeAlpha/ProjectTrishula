@@ -80,10 +80,10 @@ Durable continuity, hot-session reuse, native compaction, and portable automatic
 
 - `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` controls the durable gateway path.
 - `TRISHULA_HOT_SESSION_REUSE_ENABLED` controls only the Pi in-memory cache.
-- `TRISHULA_NATIVE_COMPACTION_ENABLED` accepts only `false`.
+- `TRISHULA_NATIVE_COMPACTION_ENABLED` defaults to `false`. Enabling it requires portable checkpoints and the exact reviewed live-probe attestation.
 - `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` defaults to `false` and enables the portable pipeline only when Pi and gateway values are both `true`.
 
-Native opaque compaction is hard-disabled until the pinned Pi Codex OAuth compatibility, restart, privacy, and measurement spike passes. The portable pipeline is implemented separately. Convex selects a stable threshold candidate, Pi creates a full source-bound summary without tools, and the gateway activates it through revision, generation, routing, content-hash, and recent-tail checks. The storage record says `platform_default_unverified`; it is not an encryption claim, so the portable rollout flag stays off until that gate and the live long-context gate pass.
+The native adapter is first-party code around Pi `0.84.1` public `onPayload`, injectable `fetch`, and header-transform hooks. It captures one opaque Codex SSE compaction item, verifies its version, hash, size, full source lineage, identity, and policy fences, and prepends it only to a compatible Luna request. A provider rejection retries the full original prompt from the readable portable summary and recent tail, then requests a fenced durable invalidation. Native fields travel only on the negotiated `native-v2` gateway protocol. Production activation remains gated on the pinned OAuth continuation, full-restart, privacy, storage, quality, token, cost, and latency evidence. The portable pipeline remains independently reversible. The storage record says `platform_default_unverified`; it is not an encryption claim.
 
 Until those gates pass, durable recovery uses canonical Convex history and the bounded raw tail. A checkpoint failure or missing checkpoint cannot authorize cross-guild state or make a process-local file authoritative.
 
