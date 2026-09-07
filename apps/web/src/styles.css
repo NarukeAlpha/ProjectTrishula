@@ -1777,6 +1777,7 @@ summary:focus-visible {
 }
 
 .discord-section-heading h2,
+.discord-section-heading h3,
 .discord-guild-heading h2 {
   margin: 4px 0 0;
   color: var(--ink);
@@ -2007,6 +2008,173 @@ summary:focus-visible {
   color: var(--accent);
   font-size: 10px;
   line-height: 1.5;
+}
+
+.discord-newspaper {
+  display: grid;
+  min-width: 0;
+  gap: 20px;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.discord-newspaper > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.discord-newspaper .discord-section-heading {
+  align-items: flex-start;
+}
+
+.discord-newspaper .discord-section-heading > div {
+  min-width: 0;
+}
+
+.discord-newspaper-grid {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+
+.discord-newspaper-grid > label,
+.discord-newspaper > label {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.discord-newspaper select,
+.discord-newspaper input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: var(--surface-strong);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.discord-newspaper select {
+  padding-right: 30px;
+}
+
+.discord-newspaper input[type="number"] {
+  max-width: 160px;
+}
+
+.discord-newspaper :is(select, input):focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.discord-newspaper :is(select, input):disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.discord-newspaper-checks {
+  display: grid;
+  gap: 10px;
+}
+
+.discord-newspaper-checks label {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 13px;
+  color: var(--muted);
+  background: var(--panel-subtle);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.discord-newspaper-checks label:has(input:disabled) {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.discord-newspaper-checks input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.discord-newspaper .discord-fine-print {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.discord-newspaper .discord-gateway-actions {
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding-top: 4px;
+}
+
+.discord-newspaper .discord-gateway-actions button {
+  min-height: 44px;
+  padding: 11px 16px;
+  color: var(--ink);
+  background: var(--surface-strong);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.discord-newspaper .discord-gateway-actions button:hover:not(:disabled) {
+  background: var(--panel-raised);
+  border-color: var(--accent);
+}
+
+.discord-newspaper .discord-gateway-actions .discord-settings-save {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.discord-newspaper
+  .discord-gateway-actions
+  .discord-settings-save:hover:not(:disabled) {
+  background: #9ee4ff;
+}
+
+@media (min-width: 700px) {
+  .discord-newspaper-grid,
+  .discord-newspaper-checks {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .discord-newspaper .discord-section-heading {
+    flex-wrap: wrap;
+  }
+
+  .discord-newspaper .discord-gateway-actions button {
+    width: 100%;
+  }
 }
 
 .discord-conversation-status {

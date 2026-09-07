@@ -588,27 +588,27 @@ function MarketResearchSettings({
             }
           />
         </label>
+        <label>
+          <span>Numerical data provider</span>
+          <select
+            aria-label="Numerical data provider"
+            value={marketDataProviderId}
+            disabled={busy}
+            onChange={(event) => setMarketDataProviderId(event.target.value)}
+          >
+            <option value="">No numerical provider</option>
+            <option value="exa_financial_datasets">
+              Exa Connect Financial Datasets
+            </option>
+            {marketDataProviderId !== "" &&
+              marketDataProviderId !== "exa_financial_datasets" && (
+                <option value={marketDataProviderId}>
+                  Existing provider: {marketDataProviderId}
+                </option>
+              )}
+          </select>
+        </label>
       </div>
-      <label>
-        <span>Numerical data provider</span>
-        <select
-          aria-label="Numerical data provider"
-          value={marketDataProviderId}
-          disabled={busy}
-          onChange={(event) => setMarketDataProviderId(event.target.value)}
-        >
-          <option value="">No numerical provider</option>
-          <option value="exa_financial_datasets">
-            Exa Connect Financial Datasets
-          </option>
-          {marketDataProviderId !== "" &&
-            marketDataProviderId !== "exa_financial_datasets" && (
-              <option value={marketDataProviderId}>
-                Existing provider: {marketDataProviderId}
-              </option>
-            )}
-        </select>
-      </label>
       <p className="discord-fine-print">
         Selecting a provider does not approve it. Financial Datasets needs a
         reviewed live evaluation, an approved owner decision, a service cost
@@ -691,7 +691,12 @@ function MarketResearchSettings({
         </p>
       )}
       <div className="discord-gateway-actions">
-        <button type="button" disabled={busy} onClick={() => void save()}>
+        <button
+          className="discord-settings-save"
+          type="button"
+          disabled={busy}
+          onClick={() => void save()}
+        >
           Save morning newspaper
         </button>
         <button
