@@ -1,36 +1,18 @@
-/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- The test supplies a deliberately partial typed provider double without changing production contracts. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- Synthetic Pi tool contexts never use extension operations. */
 import { describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { validateComposedEdition, type MorningPaperComposer } from "../src/market-research/composer.js";
 import {
-  marketResearchEvidenceItemSchema,
-  marketResearchJobRequestSchema,
-  marketResearchPreferencesSchema,
-  morningPaperEditionSchema,
-  morningPaperEvidenceSchema,
-  type MarketResearchEvidenceItem,
-  type MarketResearchJobResult,
-  type MarketResearchPreferencesV1,
-  type MorningPaperEditionV1,
-  type MorningPaperEvidenceV1,
+  marketResearchEvidenceItemSchema, marketResearchJobRequestSchema, marketResearchPreferencesSchema,
+  morningPaperEditionSchema, type MarketResearchEvidenceItem, type MarketResearchJobResult,
+  type MorningPaperEditionV1, type MorningPaperEvidenceV1,
 } from "../src/market-research/contracts.js";
 import { materializeDeliveryParts } from "../src/market-research/delivery.js";
 import type { MarketResearchCallbacks } from "../src/market-research/convex-client.js";
 import { MarketResearchExaClient } from "../src/market-research/exa-client.js";
 import { MarketResearchJobRegistry } from "../src/market-research/jobs.js";
-import type {
-  MarketBar,
-  MarketDataProvider,
-  MarketSnapshot,
-  MarketValue,
-} from "../src/market-research/market-data.js";
-import type { ResearchPlanSlot } from "../src/market-research/research-plan.js";
-import {
-  createMarketResearchRunner,
-  type MarketResearchRunner,
-  type MarketResearchRunnerOptions,
-} from "../src/market-research/runner.js";
+import { createMarketResearchRunner, type MarketResearchRunner } from "../src/market-research/runner.js";
 import type { Logger } from "../src/runtime/logger.js";
-
 const logger: Logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 function request(
@@ -216,134 +198,46 @@ function composedEdition(evidence: MorningPaperEvidenceV1): MorningPaperEditionV
   };
 }
 
-function marketValue(symbol: string, rawField: string, value: number, unit: "USD" | "shares"): MarketValue {
-  return {
-    provider: "fixture-market-data",
-    providerTimestamp: "2026-09-01T11:59:00.000Z",
-    retrievedAt: "2026-09-01T12:00:00.000Z",
-    sessionLabel: "premarket",
-    entitlement: "real_time",
-    policyStatus: "approved",
-    rawField,
-    sourceUrls: ["https://financialdatasets.ai/fixture"],
-    providerIdentifiers: ["fixture-run"],
-    symbol,
-    value,
-    unit,
-  };
-}
-
-function validSnapshots(symbols: readonly string[]): MarketSnapshot[] {
-  return symbols.map((symbol) => ({
-    symbol,
-    price: marketValue(symbol, "price", 100, "USD"),
-    priorClose: marketValue(symbol, "prior_close", 99, "USD"),
-    volume: marketValue(symbol, "volume", 100_000, "shares"),
-  }));
-}
-
-function marketBar(symbol: string, interval: MarketBar["interval"], timestamp: string, close: number): MarketBar {
-  return {
-    provider: "fixture-market-data",
-    providerTimestamp: "2026-09-01T12:00:00.000Z",
-    retrievedAt: "2026-09-01T12:00:00.000Z",
-    sessionLabel: "premarket",
-    entitlement: "real_time",
-    policyStatus: "approved",
-    rawField: "ohlcv",
-    sourceUrls: ["https://financialdatasets.ai/fixture"],
-    providerIdentifiers: ["fixture-run"],
-    symbol,
-    timestamp,
-    interval,
-    open: close - 1,
-    high: close + 1,
-    low: close - 2,
-    close,
-    volume: 1_000,
-  };
-}
-
-function approvedMarketData(overrides: Partial<MarketDataProvider> = {}): MarketDataProvider {
-  return {
-    id: "fixture-market-data",
-    policyStatus: "approved",
-    getSessionStatus: vi.fn(async (date: string, timezone: string) => ({
-      date,
-      timezone,
-      status: "OPEN" as const,
-      calendarVersion: "fixture-calendar-v1",
-      sourceUrl: "https://www.nyse.com/markets/hours-calendars",
-    })),
-    getSnapshots: vi.fn(async (symbols: readonly string[]) => validSnapshots(symbols)),
-    getBars: vi.fn(async (symbol: string, interval: MarketBar["interval"]) => [
-      marketBar(symbol, interval, "2026-09-01T11:55:00.000Z", 100),
-    ]),
-    getCorporateActions: vi.fn(async () => []),
-    getMarketMovers: vi.fn(async () => []),
-    ...overrides,
-  };
-}
-
 function fixtureComposer() {
-  const compose = vi.fn(async (
-    evidence: MorningPaperEvidenceV1,
-    preferences: MarketResearchPreferencesV1,
-  ) => validateComposedEdition(composedEdition(evidence), evidence, preferences));
+  const compose = vi.fn<MorningPaperComposer["compose"]>(async (evidence, preferences, _signal, research) => {
+    const current = research?.getEvidence() ?? evidence;
+    return validateComposedEdition(composedEdition(current), current, preferences);
+  });
   const composer: MorningPaperComposer = {
-    initialize: vi.fn(async () => undefined),
-    readiness: () => ({ ready: true }),
-    compose,
-    dispose: vi.fn(async () => undefined),
+    initialize: vi.fn(async () => undefined), readiness: () => ({ ready: true }), compose, dispose: vi.fn(async () => undefined),
   };
   return { composer, compose };
 }
 
-function harness(
-  loaded: MarketResearchEvidenceItem[],
-  options: {
-    marketData?: MarketDataProvider;
-    composer?: MorningPaperComposer;
-    now?: string;
-  } = {},
-) {
-  const searchNews = vi.fn(async (slot: ResearchPlanSlot) => ({
-    queryId: slot.queryId,
-    requestId: `request-${slot.queryId}`,
-    costUsd: 0,
-    results: [],
-    retrievedAt: "2026-09-01T12:00:00.000Z",
+function harness(loaded: MarketResearchEvidenceItem[], options: { composer?: MorningPaperComposer; now?: string } = {}) {
+  const search = vi.fn(async () => ({
+    requestId: "live-search-1", costDollars: { total: 0.01 },
+    results: [{ id: "doc-1", title: "Company reports new product", url: "https://example.com/news", publishedDate: "2026-09-01T10:00:00.000Z", highlights: ["A company announced a product."] }],
   }));
-  const exa = {
-    searchNews,
-    getSelectedContents: vi.fn(async () => ({ results: [], costUsd: 0 })),
-  } as unknown as MarketResearchExaClient;
+  const getContents = vi.fn(async () => ({
+    requestId: "live-content-1", costDollars: { total: 0.001 },
+    results: [{ url: "https://example.com/news", highlights: ["Product details are available."] }],
+  }));
   let completed: MarketResearchJobResult | undefined;
   const callbacks: MarketResearchCallbacks = {
-    heartbeat: vi.fn(async () => true),
-    appendEvidence: vi.fn(async () => true),
+    heartbeat: vi.fn(async () => true), appendEvidence: vi.fn(async () => true),
     loadEvidence: vi.fn(async () => loaded),
     complete: vi.fn(async (result) => { completed = result; return true; }),
     fail: vi.fn(async () => undefined),
   };
-  const composer: MorningPaperComposer = options.composer ?? {
-    initialize: vi.fn(async () => undefined),
-    readiness: () => ({ ready: true }),
-    compose: vi.fn(async () => { throw new Error("Composer must not run without market data."); }),
-    dispose: vi.fn(async () => undefined),
-  };
-  const runnerOptions: MarketResearchRunnerOptions = {
-    callbacks,
-    composer,
-    exaClient: () => exa,
-    logger,
+  const composer = options.composer ?? fixtureComposer().composer;
+  const factory = vi.fn((_request, initialUsage) => new MarketResearchExaClient({
+    apiKey: "synthetic-unit-test-key", searchConcurrency: 1, contentsConcurrency: 1,
+    requestTimeoutMs: 1_000, maximumSearchRequests: 12, maximumContentPages: 24,
+    initialUsage, logger, now: () => new Date(options.now ?? "2026-09-01T12:00:00.000Z"),
+    transport: { search, getContents },
+  }));
+  const runner = createMarketResearchRunner({
+    callbacks, composer, exaClient: factory, logger,
     now: () => new Date(options.now ?? "2026-09-01T12:00:00.000Z"),
-  };
-  if (options.marketData !== undefined) runnerOptions.marketData = options.marketData;
-  const runner = createMarketResearchRunner(runnerOptions);
-  return { runner, searchNews, callbacks, composer, completed: () => completed };
+  });
+  return { runner, search, getContents, callbacks, composer, factory, completed: () => completed };
 }
-
 type RankedSetup = MorningPaperEditionV1["primaryBoard"][number];
 
 function rankedSetup(symbol: string, label: RankedSetup["label"] = "TOP WATCH"): RankedSetup {
@@ -409,7 +303,7 @@ describe("full newspaper ranked output", () => {
     const parsed = marketResearchJobRequestSchema.parse(legacy);
     expect(parsed.preferences).toEqual(legacy.preferences);
     expect(parsed.configurationSnapshotHash).toBe(legacy.configurationSnapshotHash);
-    const test = harness([]);
+    const test = harness([collectionMarker()]);
     await test.runner.run(parsed);
     expect(test.callbacks.complete).toHaveBeenCalledOnce();
     expect(test.callbacks.fail).not.toHaveBeenCalled();
@@ -494,410 +388,145 @@ describe("full newspaper ranked output", () => {
   });
 });
 
-describe("market-research durable collection recovery", () => {
-  it.each([false, true])("keeps duplicate URL audits stable across normalization and recovery (saved collection %s)", async (collectionSaved) => {
-    const marker = collectionMarker();
-    const articles = ["article-1", "article-2", "article-3", "article-4"].map((evidenceId, index) =>
-      marketResearchEvidenceItemSchema.parse({
-        evidenceId, kind: "news", provider: "Exa", sourcePolicy: "approved",
-        title: "The same syndicated market article",
-        url: index === 3 ? "https://syndicated.example.com/story" : "https://example.com/story",
-        canonicalUrlHash: (index === 3 ? "e" : "d").repeat(64),
-        retrievedAt: "2026-09-01T12:00:00.000Z", freshness: "fresh", contentStatus: "available",
-        highlights: ["The same market report appeared in several query results."], normalizedClaims: [],
-        contentHash: "c".repeat(64),
-      }));
-    const loaded = collectionSaved ? [marker, ...articles] : articles;
-    const first = harness(loaded);
-    await first.runner.run(request(loaded.map((item) => item.evidenceId)));
-    const initial = first.completed();
-    if (!initial) throw new Error("Missing initial duplicate-normalized result.");
-    expect(initial.evidence.evidence.filter((item) => item.kind === "news")).toHaveLength(1);
-    const audits = initial.evidence.evidence.filter((item) => item.evidenceId.startsWith("duplicate-url-"));
-    expect(audits).toHaveLength(2);
-    expect(new Set(initial.evidence.evidence.map((item) => item.evidenceId)).size).toBe(initial.evidence.evidence.length);
-    for (const audit of audits) expect(audit.normalizedClaims).toEqual([
-      "Duplicate source URL retained for audit; canonical evidence is article-1.",
-    ]);
-    expect(initial.evidence.session.editionLabel).toBe(request().session.editionLabel);
-    expect(initial.edition.editionLabel).toBe("Data unavailable");
-
-    // Convex retains original source rows and the normalized checkpoint. A replay
-    // must not create duplicate IDs or start auditing the previous audit records.
-    const persisted = [...new Map([...loaded, ...initial.evidence.evidence]
-      .map((item) => [item.evidenceId, item])).values()];
-    const replay = harness(persisted, { now: "2026-09-01T12:01:00.000Z" });
-    const resumed = request(persisted.map((item) => item.evidenceId));
-    await replay.runner.run({ ...resumed, generation: 2, dispatchId: "edition-1:research:2", claimToken: "claim-2" });
-    const result = replay.completed();
-    if (!result) throw new Error("Missing replay duplicate-normalized result.");
-    expect(replay.searchNews).not.toHaveBeenCalled();
-    expect(result.evidence.evidence.filter((item) => item.evidenceId.startsWith("duplicate-url-"))).toEqual(audits);
-    expect(result.evidence.evidence.map((item) => [item.evidenceId, item.contentHash]).sort())
-      .toEqual(initial.evidence.evidence.map((item) => [item.evidenceId, item.contentHash]).sort());
-    expect(result.evidence.session).toEqual(initial.evidence.session);
-    expect(result.edition.editionLabel).toBe("Data unavailable");
+describe("agent-led newspaper research", () => {
+  it("continues a long summary in replies instead of rejecting a useful report", async () => {
+    const { edition } = await rankedEditionFixture();
+    edition.regimeLines = [{ text: "Verified context. ".repeat(100), sourceIds: edition.sourceIds }];
+    edition.topStories = [{ text: "Material story. ".repeat(100), sourceIds: edition.sourceIds }];
+    const deliveries = materializeDeliveryParts(edition);
+    expect(deliveries.every((part) => part.content.length <= 2_000)).toBe(true);
+    expect(deliveries.some((part) => part.content.includes("Market summary continued"))).toBe(true);
+    expect(deliveries.map((part) => part.content).join("\n")).toContain("Material story.");
+    expect(deliveries.map((part) => part.sequence)).toEqual(deliveries.map((_, index) => index));
+    expect(new Set(deliveries.map((part) => part.deliveryId)).size).toBe(deliveries.length);
   });
 
-  it("preserves frozen calendar references and distinct cost markers even when content hashes match", async () => {
+  it("publishes a schema-valid long story bullet across bounded replies", async () => {
+    const { edition } = await rankedEditionFixture();
+    const text = "Reported market context. ".repeat(80).trim();
+    edition.topStories = [{ text, sourceIds: edition.sourceIds }];
+    const deliveries = materializeDeliveryParts(morningPaperEditionSchema.parse(edition));
+    expect(deliveries.every((part) => part.content.length <= 2_000)).toBe(true);
+    expect(deliveries.map((part) => part.content).join("\n")).toContain("Reported market context.");
+  });
+
+  it("always invokes the model without a structured provider and preserves frozen identity", async () => {
     const marker = collectionMarker();
-    const calendar = marketResearchEvidenceItemSchema.parse({
-      ...marker, evidenceId: "frozen-calendar", kind: "calendar", provider: "Reviewed calendar",
-      url: "https://www.nyse.com/trade/hours-calendars",
-    });
-    const searchMarkers = [0.01, 0.02].map((costUsd, index) => marketResearchEvidenceItemSchema.parse({
-      ...marker, evidenceId: `exa-search-slot-preserved-${index}`, costUsd,
+    const test = harness([marker]);
+    const job = request([marker.evidenceId]);
+    const result = await test.runner.run(job);
+    expect(test.composer.compose).toHaveBeenCalledOnce();
+    expect(test.composer.compose).toHaveBeenCalledWith(expect.anything(), job.preferences, expect.any(AbortSignal), expect.objectContaining({
+      tools: expect.arrayContaining([expect.objectContaining({ name: "exa_search" }), expect.objectContaining({ name: "exa_read" }), expect.objectContaining({ name: "request_chart" })]),
     }));
-    const loaded = [marker, calendar, ...searchMarkers];
-    const test = harness(loaded);
-    const job = request(loaded.map((item) => item.evidenceId));
-    await test.runner.run({ ...job, session: { ...job.session, sourceIds: [calendar.evidenceId] } });
-    const result = test.completed();
-    if (!result) throw new Error("Missing immutable evidence result.");
-    for (const item of loaded) expect(result.evidence.evidence).toContainEqual(item);
-    expect(result.evidence.session.sourceIds).toEqual([calendar.evidenceId]);
-    expect(result.evidence.session.editionLabel).toBe(job.session.editionLabel);
-    expect(result.exaRequestCount).toBe(2);
-    expect(result.exaCostUsd).toBeCloseTo(0.03);
-  });
-
-  it("rejects a reused evidence ID with a different content hash", async () => {
-    const marker = collectionMarker();
-    const test = harness([marker, { ...marker, contentHash: "c".repeat(64) }]);
-    await expect(test.runner.run(request([marker.evidenceId]))).rejects.toThrow("composition_schema_invalid");
-    expect(test.callbacks.complete).not.toHaveBeenCalled();
-    expect(test.callbacks.fail).toHaveBeenCalledWith(expect.anything(), "composition_schema_invalid", false, undefined);
-  });
-
-  it("reuses a complete Exa checkpoint without repeating paid Search calls", async () => {
-    const marker = collectionMarker();
-    const test = harness([marker]);
-
-    await test.runner.run(request([marker.evidenceId]));
-
-    expect(test.searchNews).not.toHaveBeenCalled();
-    expect(test.completed()?.edition.editionLabel).toBe("Data unavailable");
-    expect(test.completed()?.evidence.session.editionLabel).toBe(request().session.editionLabel);
-    const result = test.completed();
-    if (!result) throw new Error("Missing completed result.");
-    expect(validateComposedEdition(result.edition, result.evidence, request().preferences)).toEqual(result.edition);
-    expect(() => validateComposedEdition({
-      ...result.edition,
-      topStories: [
-        { ...result.edition.topStories[0], text: "Invented price $999.99." },
-        ...result.edition.topStories.slice(1),
-      ],
-    }, result.evidence, request().preferences)).toThrow("composition_schema_invalid");
-    expect(() => validateComposedEdition({
-      ...result.edition,
-      sections: result.edition.sections.map((section, index) => index === 0
-        ? { ...section, heading: "Primary board at $999.99" }
-        : section),
-    }, result.evidence, request().preferences)).toThrow("composition_schema_invalid");
-    expect(() => validateComposedEdition({
-      ...result.edition,
-      sections: result.edition.sections.map((section, index) => index === 0
-        ? { ...section, markdown: "Invented published price $999.99." }
-        : section),
-    }, result.evidence, request().preferences)).toThrow("composition_schema_invalid");
-  });
-
-  it("grounds claim and section numbers only in their cited sources", async () => {
-    const marker = collectionMarker();
-    const test = harness([marker]);
-
-    await test.runner.run(request([marker.evidenceId]));
-
-    const result = test.completed();
-    if (!result) throw new Error("Missing completed result.");
-    const appleQuote = marketResearchEvidenceItemSchema.parse({
-      evidenceId: "quote-aapl-scoped",
-      kind: "quote",
-      provider: "fixture-market-data",
-      sourcePolicy: "approved",
-      title: "AAPL quote",
-      providerTimestamp: "2026-09-01T11:59:00.000Z",
-      retrievedAt: "2026-09-01T12:00:00.000Z",
-      sessionLabel: "premarket",
-      freshness: "fresh",
-      contentStatus: "available",
-      highlights: [],
-      normalizedClaims: ["AAPL traded at $101.25."],
-      contentHash: "d".repeat(64),
-    });
-    const microsoftQuote = marketResearchEvidenceItemSchema.parse({
-      evidenceId: "quote-msft-scoped",
-      kind: "quote",
-      provider: "fixture-market-data",
-      sourcePolicy: "approved",
-      title: "MSFT quote",
-      providerTimestamp: "2026-09-01T11:59:00.000Z",
-      retrievedAt: "2026-09-01T12:00:00.000Z",
-      sessionLabel: "premarket",
-      freshness: "fresh",
-      contentStatus: "available",
-      highlights: [],
-      normalizedClaims: ["MSFT traded at $202.50."],
-      contentHash: "e".repeat(64),
-    });
-    const scopedEvidence = morningPaperEvidenceSchema.parse({
-      ...result.evidence,
-      evidence: [...result.evidence.evidence, appleQuote, microsoftQuote],
-      allowedSourceIds: [
-        ...result.evidence.allowedSourceIds,
-        appleQuote.evidenceId,
-        microsoftQuote.evidenceId,
-      ],
-    });
-    const scopedEdition: MorningPaperEditionV1 = {
-      ...result.edition,
-      topStories: [
-        { text: "AAPL traded at $101.25.", sourceIds: [appleQuote.evidenceId] },
-        { text: "MSFT traded at $202.50.", sourceIds: [microsoftQuote.evidenceId] },
-        ...result.edition.topStories.slice(2),
-      ],
-      sections: result.edition.sections.map((section) => section.kind === "primary_board"
-        ? {
-            ...section,
-            heading: "AAPL primary board at $101.25",
-            markdown: "AAPL traded at $101.25.",
-            sourceIds: [appleQuote.evidenceId],
-          }
-        : section),
-      sourceIds: [...result.edition.sourceIds, appleQuote.evidenceId, microsoftQuote.evidenceId],
-    };
-    expect(validateComposedEdition(scopedEdition, scopedEvidence, request().preferences)).toEqual(scopedEdition);
-
-    const firstStory = scopedEdition.topStories[0];
-    if (!firstStory) throw new Error("Missing scoped AAPL story.");
-    expect(() => validateComposedEdition({
-      ...scopedEdition,
-      topStories: [
-        { ...firstStory, text: "AAPL traded at $202.50." },
-        ...scopedEdition.topStories.slice(1),
-      ],
-    }, scopedEvidence, request().preferences)).toThrow("composition_schema_invalid");
-    expect(() => validateComposedEdition({
-      ...scopedEdition,
-      sections: scopedEdition.sections.map((section) => section.kind === "primary_board"
-        ? { ...section, markdown: "AAPL traded at $202.50." }
-        : section),
-    }, scopedEvidence, request().preferences)).toThrow("composition_schema_invalid");
-    expect(() => validateComposedEdition({
-      ...scopedEdition,
-      topStories: [
-        { ...firstStory, text: "AAPL traded at $2026." },
-        ...scopedEdition.topStories.slice(1),
-      ],
-    }, scopedEvidence, request().preferences)).toThrow("composition_schema_invalid");
-  });
-
-  it("does not compose from a partial checkpoint without the completion marker", async () => {
-    const partial = marketResearchEvidenceItemSchema.parse({
-      evidenceId: "partial-search-result",
-      kind: "news",
-      provider: "Exa",
-      sourcePolicy: "approved",
-      title: "Partial result",
-      url: "https://example.com/partial",
-      retrievedAt: "2026-09-01T12:00:00.000Z",
-      freshness: "fresh",
-      contentStatus: "available",
-      highlights: [],
-      normalizedClaims: [],
-      contentHash: "c".repeat(64),
-    });
-    const test = harness([partial]);
-
-    await test.runner.run(request([partial.evidenceId]));
-
-    expect(test.searchNews).toHaveBeenCalled();
+    expect(result.evidence.session).toEqual(job.session);
+    expect(result.edition.editionLabel).toBe(job.session.editionLabel);
+    expect(test.search).not.toHaveBeenCalled();
     expect(test.callbacks.complete).toHaveBeenCalledOnce();
-  });
-});
-
-describe("market-research production planning", () => {
-  it("starts a Monday Search window at the prior confirmed Friday close", async () => {
-    const scheduledFor = "2026-09-14T12:00:00.000Z";
-    const previousSessionClose = "2026-09-11T20:00:00.000Z";
-    const test = harness([], { now: scheduledFor });
-
-    await test.runner.run(request([], {
-      scheduledFor,
-      editionDate: "2026-09-14",
-      previousSessionDate: "2026-09-11",
-      previousSessionClose,
-      nextSessionDate: "2026-09-15",
-    }));
-
-    expect(test.searchNews).toHaveBeenCalled();
-    for (const [searchedSlot] of test.searchNews.mock.calls) {
-      expect(searchedSlot.startPublishedDate).toBe(previousSessionClose);
-      expect(searchedSlot.endPublishedDate).toBe(scheduledFor);
-    }
+    await test.runner.dispose();
   });
 
-  it("extends the live Search window for the first session after a holiday", async () => {
-    const scheduledFor = "2026-09-08T12:00:00.000Z";
-    const test = harness([], { now: scheduledFor });
-
-    await test.runner.run(request([], {
-      scheduledFor,
-      editionDate: "2026-09-08",
-      previousSessionDate: "2026-09-04",
-      previousSessionClose: "2026-09-04T20:00:00.000Z",
-      nextSessionDate: "2026-09-09",
-    }));
-
-    expect(test.searchNews).toHaveBeenCalled();
-    for (const [searchedSlot] of test.searchNews.mock.calls) {
-      expect(searchedSlot.startPublishedDate).toBe("2026-09-04T20:00:00.000Z");
-      expect(searchedSlot.endPublishedDate).toBe(scheduledFor);
-    }
-  });
-});
-
-describe("market-research production market-data boundary", () => {
-  it("fails closed before composition when the session provenance URL is invalid", async () => {
-    const marker = collectionMarker();
-    const fixture = fixtureComposer();
-    const marketData = approvedMarketData({
-      getSessionStatus: vi.fn(async (date: string, timezone: string) => ({
-        date,
-        timezone,
-        status: "OPEN" as const,
-        calendarVersion: "fixture-calendar-v1",
-        sourceUrl: "http://www.nyse.com/markets/hours-calendars",
-      })),
+  it("lets the model search dynamically and checkpoints evidence before publishing", async () => {
+    const base = fixtureComposer();
+    base.composer.compose = vi.fn<MorningPaperComposer["compose"]>(async (_evidence, preferences, signal, research) => {
+      if (!research) throw new Error("Missing tools");
+      const tool = research.tools.find((item) => item.name === "exa_search")!;
+      // SAFETY: This custom tool only uses its params and cancellation signal, not extension context.
+      await tool.execute("tool-1", { query: "AAPL material company news", numResults: 3 }, signal, undefined, {} as ExtensionContext);
+      const current = research.getEvidence();
+      return validateComposedEdition(composedEdition(current), current, preferences);
     });
-    const test = harness([marker], { marketData, composer: fixture.composer });
-
-    await test.runner.run(request([marker.evidenceId]));
-
-    expect(fixture.compose).not.toHaveBeenCalled();
-    expect(test.completed()?.edition.editionLabel).toBe("Data unavailable");
+    const test = harness([], { composer: base.composer });
+    const result = await test.runner.run(request());
+    expect(test.search).toHaveBeenCalledOnce();
+    expect(result.evidence.evidence.some((item) => item.url === "https://example.com/news")).toBe(true);
+    expect(result.evidence.evidence.some((item) => item.evidenceId === "exa-collection-complete")).toBe(true);
+    expect(result.exaRequestCount).toBe(1);
+    expect(result.exaCostUsd).toBe(0.01);
+    expect(test.callbacks.appendEvidence).toHaveBeenCalled();
+    expect(test.callbacks.complete).toHaveBeenCalledOnce();
+    await test.runner.dispose();
   });
 
-  it("fails closed before composition when a snapshot contains a non-finite value", async () => {
-    const marker = collectionMarker();
-    const fixture = fixtureComposer();
-    const marketData = approvedMarketData({
-      getSnapshots: vi.fn(async (symbols: readonly string[]) => {
-        const snapshots = validSnapshots(symbols);
-        const first = snapshots[0];
-        if (first?.price === undefined) throw new Error("Missing fixture snapshot.");
-        return [
-          { ...first, price: { ...first.price, value: Number.NaN } },
-          ...snapshots.slice(1),
-        ];
-      }),
-    });
-    const test = harness([marker], { marketData, composer: fixture.composer });
-
-    await test.runner.run(request([marker.evidenceId]));
-
-    expect(fixture.compose).not.toHaveBeenCalled();
-    expect(test.completed()?.edition.editionLabel).toBe("Data unavailable");
+  it("does not force a fixed collection before composing retained partial research", async () => {
+    const partial = { ...collectionMarker(), evidenceId: "partial-news", kind: "news" as const, url: "https://example.com/news" };
+    const test = harness([partial]);
+    const result = await test.runner.run(request([partial.evidenceId]));
+    expect(test.composer.compose).toHaveBeenCalledOnce();
+    expect(test.search).not.toHaveBeenCalled();
+    expect(result.evidence.evidence.map((item) => item.evidenceId)).toContain("exa-collection-complete");
+    await test.runner.dispose();
   });
 
-  it("discards unordered provider bars before evidence and calculations", async () => {
+  it("restores durable usage instead of resetting a retry allowance", async () => {
     const marker = collectionMarker();
-    const fixture = fixtureComposer();
-    const marketData = approvedMarketData({
-      getBars: vi.fn(async (symbol: string, interval: MarketBar["interval"]) => [
-        marketBar(symbol, interval, "2026-09-01T11:55:00.000Z", 101),
-        marketBar(symbol, interval, "2026-09-01T11:50:00.000Z", 100),
-      ]),
-    });
-    const test = harness([marker], { marketData, composer: fixture.composer });
+    const test = harness([marker]);
+    const job = request([marker.evidenceId]);
+    job.exaUsage = { searchRequests: 12, contentPages: 24, costUsd: 0.1, costStatus: "known" };
+    await test.runner.run(job);
+    expect(test.factory).toHaveBeenCalledWith(job, job.exaUsage);
+    expect(test.search).not.toHaveBeenCalled();
+    await test.runner.dispose();
+  });
 
-    await test.runner.run(request([marker.evidenceId]));
+  it("rejects missing retained references before any model or paid request", async () => {
+    const test = harness([]);
+    await expect(test.runner.run(request(["missing-source"]))).rejects.toThrow("evidence_below_minimum");
+    expect(test.composer.compose).not.toHaveBeenCalled();
+    expect(test.search).not.toHaveBeenCalled();
+    expect(test.callbacks.fail).toHaveBeenCalled();
+    await test.runner.dispose();
+  });
 
-    expect(fixture.compose).toHaveBeenCalledOnce();
-    const evidence = fixture.compose.mock.calls[0]?.[0];
-    if (evidence === undefined) throw new Error("Missing composed evidence fixture.");
-    expect(evidence.evidence.some((item) => item.kind === "bar" || item.kind === "calculation")).toBe(false);
-    expect(evidence.missingFields).toContain("AAPL: 5m bars unavailable or invalid");
-    expect(test.completed()?.edition.editionLabel).toBe("Morning Market Newspaper");
+  it("collapses identical retained IDs but rejects changed content", async () => {
+    const marker = collectionMarker();
+    const test = harness([marker, marker]);
+    expect((await test.runner.run(request([marker.evidenceId]))).evidence.evidence).toHaveLength(1);
+    const changed = harness([marker, { ...marker, contentHash: "c".repeat(64) }]);
+    await expect(changed.runner.run(request())).rejects.toThrow("composition_schema_invalid");
+    await test.runner.dispose(); await changed.runner.dispose();
+  });
+
+  it("does not publish after a rejected evidence checkpoint", async () => {
+    const partial = { ...collectionMarker(), evidenceId: "partial-news" };
+    const test = harness([partial]);
+    vi.mocked(test.callbacks.appendEvidence).mockResolvedValue(false);
+    await expect(test.runner.run(request([partial.evidenceId]))).rejects.toThrow("edition_lease_lost");
+    expect(test.callbacks.complete).not.toHaveBeenCalled();
+    expect(test.callbacks.fail).toHaveBeenCalledWith(expect.anything(), "edition_lease_lost", false, undefined);
+    await test.runner.dispose();
+  });
+
+  it("honors cancellation before collection or composition", async () => {
+    const test = harness([]);
+    const controller = new AbortController();
+    controller.abort(new Error("composition_timeout"));
+    await expect(test.runner.run(request(), controller.signal)).rejects.toThrow("composition_timeout");
+    expect(test.search).not.toHaveBeenCalled();
+    expect(test.composer.compose).not.toHaveBeenCalled();
+    await test.runner.dispose();
+  });
+
+  it("renews the lease during model work and aborts a lost lease", async () => {
+    vi.useFakeTimers();
+    try {
+      const base = fixtureComposer();
+      base.composer.compose = vi.fn<MorningPaperComposer["compose"]>(async (_packet, _prefs, signal) => new Promise<MorningPaperEditionV1>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }));
+      const test = harness([collectionMarker()], { composer: base.composer });
+      vi.mocked(test.callbacks.heartbeat).mockResolvedValueOnce(true).mockResolvedValue(false);
+      const result = test.runner.run(request()).catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(await result).toMatchObject({ message: "edition_lease_lost" });
+      expect(test.callbacks.complete).not.toHaveBeenCalled();
+      await test.runner.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });
 
 describe("market-research job timeout", () => {
-  it.each(["throw", "reject"] as const)("cancels sibling provider work when an evidence checkpoint fails (%s)", async (outcome) => {
-    const firstProvider = Promise.withResolvers<unknown>();
-    const secondProvider = Promise.withResolvers<unknown>();
-    const search = vi.fn().mockReturnValueOnce(firstProvider.promise).mockReturnValue(secondProvider.promise);
-    const getContents = vi.fn();
-    const costObserver = vi.fn(async () => undefined);
-    const exa = new MarketResearchExaClient({
-      apiKey: "sibling-cancellation-test-not-a-real-key",
-      transport: { search, getContents },
-      searchConcurrency: 1,
-      contentsConcurrency: 1,
-      requestTimeoutMs: 1_000,
-      maximumSearchRequests: 12,
-      maximumContentPages: 24,
-      onCostEvent: costObserver,
-      logger,
-    });
-    const outerController = new AbortController();
-    const appendFailure = new Error("market_research_convex_rejected");
-    let checkpointSignal: AbortSignal | undefined;
-    let abortedBeforeFailureCallback = false;
-    const callbacks: MarketResearchCallbacks = {
-      heartbeat: vi.fn(async () => true),
-      loadEvidence: vi.fn(async () => []),
-      appendEvidence: vi.fn(async (_job, _sequence, _evidence, signal) => {
-        checkpointSignal = signal;
-        if (outcome === "throw") throw appendFailure;
-        return false;
-      }),
-      complete: vi.fn(async () => true),
-      fail: vi.fn(async () => {
-        abortedBeforeFailureCallback = checkpointSignal?.aborted === true;
-      }),
-    };
-    const composer = fixtureComposer();
-    const runner = createMarketResearchRunner({
-      exaClient: () => exa, callbacks, composer: composer.composer, logger,
-      now: () => new Date("2026-09-01T12:00:00.000Z"),
-    });
-    const result = runner.run(request(), outerController.signal).catch((error: Error) => error);
-    try {
-      await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
-      firstProvider.resolve({ requestId: "first-cost", costDollars: { total: 0.01 }, results: [] });
-      const failure = await result;
-      if (outcome === "throw") expect(failure).toBe(appendFailure);
-      else expect(failure).toMatchObject({ message: "edition_lease_lost" });
-      expect(checkpointSignal?.reason).toBe(failure);
-      expect(abortedBeforeFailureCallback).toBe(true);
-      expect(callbacks.fail).toHaveBeenCalledOnce();
-      expect(callbacks.fail).toHaveBeenCalledWith(expect.anything(),
-        outcome === "throw" ? "exa_unavailable" : "edition_lease_lost",
-        false, outerController.signal);
-      // The semaphore can admit the second SDK request before the first checkpoint fails.
-      // It must not admit the remaining research slots after the run is cancelled.
-      expect(search).toHaveBeenCalledTimes(2);
-      expect(search.mock.calls[1]?.[2]?.aborted).toBe(true);
-      expect(callbacks.appendEvidence).toHaveBeenCalledOnce();
-      secondProvider.resolve({ requestId: "late-cost", costDollars: { total: 0.03 }, results: [] });
-      await vi.waitFor(() => expect(costObserver).toHaveBeenCalledWith(expect.objectContaining({
-        operation: "search", outcome: "settled", late: true, costUsd: 0.03, requestId: "late-cost",
-      })));
-      expect(search).toHaveBeenCalledTimes(2);
-      expect(callbacks.appendEvidence).toHaveBeenCalledOnce();
-      expect(getContents).not.toHaveBeenCalled();
-      expect(composer.compose).not.toHaveBeenCalled();
-      expect(callbacks.complete).not.toHaveBeenCalled();
-      expect(outerController.signal.aborted).toBe(false);
-    } finally {
-      firstProvider.resolve({ requestId: "cleanup-first", costDollars: { total: 0 }, results: [] });
-      secondProvider.resolve({ requestId: "cleanup-second", costDollars: { total: 0 }, results: [] });
-      await result;
-      await runner.dispose();
-    }
-  });
-
   it("aborts a stuck provider job with the fixed retryable timeout state", async () => {
     vi.useFakeTimers();
     const stuckRunner: MarketResearchRunner = {

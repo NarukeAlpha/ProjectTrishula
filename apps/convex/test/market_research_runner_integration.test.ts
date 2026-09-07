@@ -1,17 +1,18 @@
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { validateComposedEdition } from "../../pi/src/market-research/composer.js";
+import { validateComposedEdition, type MorningPaperResearchContext } from "../../pi/src/market-research/composer.js";
 import { ConvexMarketResearchClient } from "../../pi/src/market-research/convex-client.js";
 import {
   marketResearchEvidenceItemSchema,
   marketResearchJobRequestSchema,
   marketResearchJobResultSchema,
+  morningPaperEditionSchema,
   type MarketResearchEvidenceItem,
   type MarketResearchJobRequest,
   type MarketResearchJobResult,
+  type MorningPaperEvidenceV1,
 } from "../../pi/src/market-research/contracts.js";
 import { MarketResearchExaClient } from "../../pi/src/market-research/exa-client.js";
-import { DisabledMarketDataProvider } from "../../pi/src/market-research/market-data.js";
 import { createMarketResearchRunner } from "../../pi/src/market-research/runner.js";
 import { sha256 } from "../../pi/src/market-research/source-normalizer.js";
 import {
@@ -23,7 +24,32 @@ import { marketResearchPi, marketResearchPiRequestSchema } from "../convex/marke
 import { convexMutationFixture, invokeMutation } from "./helpers/convex-fixture.js";
 
 const callbackSecret = "runner-integration-secret-not-a-real-credential";
-const unavailableId = "operational-market-data-unavailable";
+const researchSourceId = "exa-news-0";
+type ResearchToolContext = Parameters<MorningPaperResearchContext["tools"][number]["execute"]>[4];
+
+function composedResearch(packet: MorningPaperEvidenceV1) {
+  const sourceId = packet.evidence.find((item) => item.kind === "news")?.evidenceId;
+  if (!sourceId) throw new Error("Fixture composer requires researched news.");
+  const cited = { text: "Company news supports a conditional research watch; confirmation remains necessary.", sourceIds: [sourceId] };
+  const unavailable = { text: "Current price and volume data are unavailable; do not infer exact levels.", sourceIds: [] };
+  return morningPaperEditionSchema.parse({
+    schemaVersion: 1, editionId: packet.editionId, editionDate: packet.session.editionDate,
+    timezone: packet.session.timezone, asOf: packet.generatedAt, sessionType: packet.session.sessionType,
+    editionLabel: packet.session.editionLabel, regime: "MIXED", regimeLines: [cited],
+    topStories: [cited], scheduledEvents: [], marketContext: [cited], primaryBoard: [rankedSetup("AAPL", sourceId)],
+    challengers: [], tickerDossiers: [{
+      symbol: "AAPL", thesisLabel: "NO PRIOR THESIS", summary: cited,
+      availableFields: ["company news"], unavailableFields: ["current price", "volume"], sourceIds: [sourceId],
+    }],
+    validationRules: [unavailable], afterOpenChanges: [], requestedSourceStatus: packet.requestedSourceStatus,
+    dataQuality: [unavailable],
+    sections: ["primary_board", "data_quality", "sources"].map((kind, sequence) => ({
+      sectionId: kind, sequence, kind, heading: kind,
+      markdown: kind === "data_quality" ? unavailable.text : cited.text, sourceIds: [sourceId],
+    })),
+    chartRequests: [], sourceIds: [sourceId], noTradingAction: true,
+  });
+}
 
 function retainedEvidence(now: number): MarketResearchEvidenceItem[] {
   const url = "https://example.com/market-news";
@@ -62,6 +88,7 @@ function retainedEvidence(now: number): MarketResearchEvidenceItem[] {
 async function integrationFixture(
   sessionType: "OPEN" | "CLOSED",
   alterCompletion?: (result: MarketResearchJobResult) => void,
+  freshResearch = false,
 ) {
   const now = Date.parse(sessionType === "OPEN" ? "2026-09-08T12:00:00Z" : "2026-09-07T12:00:00Z");
   vi.setSystemTime(now);
@@ -141,19 +168,41 @@ async function integrationFixture(
     siteUrl: "https://convex.invalid", sharedSecret: callbackSecret, timeoutMs: 1_000,
     logger, fetch: fetchImpl,
   });
-  await callbacks.appendEvidence(job, 900, retainedEvidence(now));
-  await callbacks.costObserver(job)({
-    operation: "search", outcome: "settled", costUsd: 0.01,
-    late: true, observedAt: new Date(now).toISOString(), requestId: "search-fixture",
+  if (!freshResearch) {
+    await callbacks.appendEvidence(job, 900, retainedEvidence(now));
+    await callbacks.costObserver(job)({
+      operation: "search", outcome: "settled", costUsd: 0.01,
+      late: true, observedAt: new Date(now).toISOString(), requestId: "search-fixture",
+    });
+  }
+  const providerCall = vi.fn(async () => {
+    if (!freshResearch) throw new Error("Provider must not run for retained collection.");
+    return {
+      requestId: "dynamic-search-1", costDollars: { total: 0.01 },
+      results: [{ id: "news-1", url: "https://example.com/company-update", title: "Company announces a new product",
+        publishedDate: new Date(now).toISOString(), highlights: ["The company announced a new product; market response remains unconfirmed."] }],
+    };
   });
-  const providerCall = vi.fn(async () => { throw new Error("Provider must not run for retained collection."); });
-  const compose = vi.fn(async () => { throw new Error("Composer must not run without numerical market data."); });
+  const compose = vi.fn(async (
+    packet: MorningPaperEvidenceV1,
+    _preferences: MarketResearchJobRequest["preferences"],
+    signal?: AbortSignal,
+    research?: MorningPaperResearchContext,
+  ) => {
+    if (!freshResearch) return composedResearch(packet);
+    const search = research?.tools.find((tool) => tool.name === "exa_search");
+    if (!search || !research) throw new Error("Agent research tools were not provided.");
+    // SAFETY: This tool uses its typed arguments, lease signal, and injected Exa client only.
+    await search.execute("dynamic-tool-1", { query: "AAPL company news", numResults: 1 }, signal, undefined, {} as ResearchToolContext);
+    return composedResearch(research.getEvidence());
+  });
   const runner = createMarketResearchRunner({
-    callbacks, logger, now: () => new Date(now), marketData: new DisabledMarketDataProvider(),
-    exaClient: () => new MarketResearchExaClient({
+    callbacks, logger, now: () => new Date(now),
+    exaClient: (request, initialUsage) => new MarketResearchExaClient({
       apiKey: "unit-test-provider-key", searchConcurrency: 1, contentsConcurrency: 1,
       requestTimeoutMs: 1_000, maximumSearchRequests: 12, maximumContentPages: 24,
-      logger, transport: { search: providerCall, getContents: providerCall, runFinancialDataset: providerCall },
+      logger, initialUsage, onCostEvent: callbacks.costObserver(request),
+      transport: { search: providerCall, getContents: providerCall, runFinancialDataset: providerCall },
     }),
     composer: {
       initialize: async () => undefined, readiness: () => ({ ready: true }),
@@ -163,14 +212,15 @@ async function integrationFixture(
   return { db, job, callbacks, runner, providerCall, compose, wire, completionCandidates };
 }
 
-function rankedSetup(symbol: string): MarketResearchJobResult["edition"]["primaryBoard"][number] {
-  const cited = { text: "Synthetic research claim.", sourceIds: [unavailableId] };
+function rankedSetup(symbol: string, sourceId = researchSourceId): MarketResearchJobResult["edition"]["primaryBoard"][number] {
+  const cited = { text: "Company news supports watching for a confirmed move with broader market support.", sourceIds: [sourceId] };
+  const unavailable = { text: "Exact price levels are unavailable until current market data can be verified.", sourceIds: [] };
   return {
     symbol, label: "TOP WATCH", score: 90,
     components: { catalyst: 20, liquidityAndSpread: 15, dailyAndHourlyBias: 15, premarketStructure: 10, levelQualityAndProximity: 20, indexAndSectorConfirmation: 10 },
-    deductions: [], thesisLabel: "NO PRIOR THESIS", trigger: cited, invalidation: cited,
-    firstResistanceOrTarget: cited, rewardToRisk: cited, noChase: cited,
-    indexOrSectorCondition: cited, eventRisk: cited, sourceIds: [unavailableId],
+    deductions: ["Current numerical fields are unavailable."], thesisLabel: "NO PRIOR THESIS", trigger: unavailable, invalidation: unavailable,
+    firstResistanceOrTarget: unavailable, rewardToRisk: unavailable, noChase: cited,
+    indexOrSectorCondition: cited, eventRisk: cited, sourceIds: [sourceId],
   };
 }
 
@@ -183,13 +233,35 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe("Convex claim through real Pi runner and Convex persistence", () => {
+  it("lets the agent search dynamically and persist cited partial research through real HTTP callbacks", async () => {
+    const test = await integrationFixture("OPEN", undefined, true);
+    const result = await test.runner.run(test.job);
+    expect(test.providerCall).toHaveBeenCalledOnce();
+    expect(test.compose).toHaveBeenCalledOnce();
+    expect(result.edition.editionLabel).toBe(test.job.session.editionLabel);
+    expect(result.edition.topStories[0]?.text).toContain("Company news");
+    expect(result.edition.dataQuality[0]?.text).toContain("unavailable");
+    const citedSourceId = result.edition.topStories[0]?.sourceIds[0];
+    expect(test.db.rows("marketResearchEvidence").some((row) => row.evidenceId === citedSourceId && row.kind === "news")).toBe(true);
+    expect(test.db.rows("marketResearchEvidence").some((row) => row.evidenceId === "exa-collection-complete")).toBe(true);
+    expect(test.db.rows("marketResearchCostEvents")).toHaveLength(1);
+    expect(test.db.rows("marketResearchEditions")[0]).toMatchObject({ status: "ready_to_publish", exaObservedCostUsd: 0.01 });
+    expect(test.db.rows("marketResearchDeliveries")).toHaveLength(result.deliveries.length);
+    expect(test.wire.every((callback) => callback.status === 200)).toBe(true);
+    await test.runner.dispose();
+  });
+
   it.each(["OPEN", "CLOSED"] as const)("completes retained duplicate news with the frozen %s session", async (sessionType) => {
     const test = await integrationFixture(sessionType);
     expect(test.job.session.sessionType).toBe(sessionType);
     expect(test.job.session.editionLabel).not.toBe("Data unavailable");
     const result = await test.runner.run(test.job);
     expect(result.evidence.session).toEqual(test.job.session);
-    expect(result.edition.editionLabel).toBe("Data unavailable");
+    expect(result.edition.editionLabel).toBe(test.job.session.editionLabel);
+    expect(result.edition.primaryBoard).toHaveLength(1);
+    expect(result.edition.topStories).toHaveLength(1);
+    expect(result.edition.tickerDossiers).toHaveLength(1);
+    expect(result.edition.primaryBoard[0]?.rewardToRisk.sourceIds).toEqual([]);
     expect(validateComposedEdition(result.edition, result.evidence, test.job.preferences)).toEqual(result.edition);
     expect(marketResearchPiResultRecordSchema.safeParse(result).success).toBe(true);
     expect(result.evidence.evidence.filter((item) => item.evidenceId.startsWith("duplicate-url-"))).toHaveLength(1);
@@ -204,7 +276,7 @@ describe("Convex claim through real Pi runner and Convex persistence", () => {
     expect(test.db.rows("marketResearchDeliveries").every((row) => row.status === "pending")).toBe(true);
     expect(test.wire.every((callback) => callback.status === 200)).toBe(true);
     expect(test.providerCall).not.toHaveBeenCalled();
-    expect(test.compose).not.toHaveBeenCalled();
+    expect(test.compose).toHaveBeenCalledOnce();
     await test.runner.dispose();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -220,13 +292,14 @@ describe("Convex claim through real Pi runner and Convex persistence", () => {
     await expect(test.runner.run(test.job)).rejects.toThrow("market_research_convex_rejected");
     const failedEdition = test.db.rows("marketResearchEditions")[0]!;
     expect(failedEdition.status).toBe("failed");
-    expect(test.db.rows("marketResearchEvidence").some((row) => row.evidenceId === unavailableId)).toBe(true);
+    expect(test.db.rows("marketResearchEvidence").some((row) => row.evidenceId === "exa-collection-complete")).toBe(true);
     await expect(invokeMutation(retryEdition, test.db.ctx, { editionId: test.job.editionId }))
       .resolves.toMatchObject({ status: "queued" });
     const retry = marketResearchJobRequestSchema.parse(await invokeMutation(claimResearch, test.db.ctx, {
       editionId: test.job.editionId, workerId: "integration-recovery-worker",
     }));
     expect(retry.generation).toBe(test.job.generation + 1);
+    expect(retry.exaUsage).toEqual({ searchRequests: 1, contentPages: 0, costUsd: 0.01, costStatus: "known" });
     const result = await test.runner.run(retry);
     expect(result.evidence.session).toEqual(retry.session);
     expect(new Set(result.evidence.evidence.map((item) => item.evidenceId)).size).toBe(result.evidence.evidence.length);
@@ -237,22 +310,22 @@ describe("Convex claim through real Pi runner and Convex persistence", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("keeps the existing equal-label validation path unchanged", async () => {
+  it("accepts honest empty optional research fields but not unsupported uncited claims", async () => {
     const test = await integrationFixture("OPEN");
     const completed = await test.runner.run(test.job);
-    const result = marketResearchJobResultSchema.parse(JSON.parse(
-      JSON.stringify(completed).replaceAll(unavailableId, "existing-operational-source"),
-    ));
-    result.evidence.session.editionLabel = "Data unavailable";
-    expect(result.evidence.evidence.some((item) => item.evidenceId === unavailableId)).toBe(false);
+    const result = marketResearchJobResultSchema.parse(completed);
+    result.edition.topStories = [];
+    result.edition.tickerDossiers = [];
     expect(marketResearchPiResultRecordSchema.safeParse(result).success).toBe(true);
     expect(() => validateComposedEdition(result.edition, result.evidence, test.job.preferences)).not.toThrow();
+    result.edition.dataQuality = [{ text: "The stock has strong liquidity and a favorable risk profile.", sourceIds: [] }];
+    expect(marketResearchPiResultRecordSchema.safeParse(result).success).toBe(false);
     await test.runner.dispose();
   });
 
   it.each([
-    "changed_frozen_label", "changed_frozen_session", "missing_marker", "invalid_marker",
-    "ranked_setup", "challenger", "chart",
+    "changed_frozen_label", "changed_frozen_session", "missing_collection_marker", "unknown_citation",
+    "unconfigured_symbol", "uncited_claim", "nonpositive_chart",
   ] as const)("rejects %s through the actual completion mutation and records failure", async (scenario) => {
     const test = await integrationFixture("OPEN", (result) => {
       if (scenario === "changed_frozen_label") result.evidence.session.editionLabel = "Data unavailable";
@@ -260,22 +333,26 @@ describe("Convex claim through real Pi runner and Convex persistence", () => {
         result.evidence.session.sessionType = "CLOSED";
         result.edition.sessionType = "CLOSED";
       }
-      if (scenario === "missing_marker") {
-        result.evidence.evidence = result.evidence.evidence.filter((item) => item.evidenceId !== unavailableId);
+      if (scenario === "missing_collection_marker") {
+        result.evidence.evidence = result.evidence.evidence.filter((item) => item.evidenceId !== "exa-collection-complete");
+        result.evidence.allowedSourceIds = result.evidence.allowedSourceIds.filter((id) => id !== "exa-collection-complete");
       }
-      if (scenario === "invalid_marker") {
-        const marker = result.evidence.evidence.find((item) => item.evidenceId === unavailableId);
-        if (!marker) throw new Error("Missing fixture marker.");
-        marker.sourcePolicy = "approved";
+      if (scenario === "unknown_citation") result.edition.dataQuality = [{ text: "Synthetic claim.", sourceIds: ["unknown-source"] }];
+      if (scenario === "unconfigured_symbol") result.edition.primaryBoard = [rankedSetup("UNKNOWN")];
+      if (scenario === "uncited_claim") result.edition.primaryBoard[0]!.trigger = { text: "Buy above the breakout level.", sourceIds: [] };
+      if (scenario === "nonpositive_chart") {
+        const setup = result.edition.primaryBoard[0]!;
+        setup.label = "AVOID";
+        setup.score = 60;
+        setup.components.catalyst = 0;
+        setup.components.premarketStructure = 0;
+        result.edition.chartRequests = [{
+          chartRequestId: "chart-fixture", editionId: result.editionId, sectionId: "primary_board",
+          symbol: "AAPL", timeframe: "daily", start: "2026-08-01T12:00:00.000Z", end: result.completedAt,
+          session: "regular", overlays: [], annotations: [], reason: "Synthetic chart.", priority: 90,
+          sourceEvidenceIds: [researchSourceId], dataAsOf: result.completedAt,
+        }];
       }
-      if (scenario === "ranked_setup" || scenario === "chart") result.edition.primaryBoard = [rankedSetup("AAPL")];
-      if (scenario === "challenger") result.edition.challengers = [rankedSetup("DIA")];
-      if (scenario === "chart") result.edition.chartRequests = [{
-        chartRequestId: "chart-fixture", editionId: result.editionId, sectionId: "primary-board",
-        symbol: "AAPL", timeframe: "daily", start: "2026-08-01T12:00:00.000Z", end: result.completedAt,
-        session: "regular", overlays: [], annotations: [], reason: "Synthetic chart.", priority: 90,
-        sourceEvidenceIds: [unavailableId], dataAsOf: result.completedAt,
-      }];
     });
     await expect(test.runner.run(test.job)).rejects.toThrow("market_research_convex_rejected");
     expect(test.wire).toContainEqual({ operation: "complete", status: 409 });
@@ -283,7 +360,7 @@ describe("Convex claim through real Pi runner and Convex persistence", () => {
     expect(test.db.rows("marketResearchEditions")[0]?.status).not.toBe("ready_to_publish");
     expect(test.db.rows("marketResearchDeliveries")).toHaveLength(0);
     const candidate = test.completionCandidates[0]!;
-    if (scenario !== "changed_frozen_label" && scenario !== "changed_frozen_session") {
+    if (scenario === "unknown_citation" || scenario === "uncited_claim" || scenario === "nonpositive_chart") {
       expect(marketResearchPiResultRecordSchema.safeParse(candidate).success).toBe(false);
       expect(() => validateComposedEdition(candidate.edition, candidate.evidence, test.job.preferences)).toThrow();
     }

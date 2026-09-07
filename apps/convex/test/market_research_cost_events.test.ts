@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MARKET_RESEARCH_MAX_COST_EVENTS_PER_CLAIM,
+  durableExaUsage,
   marketResearchCostEventSchema,
   persistExaCostEvent,
   registerExaCostBinding,
@@ -32,6 +33,38 @@ beforeEach(() => vi.stubEnv("MARKET_RESEARCH_OWNER_ID", "owner_1"));
 afterEach(() => vi.unstubAllEnvs());
 
 describe("durable Exa accounting authorization", () => {
+  it("restores request and cost usage across generations for the same target only", async () => {
+    const db = await fixture();
+    await persistExaCostEvent(db.ctx, { ...db.claim, event: { ...event, requestId: "provider-search-1" } });
+    await registerExaCostBinding(db.ctx, {
+      ownerId: "owner_1", targetId: "MR-1", targetKind: "edition", generation: 2, claimToken: "claim-new",
+    }, 2);
+    await persistExaCostEvent(db.ctx, {
+      ...db.claim, generation: 2, claimToken: "claim-new",
+      event: { ...event, eventId: "stream:2", operation: "contents", requestId: "provider-content-1", costUsd: 0.005 },
+    });
+    expect(await durableExaUsage(db.ctx, "owner_1", "MR-1"))
+      .toEqual({ searchRequests: 1, contentPages: 1, costUsd: 0.030000000000000002, costStatus: "known" });
+    expect(await durableExaUsage(db.ctx, "owner_1", "MR-other"))
+      .toEqual({ searchRequests: 0, contentPages: 0, costUsd: 0, costStatus: "known" });
+  });
+
+  it("keeps unknown legacy request costs closed across retries instead of resetting allowance", async () => {
+    const db = await fixture("preview");
+    await persistExaCostEvent(db.ctx, { ...db.claim, event: { ...event, outcome: "abandoned", costUsd: null } });
+    await persistExaCostEvent(db.ctx, { ...db.claim, event: { ...event, eventId: "stream:2", late: true } });
+    expect(await durableExaUsage(db.ctx, "owner_1", "MRP-1"))
+      .toEqual({ searchRequests: 2, contentPages: 0, costUsd: 0.025, costStatus: "unknown" });
+  });
+
+  it("deduplicates identified request counts while retaining every recorded cost", async () => {
+    const db = await fixture();
+    await persistExaCostEvent(db.ctx, { ...db.claim, event: { ...event, requestId: "provider-1" } });
+    await persistExaCostEvent(db.ctx, { ...db.claim, event: { ...event, eventId: "stream:2", requestId: "provider-1" } });
+    expect(await durableExaUsage(db.ctx, "owner_1", "MR-1"))
+      .toEqual({ searchRequests: 1, contentPages: 0, costUsd: 0.05, costStatus: "known" });
+  });
+
   it("deduplicates exact retries and rejects an event-ID collision without changing totals", async () => {
     const db = await fixture();
     const args = { ...db.claim, event };

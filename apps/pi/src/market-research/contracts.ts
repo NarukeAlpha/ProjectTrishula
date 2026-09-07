@@ -243,6 +243,12 @@ export const marketResearchJobRequestSchema = z.object({
   ]),
   configurationSnapshotHash: hash,
   preferences: marketResearchPreferencesSchema,
+  exaUsage: z.object({
+    searchRequests: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    contentPages: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    costUsd: z.number().finite().nonnegative(),
+    costStatus: z.enum(["known", "unknown"]),
+  }).strict().optional(),
   retainedEvidenceIds: z.array(id).max(500),
   session: z.object({
     sessionType: z.enum(["OPEN", "EARLY_CLOSE", "CLOSED", "UNKNOWN"]),
@@ -394,10 +400,12 @@ export const morningPaperEvidenceSchema = z.object({
 
 export type MorningPaperEvidenceV1 = z.infer<typeof morningPaperEvidenceSchema>;
 
+const unavailableClaim = /\b(?:unavailable|unverified|unknown|not (?:available|verified|confirmed)|cannot verify|could not verify|no reliable data)\b/i;
+const optionalSourceIds = z.array(id).max(20).refine((values) => new Set(values).size === values.length);
 const citedTextSchema = z.object({
   text: boundedText(2_000),
-  sourceIds,
-}).strict();
+  sourceIds: optionalSourceIds,
+}).strict().refine((value) => value.sourceIds.length > 0 || unavailableClaim.test(value.text), "Uncited text must disclose unavailable information.");
 
 const setupScoreSchema = z.object({
   catalyst: z.number().int().min(0).max(20),
@@ -443,8 +451,9 @@ const tickerDossierSchema = z.object({
   summary: citedTextSchema,
   availableFields: z.array(boundedText(100)).max(50),
   unavailableFields: z.array(boundedText(100)).max(50),
-  sourceIds,
-}).strict();
+  sourceIds: optionalSourceIds,
+}).strict().refine((value) => value.sourceIds.length > 0
+  || (value.availableFields.length === 0 && unavailableClaim.test(value.summary.text)), "Uncited dossiers must disclose unavailable information.");
 
 export const editionSectionSchema = z.object({
   sectionId: id,
@@ -495,13 +504,13 @@ export const morningPaperEditionSchema = z.object({
   sessionType: z.enum(["OPEN", "EARLY_CLOSE", "CLOSED", "UNKNOWN"]),
   editionLabel: z.enum(["Morning Market Newspaper", "Weekend Outlook", "Market Holiday Outlook", "Late Edition", "Data unavailable"]),
   regime: z.enum(["RISK_ON", "MIXED", "RISK_OFF"]),
-  regimeLines: z.array(citedTextSchema).length(5),
-  topStories: z.array(citedTextSchema).min(3).max(5),
+  regimeLines: z.array(citedTextSchema).min(1).max(5),
+  topStories: z.array(citedTextSchema).max(5),
   scheduledEvents: z.array(citedTextSchema).max(20),
   marketContext: z.array(citedTextSchema).min(1).max(30),
   primaryBoard: z.array(setupSchema).max(MARKET_RESEARCH_MAX_RANKED_SETUPS),
   challengers: z.array(setupSchema).max(3),
-  tickerDossiers: z.array(tickerDossierSchema).min(1).max(40),
+  tickerDossiers: z.array(tickerDossierSchema).max(40),
   validationRules: z.array(citedTextSchema).min(1).max(20),
   afterOpenChanges: z.array(citedTextSchema).max(20),
   requestedSourceStatus: z.array(requestedSourceStatusSchema).length(5),

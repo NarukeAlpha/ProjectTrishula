@@ -742,8 +742,16 @@ function toPiPreferences(preferences: Preferences) {
   };
 }
 
+interface ExaUsage {
+  searchRequests: number;
+  contentPages: number;
+  costUsd: number;
+  costStatus: "known" | "unknown";
+}
+
 function jobRequest(
   edition: Doc<"marketResearchEditions">,
+  exaUsage: ExaUsage,
   retainedEvidenceIds: string[] = [],
 ) {
   if (!edition.claimId) throw new Error("edition_lease_lost");
@@ -763,6 +771,7 @@ function jobRequest(
       : "collecting" as const,
     configurationSnapshotHash: edition.configurationSnapshotHash,
     preferences: toPiPreferences(edition.configurationSnapshot),
+    exaUsage,
     retainedEvidenceIds: [...new Set([...edition.sessionSourceIds, ...retainedEvidenceIds])].slice(0, 500),
     session: {
       sessionType: edition.sessionType,
@@ -780,7 +789,7 @@ function jobRequest(
   };
 }
 
-function previewJobRequest(preview: Doc<"marketResearchPreviews">) {
+function previewJobRequest(preview: Doc<"marketResearchPreviews">, exaUsage: ExaUsage) {
   if (!preview.claimId) throw new Error("edition_lease_lost");
   return {
     schemaVersion: 1 as const,
@@ -794,6 +803,7 @@ function previewJobRequest(preview: Doc<"marketResearchPreviews">) {
     resumeFrom: "collecting" as const,
     configurationSnapshotHash: preview.configurationSnapshotHash,
     preferences: toPiPreferences(preview.configurationSnapshot),
+    exaUsage,
     retainedEvidenceIds: preview.sessionSourceIds,
     session: {
       sessionType: preview.sessionType,
@@ -1502,6 +1512,38 @@ export const checkDueEditions = internalMutation({
 
 export const MARKET_RESEARCH_MAX_COST_EVENTS_PER_CLAIM = 1_024;
 
+export async function durableExaUsage(
+  ctx: Pick<MutationCtx, "db">,
+  ownerId: string,
+  targetId: string,
+): Promise<ExaUsage> {
+  const bindings = await ctx.db.query("marketResearchCostBindings")
+    .withIndex("by_owner_target_generation", (index) => index.eq("ownerId", ownerId).eq("targetId", targetId))
+    .collect();
+  const usage: ExaUsage = { searchRequests: 0, contentPages: 0, costUsd: 0, costStatus: "known" };
+  for (const binding of bindings) {
+    const events = await ctx.db.query("marketResearchCostEvents")
+      .withIndex("by_binding_event", (index) => index.eq("bindingId", binding._id))
+      .take(MARKET_RESEARCH_MAX_COST_EVENTS_PER_CLAIM + 1);
+    const identifiedRequests = new Set<string>();
+    let bindingCostUsd = 0;
+    for (const event of events) {
+      bindingCostUsd += event.costUsd ?? 0;
+      if (event.costUsd === null) usage.costStatus = "unknown";
+      const requestKey = event.requestId === undefined ? undefined : `${event.operation}:${event.requestId}`;
+      if (requestKey !== undefined && identifiedRequests.has(requestKey)) continue;
+      if (requestKey !== undefined) identifiedRequests.add(requestKey);
+      if (event.operation === "search") usage.searchRequests += 1;
+      if (event.operation === "contents") usage.contentPages += 1;
+    }
+    // Older events do not correlate an abandoned request with its late result.
+    // Keep those unknown costs closed instead of granting a fresh retry allowance.
+    if (events.length !== binding.eventCount || binding.unknownCostEventCount > 0) usage.costStatus = "unknown";
+    usage.costUsd += Math.max(bindingCostUsd, binding.knownCostUsd);
+  }
+  return usage;
+}
+
 export const marketResearchCostEventSchema = z.object({
   eventId: z.string().regex(idPattern),
   operation: z.enum(["search", "contents", "financial_datasets"]),
@@ -1639,7 +1681,7 @@ export const claimResearch = internalMutation({
     const claimed = await ctx.db.get(edition._id);
     if (!claimed) return null;
     await recordEvent(ctx, claimed, "research_claimed", now, { stage: "collecting" });
-    return jobRequest(claimed);
+    return jobRequest(claimed, await durableExaUsage(ctx, claimed.ownerId, claimed.editionId));
   },
 });
 
@@ -1666,7 +1708,7 @@ export const claimPreview = internalMutation({
       updatedAt: now,
     });
     const claimed = await ctx.db.get(preview._id);
-    return claimed ? previewJobRequest(claimed) : null;
+    return claimed ? previewJobRequest(claimed, await durableExaUsage(ctx, claimed.ownerId, claimed.previewId)) : null;
   },
 });
 
@@ -1740,6 +1782,17 @@ const evidenceRecordSchema = z.object({
   }
 });
 
+function retainedEvidenceItem(record: Doc<"marketResearchEvidence">): z.infer<typeof evidenceRecordSchema> {
+  const { _id, _creationTime, editionId, checkpointSequence, retentionExpiresAt, createdAt, ...item } = record;
+  void _id;
+  void _creationTime;
+  void editionId;
+  void checkpointSequence;
+  void retentionExpiresAt;
+  void createdAt;
+  return item;
+}
+
 export const appendEvidence = internalMutation({
   args: {
     editionId: v.string(),
@@ -1791,20 +1844,24 @@ export const appendEvidence = internalMutation({
     }
     const edition = await editionByStableId(ctx, requireId(args.editionId, "editionId"));
     if (!edition || !activeResearchLease(edition, args.generation, args.claimToken, now)) return { accepted: false as const };
+    const stored = await ctx.db.query("marketResearchEvidence")
+      .withIndex("by_edition_checkpointSequence", (index) => index.eq("editionId", edition.editionId))
+      .take(501);
+    if (stored.length > 500) return { accepted: false as const };
+    const storedById = new Map(stored.map((item) => [item.evidenceId, item]));
     const pending: typeof parsed.data = [];
     for (const item of parsed.data) {
       if (serializedUtf8Bytes(item) > MARKET_RESEARCH_MAX_EVIDENCE_RECORD_BYTES) return { accepted: false as const };
-      const existing = await ctx.db
-        .query("marketResearchEvidence")
-        .withIndex("by_edition_evidenceId", (index) => index
-          .eq("editionId", edition.editionId)
-          .eq("evidenceId", item.evidenceId))
-        .unique();
+      const existing = storedById.get(item.evidenceId);
       if (existing) {
         if (existing.contentHash !== item.contentHash) return { accepted: false as const };
       } else {
         pending.push(item);
       }
+    }
+    const merged = [...stored.map(retainedEvidenceItem), ...pending];
+    if (merged.length > 500 || serializedUtf8Bytes(merged) > MARKET_RESEARCH_MAX_EVIDENCE_PACKET_BYTES) {
+      return { accepted: false as const };
     }
     let inserted = 0;
     for (const item of pending) {
@@ -1861,18 +1918,9 @@ export const loadEvidence = internalQuery({
       .query("marketResearchEvidence")
       .withIndex("by_edition_checkpointSequence", (index) => index.eq("editionId", edition.editionId))
       .order("asc")
-      .take(500);
-    const evidence = records.map((record) => {
-      const { _id, _creationTime, editionId, checkpointSequence, retentionExpiresAt, createdAt, ...item } = record;
-      void _id;
-      void _creationTime;
-      void editionId;
-      void checkpointSequence;
-      void retentionExpiresAt;
-      void createdAt;
-      return item;
-    });
-    if (serializedUtf8Bytes(evidence) > MARKET_RESEARCH_MAX_EVIDENCE_PACKET_BYTES) {
+      .take(501);
+    const evidence = records.map(retainedEvidenceItem);
+    if (evidence.length > 500 || serializedUtf8Bytes(evidence) > MARKET_RESEARCH_MAX_EVIDENCE_PACKET_BYTES) {
       return { accepted: false as const, evidence: [] };
     }
     return { accepted: true as const, evidence };
@@ -1950,7 +1998,10 @@ const evidencePacketRecordSchema = z.object({
     }
   }
 });
-const citedTextRecordSchema = z.object({ text: strictText(2_000), sourceIds: strictSourceIds }).strict();
+const unavailableClaim = /\b(?:unavailable|unverified|unknown|not (?:available|verified|confirmed)|cannot verify|could not verify|no reliable data)\b/i;
+const optionalSourceIds = z.array(strictId).max(20).refine((values) => new Set(values).size === values.length);
+const citedTextRecordSchema = z.object({ text: strictText(2_000), sourceIds: optionalSourceIds }).strict()
+  .refine((value) => value.sourceIds.length > 0 || unavailableClaim.test(value.text), "Uncited text must disclose unavailable information.");
 const setupRecordSchema = z.object({
   symbol: strictSymbol,
   label: z.enum(["TOP WATCH", "WATCH", "WAIT FOR CONFIRMATION", "AVOID", "EXIT-RISK"]),
@@ -1995,8 +2046,9 @@ const dossierRecordSchema = z.object({
   summary: citedTextRecordSchema,
   availableFields: z.array(strictText(100)).max(50),
   unavailableFields: z.array(strictText(100)).max(50),
-  sourceIds: strictSourceIds,
-}).strict();
+  sourceIds: optionalSourceIds,
+}).strict().refine((value) => value.sourceIds.length > 0
+  || (value.availableFields.length === 0 && unavailableClaim.test(value.summary.text)), "Uncited dossiers must disclose unavailable information.");
 const sectionKindSchema = z.enum([
   "how_to_read", "overnight_macro", "cross_asset", "index_sector", "scheduled_events",
   "primary_board", "challengers", "ticker_dossiers", "validation", "after_open",
@@ -2044,13 +2096,13 @@ const editionRecordSchema = z.object({
   sessionType: z.enum(["OPEN", "EARLY_CLOSE", "CLOSED", "UNKNOWN"]),
   editionLabel: z.enum(["Morning Market Newspaper", "Weekend Outlook", "Market Holiday Outlook", "Late Edition", "Data unavailable"]),
   regime: z.enum(["RISK_ON", "MIXED", "RISK_OFF"]),
-  regimeLines: z.array(citedTextRecordSchema).length(5),
-  topStories: z.array(citedTextRecordSchema).min(3).max(5),
+  regimeLines: z.array(citedTextRecordSchema).min(1).max(5),
+  topStories: z.array(citedTextRecordSchema).max(5),
   scheduledEvents: z.array(citedTextRecordSchema).max(20),
   marketContext: z.array(citedTextRecordSchema).min(1).max(30),
   primaryBoard: z.array(setupRecordSchema).max(10),
   challengers: z.array(setupRecordSchema).max(3),
-  tickerDossiers: z.array(dossierRecordSchema).min(1).max(40),
+  tickerDossiers: z.array(dossierRecordSchema).max(40),
   validationRules: z.array(citedTextRecordSchema).min(1).max(20),
   afterOpenChanges: z.array(citedTextRecordSchema).max(20),
   requestedSourceStatus: z.array(requestedSourceRecordSchema).length(5),
@@ -2217,7 +2269,6 @@ function resultMatchesFrozenConfiguration(
       ...configuration.primarySymbols,
       ...configuration.discoverySymbols,
     ].includes(dossier.symbol))
-    || configuration.primarySymbols.some((symbol) => !result.edition.tickerDossiers.some((dossier) => dossier.symbol === symbol))
     || result.edition.primaryBoard.some((setup) => !configuration.primarySymbols.includes(setup.symbol))
     || result.edition.challengers.some((setup) => !configuration.discoverySymbols.includes(setup.symbol))
     || (!configuration.includeCharts && result.chartRequests.length > 0)
@@ -3011,7 +3062,7 @@ export const recoverBatch = internalMutation({
             .query("marketResearchEvidence")
             .withIndex("by_edition_checkpointSequence", (index) => index.eq("editionId", recovered.editionId))
             .take(500);
-          recoveredRequests.push(jobRequest(recovered, evidence.map((item) => item.evidenceId)));
+          recoveredRequests.push(jobRequest(recovered, await durableExaUsage(ctx, recovered.ownerId, recovered.editionId), evidence.map((item) => item.evidenceId)));
         }
       }
     }
@@ -3060,7 +3111,7 @@ export const recoverBatch = internalMutation({
             .query("marketResearchEvidence")
             .withIndex("by_edition_checkpointSequence", (index) => index.eq("editionId", recovered.editionId))
             .take(500);
-          recoveredRequests.push(jobRequest(recovered, evidence.map((item) => item.evidenceId)));
+          recoveredRequests.push(jobRequest(recovered, await durableExaUsage(ctx, recovered.ownerId, recovered.editionId), evidence.map((item) => item.evidenceId)));
         }
       }
     }

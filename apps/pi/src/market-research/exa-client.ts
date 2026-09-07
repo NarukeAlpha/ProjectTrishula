@@ -1,6 +1,7 @@
 /* oxlint-disable anti-slop/no-unknown-returns, anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-known-value-widening, anti-slop/no-conditional-empty-object-spread -- The official Exa SDK exposes version-dependent provider payloads; this adapter validates and bounds every value before domain use. */
 import { AgentRunCancelledError, AgentRunFailedError, Exa } from "exa-js";
 import type { Logger } from "../runtime/logger.js";
+import type { MarketResearchEvidenceItem } from "./contracts.js";
 import type { ResearchPlanSlot } from "./research-plan.js";
 import { MarketResearchExaError, classifyExaError } from "./exa-errors.js";
 import {
@@ -16,12 +17,12 @@ const DEFAULT_HIGHLIGHT_QUERY = "market-moving facts, named assets, exact dates,
 
 export interface ExaSearchSdkOptions {
   type: "auto";
-  category: "news" | "financial report";
+  category?: "news" | "financial report";
   userLocation: "US";
   numResults: number;
   moderation: true;
-  startPublishedDate: string;
-  endPublishedDate: string;
+  startPublishedDate?: string;
+  endPublishedDate?: string;
   includeDomains?: string[];
   excludeDomains?: string[];
   contents: {
@@ -236,6 +237,46 @@ export interface ExaClientOptions {
   random?: () => number;
   now?: () => Date;
   onCostEvent?: (event: Readonly<ExaCostEvent>) => void | Promise<void>;
+  initialUsage?: ExaInitialUsage;
+}
+
+export interface ExaInitialUsage {
+  searchRequests: number;
+  contentPages: number;
+  costUsd: number;
+  costStatus: "known" | "unknown";
+}
+
+export type ExaResearchQuery = Omit<ResearchPlanSlot, "category" | "startPublishedDate" | "endPublishedDate"> & {
+  category?: ResearchPlanSlot["category"];
+  startPublishedDate?: string;
+  endPublishedDate?: string;
+};
+
+function validateInitialUsage(initial: ExaInitialUsage): void {
+  if (
+    !Number.isSafeInteger(initial.searchRequests) || initial.searchRequests < 0
+    || !Number.isSafeInteger(initial.contentPages) || initial.contentPages < 0
+    || !Number.isFinite(initial.costUsd) || initial.costUsd < 0
+  ) throw new Error("exa_invalid_initial_usage");
+}
+
+/** Durable request accounting includes paid attempts that never produced evidence. */
+export function initialExaUsageFromEvidence(
+  evidence: readonly MarketResearchEvidenceItem[],
+  durableUsage?: ExaInitialUsage,
+): ExaInitialUsage {
+  if (durableUsage !== undefined) validateInitialUsage(durableUsage);
+  const markers = new Map(evidence
+    .filter((item) => item.evidenceId.startsWith("exa-search-slot-") || item.evidenceId.startsWith("exa-contents-url-"))
+    .map((item) => [item.evidenceId, item]));
+  const items = [...markers.values()];
+  return {
+    searchRequests: Math.max(items.filter((item) => item.evidenceId.startsWith("exa-search-slot-")).length, durableUsage?.searchRequests ?? 0),
+    contentPages: Math.max(items.filter((item) => item.evidenceId.startsWith("exa-contents-url-")).length, durableUsage?.contentPages ?? 0),
+    costUsd: Math.max(items.reduce((sum, item) => sum + (item.costUsd ?? 0), 0), durableUsage?.costUsd ?? 0),
+    costStatus: durableUsage?.costStatus ?? "known",
+  };
 }
 
 function rawResponse(value: unknown): RawExaResponse {
@@ -285,7 +326,7 @@ function hostnameMatchesDomain(hostname: string, domain: string): boolean {
   return normalized.length > 0 && (hostname === normalized || hostname.endsWith(`.${normalized}`));
 }
 
-export function resultUrlMatchesSlotPolicy(url: string, slot: ResearchPlanSlot): boolean {
+export function resultUrlMatchesSlotPolicy(url: string, slot: ExaResearchQuery): boolean {
   const hostname = new URL(url).hostname.toLowerCase();
   if (slot.excludeDomains?.some((domain) => hostnameMatchesDomain(hostname, domain))) return false;
   return slot.includeDomains === undefined
@@ -311,6 +352,15 @@ export class MarketResearchExaClient {
 
   constructor(private readonly options: ExaClientOptions) {
     if (!options.apiKey.trim()) throw new Error("exa_not_configured");
+    const initial = options.initialUsage;
+    if (initial !== undefined) {
+      validateInitialUsage(initial);
+      this.searchRequests = initial.searchRequests;
+      this.contentPages = initial.contentPages;
+      this.accruedCostUsd = initial.costUsd;
+      if (initial.costStatus === "unknown") this.closeUnknownCostBudget();
+      if (initial.searchRequests > options.maximumSearchRequests || initial.contentPages > options.maximumContentPages) this.budgetClosed = true;
+    }
     this.searchSemaphore = new Semaphore(options.searchConcurrency);
     this.contentsSemaphore = new Semaphore(options.contentsConcurrency);
     this.transport = options.transport ?? new OfficialExaSdkTransport(options.apiKey);
@@ -332,7 +382,7 @@ export class MarketResearchExaClient {
       contentPages: this.contentPages,
       costUsd: this.accruedCostUsd,
       costStatus: this.costStatus,
-      budgetClosed: this.budgetClosed,
+      budgetClosed: this.budgetClosed || (this.options.maximumCostUsd !== undefined && this.accruedCostUsd >= this.options.maximumCostUsd),
     };
   }
 
@@ -340,7 +390,7 @@ export class MarketResearchExaClient {
     return this.costEvents.map((event) => ({ ...event }));
   }
 
-  async searchNews(slot: ResearchPlanSlot, signal?: AbortSignal): Promise<SearchEvidenceBatch> {
+  async searchNews(slot: ExaResearchQuery, signal?: AbortSignal): Promise<SearchEvidenceBatch> {
     throwIfAborted(signal);
     this.assertCostAvailable();
     if (slot.policyResolution !== undefined) {
@@ -351,14 +401,14 @@ export class MarketResearchExaClient {
     });
     const searchOptions: ExaSearchSdkOptions = {
       type: "auto",
-      category: slot.category,
       userLocation: "US",
       numResults: slot.numResults,
       moderation: true,
-      startPublishedDate: slot.startPublishedDate,
-      endPublishedDate: slot.endPublishedDate,
       contents: { highlights: true, maxAgeHours: 1, livecrawlTimeout: 12_000 },
     };
+    if (slot.category !== undefined) searchOptions.category = slot.category;
+    if (slot.startPublishedDate !== undefined) searchOptions.startPublishedDate = slot.startPublishedDate;
+    if (slot.endPublishedDate !== undefined) searchOptions.endPublishedDate = slot.endPublishedDate;
     if (slot.includeDomains !== undefined) searchOptions.includeDomains = slot.includeDomains;
     if (slot.excludeDomains !== undefined) searchOptions.excludeDomains = slot.excludeDomains;
     const { raw, requestCost } = await this.retry(

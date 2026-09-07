@@ -1,10 +1,34 @@
 # Market Research Morning Newspaper
 
-Status: implementation specification
+Status: original specification with the current architecture override below
 Owner: Project Trishula
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-07
 Proposed schedule: every day at 08:00 in an owner-confirmed IANA timezone
 Default delivery: one Discord forum post with ordered replies
+
+## Current architecture override — 2026-09-07
+
+The owner's agent-led direction supersedes the fixed collection, tool-free
+composition, and mandatory structured-provider gates in this original document.
+The schedule starts Pi with the research prompt, saved settings, and watchlist.
+Pi chooses Exa searches and source reads, then writes the full report. Individual
+missing prices, volume, bars, or unavailable sites reduce confidence and remain
+visible; they do not block sourced news, risk analysis, or publication. Never
+invent missing numerical values.
+
+The newspaper session exposes only `exa_search`, `exa_read`, and `request_chart`.
+It uses existing Codex OAuth. Charts are optional, requested dynamically, and
+attached through the existing CHART-IMG publisher only for positive ranked
+setups. The full report stays in section Markdown. The agent must cover the
+primary watchlist, but validation does not force filler stories or fake citations
+for explicit missing-data notes.
+
+Keep server isolation, authentication, saved evidence and progress, cancellation,
+request/spending limits, scheduling, and duplicate-post protection. A retry uses
+the durable spending ledger rather than resetting its allowance. No new service,
+credential, provider approval, or schedule activation is required for this change.
+Earlier numerical-provider evaluation steps apply only if that optional adapter
+is deliberately introduced later.
 
 ## 1. Outcome
 

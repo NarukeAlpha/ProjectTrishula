@@ -24,7 +24,7 @@ All `/discord/agents/*` routes require `Authorization: Bearer <PI_DISCORD_SHARED
 
 Discord exposes public-research tools only. It cannot use the brokerage, credential-vault, order, shell, process, code-execution, filesystem, or private-network tools. Web chat keeps a separate capability profile and separate conversation history.
 
-The `/market-research/jobs` routes use `SERVICE_SHARED_SECRET`, not the Discord agent secret. They have a dedicated registry and do not call a Discord conversation profile. The runner creates one isolated tool-free composer session and does not import, construct, or receive a trading broker.
+The `/market-research/jobs` routes use `SERVICE_SHARED_SECRET`, not the Discord agent secret. They have a dedicated registry and do not call a Discord conversation profile. Each job creates an isolated research session with `exa_search`, `exa_read`, and `request_chart`. It uses the existing Codex OAuth runtime and does not import, construct, or receive a trading broker. The agent chooses its research, cites saved sources, and discloses missing values. A dedicated numerical feed is not required. Paid request counts survive retries; optional charts use the existing Discord CHART-IMG delivery path.
 
 The feature is disabled by default. Pi requires `EXA_API_KEY` only when `MARKET_RESEARCH_ENABLED=true`. Health reports only the feature flag, `exaConfigured` boolean, and runner readiness. It never returns the key, provider authorization, prompts, evidence bodies, or edition text.
 

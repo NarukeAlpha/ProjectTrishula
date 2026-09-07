@@ -7,6 +7,13 @@ import { neutralizeUntrustedDiscordMarkdown, splitSemanticContent } from "./sema
 
 const MAX_REPLY_BODY_CHARACTERS = 1_850;
 
+interface ReplyContent {
+  sourceSectionIds: string[];
+  heading: string;
+  content: string;
+  chartAttachmentIds: string[];
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -34,24 +41,31 @@ function starterContent(edition: MorningPaperEditionV1): string {
 export function materializeDeliveryParts(
   edition: MorningPaperEditionV1,
 ): MarketResearchJobResult["deliveries"] {
-  const starter = neutralizeUntrustedDiscordMarkdown(starterContent(edition));
-  if (starter.length > 2_000) throw new Error("composition_schema_invalid");
+  const fullStarter = neutralizeUntrustedDiscordMarkdown(starterContent(edition));
+  const starterParts = fullStarter.length <= 2_000
+    ? [fullStarter]
+    : splitSemanticContent(fullStarter, MAX_REPLY_BODY_CHARACTERS);
+  const starter = starterParts[0];
+  if (starter === undefined) throw new Error("composition_schema_invalid");
   const chartRequestsBySection = new Map<string, string[]>();
   for (const request of edition.chartRequests) {
     const requests = chartRequestsBySection.get(request.sectionId) ?? [];
     requests.push(request.chartRequestId);
     chartRequestsBySection.set(request.sectionId, requests);
   }
-  const rawReplies = edition.sections.flatMap((section) =>
+  const summaryReplies = starterParts.slice(1).map((content): ReplyContent => ({
+    sourceSectionIds: [], heading: "Market summary continued", content, chartAttachmentIds: [],
+  }));
+  const rawReplies = [...summaryReplies, ...edition.sections.flatMap((section) =>
     splitSemanticContent(neutralizeUntrustedDiscordMarkdown(section.markdown), MAX_REPLY_BODY_CHARACTERS).map((content, chunkIndex) => ({
-      sectionId: section.sectionId,
+      sourceSectionIds: [section.sectionId],
       heading: section.heading,
       content,
       chartAttachmentIds: chunkIndex === 0
         ? chartRequestsBySection.get(section.sectionId) ?? []
         : [],
     })),
-  );
+  )];
   const total = rawReplies.length;
   const deliveries: MarketResearchJobResult["deliveries"] = [];
   const starterHash = sha256(starter);
@@ -78,7 +92,7 @@ export function materializeDeliveryParts(
       kind: "reply",
       content,
       contentHash: sha256(content),
-      sourceSectionIds: [reply.sectionId],
+      sourceSectionIds: reply.sourceSectionIds,
       chartAttachmentIds: reply.chartAttachmentIds,
       nonce: sha256(`${edition.editionId}:reply:${sequence}`).slice(0, 24),
     }));

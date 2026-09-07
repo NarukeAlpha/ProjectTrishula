@@ -9,7 +9,7 @@ const citationMarker = /\[[A-Za-z0-9:._-]{1,256}\]/gu;
 const atomicReportLine = /^(?:[-*+]\s|\d+[.)]\s|[A-Z][A-Z0-9.^=-]{0,19}\s*(?::|\||-|—))[^\n]*(?:\n|$)/gmu;
 const fencedCodeBlock = /```[^\n]*\n[\s\S]*?```(?:\n|$)/gu;
 
-function protectedRanges(content: string): ProtectedRange[] {
+function protectedRanges(content: string, maximumReportLine = Infinity): ProtectedRange[] {
   const ranges: ProtectedRange[] = [];
   for (const pattern of [markdownLink, plainUrl, citationMarker, atomicReportLine, fencedCodeBlock]) {
     pattern.lastIndex = 0;
@@ -17,6 +17,10 @@ function protectedRanges(content: string): ProtectedRange[] {
     while ((match = pattern.exec(content)) !== null) {
       const start = match.index;
       let end = start + match[0].length;
+      // Keep ordinary report rows together, but let a row longer than one Discord
+      // part use normal sentence/word boundaries. Its links and citations remain
+      // independently protected by the other patterns.
+      if (pattern === atomicReportLine && end - start > maximumReportLine) continue;
       if (pattern === plainUrl) {
         while (end > start && /[.,;:!?)]/u.test(content[end - 1] ?? "")) end -= 1;
       }
@@ -84,7 +88,7 @@ function fallbackBoundary(
 function splitSemanticContentCore(content: string, maximum: number): string[] {
   if (content.length === 0) return [];
   if (content.length <= maximum) return [content];
-  const protectedContent = protectedRanges(content);
+  const protectedContent = protectedRanges(content, maximum);
   if (protectedContent.some((range) => range.end - range.start > maximum)) {
     throw new Error("composition_schema_invalid");
   }

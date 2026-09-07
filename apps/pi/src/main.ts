@@ -9,7 +9,6 @@ import { createDiscordAgentRunner } from "./discord/runner.js";
 import { createMorningPaperComposer } from "./market-research/composer.js";
 import { ConvexMarketResearchClient } from "./market-research/convex-client.js";
 import { MarketResearchExaClient } from "./market-research/exa-client.js";
-import { createConfiguredMarketDataProvider } from "./market-research/exa-financial-datasets-provider.js";
 import { createMarketResearchRunner } from "./market-research/runner.js";
 
 async function main(): Promise<void> {
@@ -26,7 +25,7 @@ async function main(): Promise<void> {
   });
   const marketResearch = config.marketResearchEnabled && config.exaApiKey !== undefined
     ? createMarketResearchRunner({
-        exaClient: (request) => {
+        exaClient: (request, initialUsage) => {
           const maximumCostUsd = request.preferences.exaMaxCostUsd ?? config.exaMaxCostUsdPerEdition;
           return new MarketResearchExaClient({
             apiKey: config.exaApiKey ?? "",
@@ -43,21 +42,10 @@ async function main(): Promise<void> {
             ),
             ...(maximumCostUsd === undefined ? {} : { maximumCostUsd }),
             onCostEvent: callbacks.costObserver(request),
+            initialUsage,
             logger: consoleLogger,
           });
         },
-        marketDataFactory: (request, exaClient) =>
-          createConfiguredMarketDataProvider(
-            {
-              providerId: config.marketDataProviderId,
-              financialDatasetsOwnerDecision:
-                config.financialDatasetsOwnerDecision,
-              financialDatasetsMaxCostUsdPerRequest:
-                config.financialDatasetsMaxCostUsdPerRequest,
-            },
-            request,
-            exaClient,
-          ),
         composer: createMorningPaperComposer(codexRuntime, config.marketResearchModel),
         callbacks,
         logger: consoleLogger,

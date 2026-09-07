@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { marketResearchEditionRecordSchema } from "../convex/market_research.js";
+import { morningPaperEditionSchema } from "../../pi/src/market-research/contracts.js";
 
 function fixture() {
   const cited = { text: "Evidence-backed setup detail.", sourceIds: ["source-1"] };
@@ -35,6 +36,19 @@ function fixture() {
 }
 
 describe("positive ranked setup chart acceptance", () => {
+  it("accepts the full scoring range in both the worker and persistence schemas", () => {
+    const edition = fixture();
+    const setup = edition.primaryBoard[0]!;
+    setup.score = 100;
+    setup.components.premarketStructure = 15;
+    setup.components.levelQualityAndProximity = 20;
+    expect(morningPaperEditionSchema.safeParse(edition).success).toBe(true);
+    expect(marketResearchEditionRecordSchema.safeParse(edition).success).toBe(true);
+    setup.components.dailyAndHourlyBias = 21;
+    expect(morningPaperEditionSchema.safeParse(edition).success).toBe(false);
+    expect(marketResearchEditionRecordSchema.safeParse(edition).success).toBe(false);
+  });
+
   it("allows TOP WATCH and WATCH charts in the primary board", () => {
     const edition = fixture();
     expect(marketResearchEditionRecordSchema.safeParse(edition).success).toBe(true);

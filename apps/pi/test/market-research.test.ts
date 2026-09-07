@@ -1077,6 +1077,30 @@ describe("semantic Discord chunking", () => {
     expect(chunks).toContain("```text\nA complete protected block.\n```\n");
   });
 
+  it("splits oversized report bullets and rows without losing text, links, or citations", () => {
+    const link = "[official filing](https://example.com/filing)";
+    for (const prefix of ["- ", "1. ", "AAPL | WATCH | "]) {
+      const content = `${prefix}${"Reported market context. ".repeat(80)}${link} Evidence [exa-source-1].\n`;
+      const chunks = splitSemanticContent(content, 1_850);
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.join("")).toBe(content);
+      expect(chunks.every((chunk) => chunk.length <= 1_850)).toBe(true);
+      expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+      expect(chunks.some((chunk) => chunk.includes("[exa-source-1]"))).toBe(true);
+      expect(chunks[0]).toMatch(/\.\s$/u);
+    }
+  });
+
+  it("keeps a link near an oversized bullet boundary intact and still rejects an oversized URL", () => {
+    const link = "[source](https://example.com/long-source-name)";
+    const content = `- ${"Market facts. ".repeat(6)}${link} ${"More facts. ".repeat(15)}[exa-1]\n`;
+    const chunks = splitSemanticContent(content, 100);
+    expect(chunks.join("")).toBe(content);
+    expect(chunks.every((chunk) => chunk.length <= 100)).toBe(true);
+    expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+    expect(() => splitSemanticContent(`- https://example.com/${"a".repeat(150)}`, 100)).toThrow("composition_schema_invalid");
+  });
+
   it("closes and reopens long multiline and unbroken code fences without losing report content", () => {
     const bodies = [
       `${"A long protected line. ".repeat(15)}\n${"second line ".repeat(12)}\n`,

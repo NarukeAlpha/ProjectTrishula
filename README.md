@@ -4,9 +4,9 @@ Project Trishula connects a phone-friendly chat control surface to a Discord mar
 
 Discord is public-research only. It does not place trades or read a brokerage account. The authenticated web chat keeps its separate capability policy and conversation history.
 
-The repository also contains a disabled-by-default morning market newspaper. Convex schedules and fences it independently from Discord conversations. Pi collects bounded evidence in a separate job and tool-free composer session. The Discord gateway publishes immutable parts in one forum thread.
+The morning market newspaper runs independently from Discord conversations. Convex schedules an isolated Pi research session. The agent uses Exa search/read tools, saves cited sources, and queues optional CHART-IMG images for positive ranked setups. The Discord gateway publishes the report in one forum thread.
 
-The repository implementation is not production enablement. Pi uses the pinned official `exa-js` `2.19.0` client, but the live structured market-data adapter remains intentionally disabled. Pi research, Discord publication, and newspaper charts also default to disabled. A dry-run preview uses the isolated research and result path without creating an edition, scheduled key, delivery, or Discord thread. Complete every external gate in [the operations guide](docs/MARKET_RESEARCH_OPERATIONS.md) before changing those defaults.
+Pi uses the pinned official `exa-js` `2.19.0` client and the existing Codex OAuth session. A dedicated numerical feed is optional, not a requirement for research or publication. Missing or unverified values are disclosed; available news and risk analysis still belong in the report. Existing runtime enablement and per-server schedules remain separate. See [release readiness](docs/RELEASE_READINESS.md) for verified deployment status; older structured-provider evaluation gates apply only to that optional adapter.
 
 ## Services
 
