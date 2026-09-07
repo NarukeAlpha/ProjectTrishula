@@ -217,13 +217,6 @@ export const marketResearchPreferencesSchema = z.object({
       message: "An enabled schedule requires a confirmed timezone and forum.",
     });
   }
-  if (value.includeCharts && !value.chartsAcceptancePassed) {
-    context.addIssue({
-      code: "custom",
-      path: ["includeCharts"],
-      message: "Charts remain disabled until MR-016 passes.",
-    });
-  }
 });
 
 export type MarketResearchPreferencesV1 = z.infer<

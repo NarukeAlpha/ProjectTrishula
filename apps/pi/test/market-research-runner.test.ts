@@ -456,6 +456,13 @@ describe("market-research durable collection recovery", () => {
         ? { ...section, markdown: "AAPL traded at $202.50." }
         : section),
     }, scopedEvidence, request().preferences)).toThrow("composition_schema_invalid");
+    expect(() => validateComposedEdition({
+      ...scopedEdition,
+      topStories: [
+        { ...firstStory, text: "AAPL traded at $2026." },
+        ...scopedEdition.topStories.slice(1),
+      ],
+    }, scopedEvidence, request().preferences)).toThrow("composition_schema_invalid");
   });
 
   it("does not compose from a partial checkpoint without the completion marker", async () => {

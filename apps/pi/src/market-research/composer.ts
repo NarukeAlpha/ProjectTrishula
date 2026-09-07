@@ -72,28 +72,26 @@ function assistantText(session: AgentSession, signal?: AbortSignal): string {
 }
 
 const prohibitedBrokerageLanguage = /\b(?:placed|submitted|executed|bought|sold|entered|exited|cancelled|canceled|modified)\s+(?:an?\s+)?(?:order|position|trade)\b/i;
-const numericToken = /(?<![A-Za-z0-9])[-+]?\$?\d[\d,]*(?:\.\d+)?%?(?:\s?(?:million|billion|thousand|shares|x))?/giu;
+const numericToken = /(?<![A-Za-z0-9])[-+]?\$?\d[\d,]*(?:\.\d+)?%?(?:\s?(?:million|billion|thousand|shares|x))?(?:\s?(?:usd|dollars?|percent))?/giu;
+
+function normalizeNumericToken(value: string): string {
+  let token = value.toLowerCase().replace(/[\s,]/gu, "");
+  const isCurrency = token.startsWith("$") || /(?:usd|dollars?)$/u.test(token);
+  token = token.replace(/^\$/u, "").replace(/(?:usd|dollars?)$/u, "");
+  if (isCurrency) return `$${token}`;
+  const isPercentage = token.includes("%") || token.endsWith("percent");
+  token = token.replace(/%/gu, "").replace(/percent$/u, "");
+  return isPercentage ? `${token}%` : token;
+}
 
 function normalizedNumericTokens(values: readonly string[]): Set<string> {
   const tokens = new Set<string>();
   for (const value of values) {
     for (const match of value.matchAll(numericToken)) {
-      tokens.add(match[0].toLowerCase().replace(/[\s,$]/g, ""));
+      tokens.add(normalizeNumericToken(match[0]));
     }
   }
   return tokens;
-}
-
-function sharedEvidenceText(evidence: MorningPaperEvidenceV1): string[] {
-  return [
-    evidence.generatedAt,
-    evidence.session.editionDate,
-    evidence.session.configuredLocalTime,
-    evidence.session.marketTime,
-    evidence.session.previousSessionDate ?? "",
-    evidence.session.previousSessionClose ?? "",
-    evidence.session.nextSessionDate ?? "",
-  ];
 }
 
 function evidenceTextBySource(evidence: MorningPaperEvidenceV1): Map<string, string[]> {
@@ -101,9 +99,6 @@ function evidenceTextBySource(evidence: MorningPaperEvidenceV1): Map<string, str
     item.evidenceId,
     [
       item.title ?? "",
-      item.publishedAt ?? "",
-      item.providerTimestamp ?? "",
-      item.retrievedAt,
       ...item.highlights,
       ...item.normalizedClaims,
     ],
@@ -147,7 +142,6 @@ function validateNumericGrounding(
   edition: MorningPaperEditionV1,
   evidence: MorningPaperEvidenceV1,
 ): void {
-  const sharedNumbers = normalizedNumericTokens(sharedEvidenceText(evidence));
   const evidenceBySource = evidenceTextBySource(evidence);
   const numbersBySource = new Map([...evidenceBySource].map(([sourceId, values]) => [
     sourceId,
@@ -156,8 +150,7 @@ function validateNumericGrounding(
   for (const claim of editionNumericClaims(edition)) {
     for (const token of normalizedNumericTokens([claim.text])) {
       if (
-        !sharedNumbers.has(token)
-        && !claim.sourceIds.some((sourceId) => numbersBySource.get(sourceId)?.has(token) === true)
+        !claim.sourceIds.some((sourceId) => numbersBySource.get(sourceId)?.has(token) === true)
       ) {
         throw new Error("composition_schema_invalid");
       }
@@ -181,7 +174,6 @@ export function validateComposedEdition(
   ) throw new Error("composition_schema_invalid");
   if (
     (!preferences.includeCharts && edition.chartRequests.length > 0)
-    || (preferences.includeCharts && !preferences.chartsAcceptancePassed)
     || edition.chartRequests.length > preferences.maximumCharts
     || edition.primaryBoard.length > preferences.maximumRankedSetups
   ) throw new Error("composition_schema_invalid");

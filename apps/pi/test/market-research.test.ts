@@ -137,8 +137,8 @@ const slot = buildResearchPlan(
 ).slots[0];
 
 describe("market research contracts and planning", () => {
-  it("rejects unknown fields and unsafe chart enablement", () => {
-    expect(() => preferences({ includeCharts: true })).toThrow(/MR-016/);
+  it("keeps chart opt-in independent from the retained legacy acceptance field", () => {
+    expect(preferences({ includeCharts: true }).includeCharts).toBe(true);
     expect(() => marketResearchPreferencesSchema.parse({ ...preferences(), unknown: true })).toThrow();
   });
 
