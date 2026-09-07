@@ -688,6 +688,43 @@ describe("publication telemetry boundaries", () => {
     expect(events.every((event) => event.durationMs === undefined)).toBe(true);
     expect(events.some((event) => event.operation === "send" && event.outcome === "sent")).toBe(true);
   });
+
+  it.each([false, true])("consumes rejected async log promises and preserves operation failure=%s", async (fails) => {
+    const unhandledRejection = vi.fn();
+    const publicationLog = vi.fn(async () => { throw new Error("async log sink unavailable"); });
+    const operationFailure = new Error("original acknowledgment failure");
+    const { publisher, convex, create } = harness({ claim: claim(), publicationLog });
+    if (fails) vi.spyOn(convex, "acknowledgePublication").mockRejectedValue(operationFailure);
+    process.on("unhandledRejection", unhandledRejection);
+    try {
+      if (fails) {
+        await expect(publisher.poll()).rejects.toBe(operationFailure);
+      } else {
+        await expect(publisher.poll()).resolves.toBe(true);
+        expect(convex.acknowledgements.at(-1)?.status).toBe("sent");
+      }
+      // Node reports unhandled rejections after promise microtasks drain.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandledRejection).not.toHaveBeenCalled();
+      expect(publicationLog).toHaveBeenCalled();
+      expect(create).toHaveBeenCalledOnce();
+    } finally {
+      process.removeListener("unhandledRejection", unhandledRejection);
+    }
+  });
+
+  it("does not wait for an async log sink before completing publication", async () => {
+    const pendingLog = Promise.withResolvers<void>();
+    const { publisher, convex } = harness({ claim: claim(), publicationLog: () => pendingLog.promise });
+    const completion = publisher.poll();
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(convex.acknowledgements.at(-1)?.status).toBe("sent");
+    } finally {
+      pendingLog.resolve();
+    }
+    await expect(completion).resolves.toBe(true);
+  });
 });
 
 describe("Discord publication error mapping", () => {

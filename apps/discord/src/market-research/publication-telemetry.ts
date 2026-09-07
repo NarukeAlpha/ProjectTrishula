@@ -29,7 +29,7 @@ export interface PublicationEvent extends PublicationObservation {
   durationMs?: number | undefined;
 }
 
-export type PublicationLogSink = (event: PublicationEvent) => void;
+export type PublicationLogSink = (event: PublicationEvent) => void | Promise<void>;
 
 function writePublicationEvent(event: PublicationEvent): void {
   const { code, ...details } = event;
@@ -90,7 +90,7 @@ export class PublicationTelemetry {
       const observation = describe();
       const endedAt = startedAt === undefined ? undefined : this.now();
       // Project each field explicitly. Never spread claims, SDK results, or error objects.
-      this.sink({
+      void Promise.resolve(this.sink({
         event: "market_research_publication",
         editionId: claim.editionId,
         guildId: claim.guildId,
@@ -110,6 +110,8 @@ export class PublicationTelemetry {
         renderedCharts: observation.renderedCharts,
         unavailableCharts: observation.unavailableCharts,
         attachmentCount: observation.attachmentCount,
+      })).catch(() => {
+        // Consume asynchronous sink failures without delaying or changing delivery.
       });
     } catch {
       // A broken telemetry sink or projector must never retry or suppress a publication.
