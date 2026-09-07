@@ -6,6 +6,7 @@ import type {
   Model,
   ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { describe, expect, it, vi } from "vitest";
 import { DISCORD_ASSISTANT_PROFILE } from "../src/assistant/profiles.js";
 import {
@@ -164,6 +165,34 @@ function fakeRuntime(
   return { completeSimple };
 }
 
+function pinnedCodexRuntime(): Pick<ModelRuntime, "completeSimple"> {
+  const provider = openaiCodexProvider();
+  const providerModel = provider.getModels().find(({ id }) => id === "gpt-5.6-luna");
+  if (providerModel === undefined) throw new Error("Pinned Luna model is missing.");
+  const authPayload = {
+    "https://api.openai.com/auth": { chatgpt_account_id: "offline-test" },
+  };
+  const apiKey = `header.${Buffer.from(JSON.stringify(authPayload)).toString("base64url")}.signature`;
+  const completeSimple: ModelRuntime["completeSimple"] = async (
+    _model,
+    context,
+    options?: ModelsSimpleStreamOptions,
+  ) => {
+    if (options === undefined) throw new Error("Pinned Codex options are missing.");
+    const { transformHeaders, headers: configuredHeaders, ...providerOptions } = options;
+    const headers = transformHeaders === undefined
+      ? configuredHeaders
+      : await transformHeaders(configuredHeaders ?? {});
+    const pinnedOptions: ModelsSimpleStreamOptions = {
+      ...providerOptions,
+      apiKey,
+    };
+    if (headers !== undefined) pinnedOptions.headers = headers;
+    return provider.streamSimple(providerModel, context, pinnedOptions).result();
+  };
+  return { completeSimple };
+}
+
 function checkpointFromArtifact(
   artifact: Awaited<ReturnType<typeof generateNativeCompaction>>,
 ): DiscordNativeCheckpoint {
@@ -202,6 +231,24 @@ function compatibilityIdentity(checkpoint: DiscordNativeCheckpoint) {
 }
 
 describe("native Discord compaction", () => {
+  it("accepts the pinned Pi payload before JSON serialization", async () => {
+    const upstreamFetch = vi.fn(async () => sseResponse("pinned-provider-opaque"));
+
+    const artifact = await generateNativeCompaction({
+      runtime: pinnedCodexRuntime(),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: upstreamFetch,
+    });
+
+    expect(upstreamFetch).toHaveBeenCalledOnce();
+    expect(artifact.replacementHistory.at(-1)).toEqual({
+      type: "compaction",
+      encrypted_content: "pinned-provider-opaque",
+    });
+  });
+
   it("uses the pinned Codex SSE compaction contract and handles nullable headers", async () => {
     const capture: RuntimeCapture = {};
     const upstreamFetch = vi.fn(async () => sseResponse());
