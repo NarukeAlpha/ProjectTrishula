@@ -672,6 +672,11 @@ export const discordFrontmanPlanRequestSchema = z
     }
   });
 
+export const discordNativeCheckpointRejectionSchema = z.object({
+  checkpointId: stableId,
+  reason: z.enum(["provider_rejected", "checkpoint_incompatible"]),
+}).strict();
+
 export const discordFrontmanPlanResponseSchema = z
   .object({
     profile: z.literal("frontman_plan"),
@@ -693,6 +698,7 @@ export const discordFrontmanPlanResponseSchema = z
       DISCORD_ACKNOWLEDGEMENT_MAX_CHARACTERS,
     ).optional(),
     researchRequest: frontmanResearchRequestSchema.optional(),
+    nativeCheckpointRejection: discordNativeCheckpointRejectionSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -881,6 +887,7 @@ export const discordFrontmanResumeResponseSchema = z
     ]),
     reply: discordContent(DISCORD_FINAL_REPLY_MAX_CHARACTERS).optional(),
     recheckRequest: frontmanResearchRequestSchema.optional(),
+    nativeCheckpointRejection: discordNativeCheckpointRejectionSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -928,6 +935,9 @@ export type DiscordNativeCompactionArtifact = z.infer<
   typeof discordNativeCompactionArtifactSchema
 >;
 export type DiscordNativeCheckpoint = z.infer<typeof discordNativeCheckpointSchema>;
+export type DiscordNativeCheckpointRejection = z.infer<
+  typeof discordNativeCheckpointRejectionSchema
+>;
 export type DiscordTriageRequest = z.infer<typeof discordTriageRequestSchema>;
 export type DiscordTriageResponse = z.infer<typeof discordTriageResponseSchema>;
 export type DiscordResearchRequest = z.infer<

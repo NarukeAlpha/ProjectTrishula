@@ -198,4 +198,45 @@ describe("Convex portable checkpoints", () => {
       nativeCompaction: response.nativeCompaction,
     });
   });
+
+  it("invalidates rejected opaque state with the exact native-v2 fence", async () => {
+    let body: unknown;
+    let protocol: string | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      // SAFETY: The client serializes this request body as JSON immediately before fetch.
+      body = JSON.parse(String(init?.body)) as unknown;
+      protocol = new Headers(init?.headers).get("x-trishula-discord-protocol");
+      return new Response(JSON.stringify({
+        ok: true,
+        operation: "invalidateNativeCheckpoint",
+        result: { accepted: true, invalidated: true },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const client = new ConvexDiscordClient(config, "discord-instance-1");
+    await expect(client.invalidateNativeCheckpoint({
+      guildId: "123456789012345678",
+      conversationId: "discord:123456789012345678",
+      checkpointId: "checkpoint:native:1",
+      epoch: 1,
+      ownerBindingVersion: 2,
+      revision: 10,
+      generation: 3,
+      routingGeneration: 4,
+    })).resolves.toBeUndefined();
+
+    expect(protocol).toBe("native-v2");
+    expect(body).toEqual({
+      operation: "invalidateNativeCheckpoint",
+      actorId: "owner-1",
+      guildId: "123456789012345678",
+      conversationId: "discord:123456789012345678",
+      checkpointId: "checkpoint:native:1",
+      epoch: 1,
+      expectedOwnerBindingVersion: 2,
+      expectedRevision: 10,
+      expectedGeneration: 3,
+      expectedRoutingGeneration: 4,
+    });
+  });
 });

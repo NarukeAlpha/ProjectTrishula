@@ -143,6 +143,13 @@ class FakeConvex implements ConvexLoopClient {
   newestMessages: AgentMessage[] = [newestMessage];
   newestThroughSequence = 2;
   durableWrites: string[] = [];
+  invalidations: Array<{
+    checkpointId: string;
+    revision: number;
+    generation: number;
+    routingGeneration: number;
+  }> = [];
+  nativeCheckpointContext = false;
   recovery: Extract<ClaimLoopResponse, { claimed: true }>["recovery"];
   recoveryFailure: Extract<ClaimLoopResponse, { claimed: true }>["recoveryFailure"];
 
@@ -156,6 +163,47 @@ class FakeConvex implements ConvexLoopClient {
       claim.triggerKind = this.claimTriggerKind;
       if (this.recovery !== undefined) claim.recovery = this.recovery;
       if (this.recoveryFailure !== undefined) claim.recoveryFailure = this.recoveryFailure;
+      if (this.nativeCheckpointContext) {
+        const checkpointId = "checkpoint:native:1";
+        claim.conversation.activeCheckpointId = checkpointId;
+        claim.durableContext = {
+          ...claim.durableContext,
+          activeCheckpointId: checkpointId,
+          activeCheckpointCompactedThroughOrdinal: 1,
+          activeCheckpointSourceRevision: 1,
+          activeCheckpointSourceContextHash: "c".repeat(64),
+          nativeCheckpoint: {
+            checkpointId,
+            ownerId: claim.conversation.ownerId,
+            ownerBindingVersion: claim.conversation.ownerBindingVersion,
+            guildId: claim.conversation.guildId,
+            conversationId: claim.conversation.conversationId,
+            epoch: claim.conversation.epoch,
+            compactedThroughOrdinal: 1,
+            sourceRevision: 1,
+            sourceContextHash: "c".repeat(64),
+            personalityVersion: claim.conversation.personalityVersion,
+            systemPromptHash: claim.conversation.systemPromptHash,
+            capabilityProfileHash: claim.conversation.capabilityProfileHash,
+            artifact: {
+              schemaVersion: 1,
+              implementationVersion: "responses-compaction-v2-pi-0_84_1-v1",
+              provider: "openai-codex",
+              model: "gpt-5.6-luna",
+              replacementHistory: [{ type: "compaction", opaque: "provider-owned" }],
+              artifactSha256: "d".repeat(64),
+              serializedBytes: 56,
+              usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+              requestEvidence: {
+                store: false,
+                transport: "sse",
+                betaFeature: "remote_compaction_v2",
+                endpoint: "chatgpt-codex-responses",
+              },
+            },
+          },
+        };
+      }
     }
     return claim;
   }
@@ -239,6 +287,16 @@ class FakeConvex implements ConvexLoopClient {
   ): Promise<void> {
     this.durableWrites.push("resume");
   }
+
+  async invalidateNativeCheckpoint(invalidation: {
+    checkpointId: string;
+    revision: number;
+    generation: number;
+    routingGeneration: number;
+  }): Promise<void> {
+    this.invalidations.push(invalidation);
+    this.durableWrites.push("native_invalidated");
+  }
 }
 
 class FakePi implements PiLoopClient {
@@ -250,6 +308,7 @@ class FakePi implements PiLoopClient {
   frontmanAction: FrontmanPlanResponse["action"] = "research";
   durableCalls: string[] = [];
   resumeAction: FrontmanResumeResponse["action"] = "send";
+  rejectNativeCheckpoint = false;
 
   async frontmanPlan(input: FrontmanPlanRequest): Promise<FrontmanPlanResponse> {
     this.durableCalls.push("plan");
@@ -266,6 +325,9 @@ class FakePi implements PiLoopClient {
         reply: this.frontmanAction === "reply"
           ? "A durable direct answer."
           : "Which market session do you mean?",
+        nativeCheckpointRejection: this.rejectNativeCheckpoint
+          ? { checkpointId: "checkpoint:native:1", reason: "provider_rejected" }
+          : undefined,
       };
     }
     if (this.frontmanAction === "silent") {
@@ -465,6 +527,29 @@ describe("ChannelLoopOrchestrator", () => {
       consumesThroughSequence: 2,
       fence: { eligibleHumanRevision: 2 },
     });
+  });
+
+  it("invalidates provider-rejected opaque state before it persists the portable fallback", async () => {
+    const convex = new FakeConvex();
+    convex.claimTriggerKind = "mention";
+    convex.nativeCheckpointContext = true;
+    const pi = new FakePi();
+    pi.frontmanAction = "reply";
+    pi.rejectNativeCheckpoint = true;
+    orchestrator(convex, pi, true).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(1));
+    expect(convex.durableWrites).toEqual(["native_invalidated", "plan"]);
+    expect(convex.invalidations).toEqual([{
+      checkpointId: "checkpoint:native:1",
+      revision: 1,
+      generation: 1,
+      routingGeneration: 1,
+      guildId: "10",
+      conversationId: "discord:10",
+      epoch: 1,
+      ownerBindingVersion: 1,
+    }]);
   });
 
   it("orders explicit acknowledgement, isolated Sol, catch-up, and resume", async () => {

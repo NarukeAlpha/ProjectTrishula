@@ -101,6 +101,8 @@ function sseResponse(opaque = "opaque-secret"): Response {
   const events = [
     {
       type: "response.output_item.done",
+      output_index: 0,
+      sequence_number: 1,
       item: { type: "compaction", encrypted_content: opaque },
     },
     {
@@ -414,7 +416,7 @@ describe("native Discord compaction", () => {
     }
   });
 
-  it("accepts the runtime response.done alias only with linked output and exact usage", async () => {
+  it("accepts the SDK-shaped output event and response.done alias with linked output and exact usage", async () => {
     const compaction = {
       id: "item_1",
       type: "compaction",
@@ -424,8 +426,8 @@ describe("native Discord compaction", () => {
       { type: "response.created", response: { id: "response_1" } },
       {
         type: "response.output_item.done",
-        response_id: "response_1",
         output_index: 0,
+        sequence_number: 1,
         item: compaction,
       },
       {
@@ -453,23 +455,23 @@ describe("native Discord compaction", () => {
 
   it.each([
     ["missing completed status", [
-      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "opaque" } },
+      { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "compaction", encrypted_content: "opaque" } },
       { type: "response.completed", response: { usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
     ]],
     ["inconsistent usage", [
-      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "opaque" } },
+      { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "compaction", encrypted_content: "opaque" } },
       { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 27 } } },
     ]],
     ["terminal before output", [
       { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
-      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "opaque" } },
+      { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "compaction", encrypted_content: "opaque" } },
     ]],
     ["unsupported output item", [
-      { type: "response.output_item.done", item: { type: "message", role: "assistant", content: [] } },
+      { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "message", role: "assistant", content: [] } },
       { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
     ]],
     ["mismatched terminal output", [
-      { type: "response.output_item.done", output_index: 0, item: { id: "item_1", type: "compaction", encrypted_content: "opaque" } },
+      { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { id: "item_1", type: "compaction", encrypted_content: "opaque" } },
       {
         type: "response.completed",
         response: {
@@ -480,23 +482,18 @@ describe("native Discord compaction", () => {
       },
     ]],
     ["malformed terminal followed by a valid terminal", [
-      { type: "response.output_item.done", item: { type: "compaction", opaque: "value" } },
+      { type: "response.output_item.done", output_index: 0, sequence_number: 1, item: { type: "compaction", opaque: "value" } },
       { type: "response.completed", response: { status: "incomplete" } },
       { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
     ]],
     ["malformed output followed by a valid output", [
       { type: "response.output_item.done" },
-      { type: "response.output_item.done", item: { type: "compaction", opaque: "value" } },
+      { type: "response.output_item.done", output_index: 0, sequence_number: 2, item: { type: "compaction", opaque: "value" } },
       { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
-    ]],
-    ["created response without an output response ID", [
-      { type: "response.created", response: { id: "response_1" } },
-      { type: "response.output_item.done", item: { type: "compaction", opaque: "value" } },
-      { type: "response.completed", response: { id: "response_1", status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
     ]],
     ["created response without a terminal response ID", [
       { type: "response.created", response: { id: "response_1" } },
-      { type: "response.output_item.done", response_id: "response_1", item: { type: "compaction", opaque: "value" } },
+      { type: "response.output_item.done", response_id: "response_1", output_index: 0, sequence_number: 1, item: { type: "compaction", opaque: "value" } },
       { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
     ]],
   ])("rejects %s in the native SSE state machine", async (_scenario, events) => {

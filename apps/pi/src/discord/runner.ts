@@ -47,6 +47,7 @@ import {
 import { buildPortableCheckpointResponse } from "./compaction.js";
 import { LunaConversationStore, type LunaConversationIdentity } from "./conversations.js";
 import {
+  compatibleNativeCheckpoint,
   generateNativeCompaction,
   injectNativeCheckpoint,
   NativeCompactionError,
@@ -411,6 +412,12 @@ export function parseDiscordAgentOutput(
   text: string,
 ): DiscordAgentResponse {
   const value = jsonValueFromText(text);
+  if (
+    (profile === "frontman_plan" || profile === "frontman_resume")
+    && !z.object({
+      nativeCheckpointRejection: z.never().optional(),
+    }).passthrough().safeParse(value).success
+  ) throw new DiscordAgentOutputError("invalid_response_schema");
   const parsed =
     profile === "triage"
       ? discordTriageResponseSchema.safeParse(value)
@@ -970,6 +977,7 @@ interface NativeCompactionTurnState {
   enabled: boolean;
   applied: boolean;
   fallbackUsed: boolean;
+  rejectionReason?: "provider_rejected" | "checkpoint_incompatible";
   checkpoint?: DiscordNativeCheckpoint;
   expected?: NativeCheckpointCompatibilityIdentity;
 }
@@ -1237,6 +1245,7 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
     nativeTurnState.enabled = false;
     nativeTurnState.applied = false;
     nativeTurnState.fallbackUsed = false;
+    delete nativeTurnState.rejectionReason;
     delete nativeTurnState.checkpoint;
     delete nativeTurnState.expected;
     if (
@@ -1249,7 +1258,6 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
       && request.durableContext.activeCheckpointSourceContextHash !== undefined
       && request.durableContext.nativeCheckpoint !== undefined
     ) {
-      nativeTurnState.enabled = true;
       nativeTurnState.checkpoint = request.durableContext.nativeCheckpoint;
       nativeTurnState.expected = {
         checkpointId: request.conversation.activeCheckpointId,
@@ -1266,6 +1274,14 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
         systemPromptHash: request.conversation.systemPromptHash,
         capabilityProfileHash: request.conversation.capabilityProfileHash,
       };
+      if (compatibleNativeCheckpoint(
+        nativeTurnState.checkpoint,
+        nativeTurnState.expected,
+      )) {
+        nativeTurnState.enabled = true;
+      } else {
+        nativeTurnState.rejectionReason = "checkpoint_incompatible";
+      }
     }
     const abort = () => {
       void session.abort();
@@ -1318,6 +1334,7 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
             }
             nativeTurnState.enabled = false;
             nativeTurnState.fallbackUsed = true;
+            nativeTurnState.rejectionReason = "provider_rejected";
             this.logger?.warn("discord_native_compaction_fallback", {
               requestId: request.requestId,
               checkpointId: nativeTurnState.checkpoint?.checkpointId ?? "unknown",
@@ -1364,9 +1381,23 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
           }
         }
       }
+      if (
+        nativeTurnState.rejectionReason !== undefined
+        && nativeTurnState.checkpoint !== undefined
+        && (result.profile === "frontman_plan" || result.profile === "frontman_resume")
+      ) {
+        result = {
+          ...result,
+          nativeCheckpointRejection: {
+            checkpointId: nativeTurnState.checkpoint.checkpointId,
+            reason: nativeTurnState.rejectionReason,
+          },
+        };
+      }
       return result;
     } finally {
       nativeTurnState.enabled = false;
+      delete nativeTurnState.rejectionReason;
       delete nativeTurnState.checkpoint;
       delete nativeTurnState.expected;
       signal?.removeEventListener("abort", abort);

@@ -45,7 +45,8 @@ const createdEventSchema = z.object({
 }).passthrough();
 const outputItemEventSchema = z.object({
   type: z.literal("response.output_item.done"),
-  output_index: z.number().int().nonnegative().optional(),
+  output_index: z.number().int().nonnegative(),
+  sequence_number: z.number().int().nonnegative(),
   response_id: z.string().min(1).optional(),
   item: z.json(),
 }).passthrough();
@@ -316,6 +317,7 @@ function responseArtifact(
         || !compactionItemSchema.safeParse(output.data.item).success
         || (
           createdResponseId !== undefined
+          && output.data.response_id !== undefined
           && output.data.response_id !== createdResponseId
         )
       ) {
@@ -348,9 +350,7 @@ function responseArtifact(
     const compactionOutput = terminalOutput.filter(
       (item) => compactionItemSchema.safeParse(item).success,
     );
-    const linkedItem = outputIndex === undefined
-      ? compactionOutput
-      : [terminalOutput[outputIndex]];
+    const linkedItem = [terminalOutput[outputIndex]];
     if (
       terminalOutput.length !== 1
       || compactionOutput.length !== 1
