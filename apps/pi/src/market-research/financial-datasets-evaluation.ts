@@ -2,6 +2,8 @@
 import { z } from "zod";
 import type { MarketResearchExaClient } from "./exa-client.js";
 import { requirePublicHttpsUrl } from "./source-normalizer.js";
+import { MarketResearchExaError } from "./exa-errors.js";
+import type { MarketResearchSafeErrorCode } from "./contracts.js";
 
 export const FINANCIAL_DATASET_EVALUATION_SYMBOLS = ["AAPL", "NVDA", "AMD", "SPY", "QQQ"] as const;
 
@@ -13,14 +15,64 @@ export const FINANCIAL_DATASET_FIELD_NAMES = [
 ] as const;
 const fieldNames = FINANCIAL_DATASET_FIELD_NAMES;
 
+const sessionSchema = z.enum(["premarket", "regular", "after_hours", "closed"]);
+const citationSchema = z.object({
+  title: z.string().trim().min(1).max(500),
+  url: z.url().max(2_000),
+}).strict();
+const barSchema = z.object({
+  timestamp: z.iso.datetime({ offset: true }),
+  open: z.number().finite().positive(),
+  high: z.number().finite().positive(),
+  low: z.number().finite().positive(),
+  close: z.number().finite().positive(),
+  volume: z.number().finite().nonnegative().nullable(),
+}).strict().refine((bar) => bar.high >= Math.max(bar.open, bar.close)
+  && bar.low <= Math.min(bar.open, bar.close) && bar.high >= bar.low);
+const barsSchema = z.array(barSchema).min(1).max(50).refine((bars) =>
+  bars.every((bar, index) => index === 0 || Date.parse(bar.timestamp) > Date.parse(bars[index - 1]!.timestamp)));
+const actionSchema = z.object({
+  kind: z.enum(["dividend", "split", "offering", "other"]),
+  effectiveAt: z.iso.datetime({ offset: true }),
+  detail: z.string().trim().min(1).max(500),
+}).strict();
+const valueSchema = z.union([
+  z.string().max(500), z.number().finite(), z.boolean(),
+  z.array(barSchema).max(50), z.array(actionSchema).max(20),
+  z.array(citationSchema).max(10), z.array(z.string().trim().min(1).max(100)).max(20),
+]);
+export type FinancialDatasetValue = z.infer<typeof valueSchema>;
+
+const fieldSchemas = {
+  currentPrice: z.number().finite().positive(),
+  quoteTime: z.iso.datetime({ offset: true }),
+  timezone: z.string().max(100).refine((value) => {
+    try { new Intl.DateTimeFormat("en-US", { timeZone: value }); return true; } catch { return false; }
+  }),
+  priorClose: z.number().finite().positive(),
+  sessionLabel: sessionSchema,
+  premarketHigh: z.number().finite().positive(),
+  premarketLow: z.number().finite().positive(),
+  premarketShareVolume: z.number().finite().nonnegative(),
+  premarketDollarVolume: z.number().finite().nonnegative(),
+  bid: z.number().finite().positive(),
+  ask: z.number().finite().positive(),
+  spread: z.number().finite().nonnegative(),
+  bars5m: barsSchema,
+  bars15m: barsSchema,
+  bars60m: barsSchema,
+  barsDaily: barsSchema,
+  barsWeekly: barsSchema,
+  corporateActions: z.array(actionSchema).min(1).max(20),
+  providerCitations: z.array(citationSchema).min(1).max(10),
+  providerIdentifiers: z.array(z.string().trim().min(1).max(100)).min(1).max(20),
+} as const;
+
 const citedValueSchema = z.object({
-  value: z.union([z.string().max(500), z.number().finite(), z.boolean()]).nullable(),
+  value: valueSchema.nullable(),
   asOf: z.iso.datetime({ offset: true }).nullable(),
   sessionLabel: z.enum(["premarket", "regular", "after_hours", "closed", "unknown"]).nullable(),
-  citations: z.array(z.object({
-    title: z.string().trim().min(1).max(500),
-    url: z.url().max(2_000),
-  }).strict()).max(10),
+  citations: z.array(citationSchema).max(10),
 }).strict();
 
 const symbolSnapshotSchema = z.object({
@@ -50,7 +102,7 @@ export interface FinancialDatasetsEvaluationReport {
   schemaVersion: 1;
   evaluationId: string;
   status: "completed" | "failed";
-  safeCode?: "exa_connect_zdr_incompatible" | "exa_invalid_request" | "exa_unavailable";
+  safeCode?: MarketResearchSafeErrorCode;
   configuredInstant: string;
   configuredTimezone: string;
   marketTime: string;
@@ -62,6 +114,8 @@ export interface FinancialDatasetsEvaluationReport {
     asOf: string | null;
     sessionLabel: string | null;
     citationCount: number;
+    value: FinancialDatasetValue | null;
+    citations: z.infer<typeof citationSchema>[];
   }>;
   latencyMs: number;
   costUsd: number | null;
@@ -127,6 +181,7 @@ export async function evaluateFinancialDatasets(
     };
   }
   const start = (options.now ?? Date.now)();
+  let responseCost: number | null = null;
   try {
     const response = await client.runFinancialDatasetEvaluation({
       evaluationId: options.evaluationId,
@@ -135,11 +190,17 @@ export async function evaluateFinancialDatasets(
       maxCostDollars: options.maximumCostUsd,
     }, signal);
     const raw = response.raw;
+    responseCost = reportedCost(raw);
     const structured = structuredEvaluationSchema.parse(structuredOutput(raw));
     for (const snapshot of structured.snapshots) {
       for (const field of Object.values(snapshot.fields)) {
         if (!field) continue;
         for (const citation of field.citations) requirePublicHttpsUrl(citation.url);
+      }
+      const providerCitations = snapshot.fields.providerCitations?.value;
+      const parsedCitations = fieldSchemas.providerCitations.safeParse(providerCitations);
+      if (parsedCitations.success) {
+        for (const citation of parsedCitations.data) requirePublicHttpsUrl(citation.url);
       }
     }
     return {
@@ -147,31 +208,38 @@ export async function evaluateFinancialDatasets(
       status: "completed",
       supportMatrix: structured.snapshots.flatMap((snapshot) => fieldNames.map((field) => {
         const value = snapshot.fields[field];
+        const typedValue = fieldSchemas[field].safeParse(value?.value);
+        const supported = typedValue.success && value?.asOf !== null && value?.asOf !== undefined
+          && sessionSchema.safeParse(value.sessionLabel).success && value.citations.length > 0;
         return {
           symbol: snapshot.symbol,
           field,
-          status: value?.value === null || value === undefined ? "unsupported" as const : "supported" as const,
+          status: supported ? "supported" as const : "unsupported" as const,
           asOf: value?.asOf ?? null,
           sessionLabel: value?.sessionLabel ?? null,
           citationCount: value?.citations.length ?? 0,
+          value: supported ? typedValue.data : null,
+          citations: value?.citations ?? [],
         };
       })),
       latencyMs: Math.max(0, (options.now ?? Date.now)() - start),
-      costUsd: reportedCost(raw),
+      costUsd: responseCost,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "exa_unavailable";
     return {
       ...base,
       status: "failed",
-      safeCode: message === "exa_connect_zdr_incompatible"
+      safeCode: error instanceof MarketResearchExaError
+        ? error.decision.code
+        : message === "exa_connect_zdr_incompatible"
         ? "exa_connect_zdr_incompatible"
         : message === "exa_invalid_request"
           ? "exa_invalid_request"
           : "exa_unavailable",
       supportMatrix: [],
       latencyMs: Math.max(0, (options.now ?? Date.now)() - start),
-      costUsd: null,
+      costUsd: responseCost,
     };
   }
 }

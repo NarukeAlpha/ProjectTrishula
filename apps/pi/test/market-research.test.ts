@@ -1,5 +1,6 @@
 /* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- The test narrows fixed literal source fixtures to exercise the strict source contract. */
 import { describe, expect, it, vi } from "vitest";
+import { AgentRunFailedError } from "exa-js";
 import type { Logger } from "../src/runtime/logger.js";
 import {
   MARKET_RESEARCH_MAX_CHECKPOINT_BYTES,
@@ -267,6 +268,94 @@ describe("official Exa SDK boundary", () => {
     expect(search).toHaveBeenCalledOnce();
   });
 
+  it.each([undefined, -1, Number.NaN, "0.01"])("closes the optional budget when returned cost is %s", async (total) => {
+    const search = vi.fn().mockResolvedValue({ requestId: "unknown-cost", costDollars: { total }, results: [] });
+    const exa = client({ search, getContents: vi.fn() }, { maximumCostUsd: 1 });
+    if (!slot) throw new Error("Missing plan slot.");
+    await exa.searchNews(slot);
+    await expect(exa.searchNews(slot)).rejects.toMatchObject({ message: "exa_budget_exhausted" });
+    expect(exa.usage()).toMatchObject({ costUsd: 0, costStatus: "unknown", budgetClosed: true });
+    expect(exa.costLedger()).toMatchObject([{ operation: "search", outcome: "settled", costUsd: null, late: false }]);
+    expect(search).toHaveBeenCalledOnce();
+  });
+
+  it("accounts for Financial Datasets cost before releasing the cost permit", async () => {
+    const runFinancialDataset = vi.fn().mockResolvedValue({ costDollars: { total: 1 }, output: {} });
+    const exa = client({ search: vi.fn(), getContents: vi.fn(), runFinancialDataset }, { maximumCostUsd: 1 });
+    const request = { evaluationId: "evaluation-cost", query: "bounded evaluation", outputSchema: {}, maxCostDollars: 1 };
+    await exa.runFinancialDatasetEvaluation(request);
+    await expect(exa.runFinancialDatasetEvaluation(request)).rejects.toMatchObject({ message: "exa_budget_exhausted" });
+    expect(exa.usage().costUsd).toBe(1);
+    expect(runFinancialDataset).toHaveBeenCalledOnce();
+  });
+
+  it("retains Financial Datasets permits and records late costs without retrying abandoned work", async () => {
+    const provider = Promise.withResolvers<unknown>();
+    const runFinancialDataset = vi.fn().mockReturnValue(provider.promise);
+    const onCostEvent = vi.fn().mockResolvedValue(undefined);
+    const exa = client({ search: vi.fn(), getContents: vi.fn(), runFinancialDataset }, { maximumCostUsd: 1, onCostEvent });
+    const controller = new AbortController();
+    const request = { evaluationId: "evaluation-late", query: "bounded evaluation", outputSchema: {}, maxCostDollars: 1 };
+    const firstResult = exa.runFinancialDatasetEvaluation(request, controller.signal).catch((error: Error) => error);
+    await vi.waitFor(() => expect(runFinancialDataset).toHaveBeenCalledOnce());
+    controller.abort(new Error("edition_lease_lost"));
+    expect(await firstResult).toMatchObject({ decision: { code: "exa_budget_exhausted", retryable: false } });
+    await expect(exa.runFinancialDatasetEvaluation(request)).rejects.toThrow("exa_budget_exhausted");
+    provider.resolve({ requestId: "late-evaluation", costDollars: { total: 0.25 }, privateResponse: "not-in-ledger" });
+    await vi.waitFor(() => expect(exa.usage().costUsd).toBe(0.25));
+    expect(exa.costLedger()).toMatchObject([
+      { operation: "financial_datasets", outcome: "abandoned", costUsd: null },
+      { operation: "financial_datasets", outcome: "settled", costUsd: 0.25, late: true, requestId: "late-evaluation" },
+    ]);
+    await vi.waitFor(() => expect(onCostEvent).toHaveBeenCalledTimes(2));
+    expect(JSON.stringify(exa.costLedger())).not.toContain("not-in-ledger");
+    expect(runFinancialDataset).toHaveBeenCalledOnce();
+  });
+
+  it("preserves classified errors and ZDR tags through Financial Datasets evaluation", async () => {
+    const failure = new MarketResearchExaError({
+      code: "exa_invalid_request", retryable: false, maximumRetries: 0, scope: "capability",
+      finalForSource: true, tag: "ZDR_INCOMPATIBLE",
+    });
+    expect(classifyExaError(failure)).toBe(failure.decision);
+    const runFinancialDataset = vi.fn().mockRejectedValue(failure);
+    const exa = client({ search: vi.fn(), getContents: vi.fn(), runFinancialDataset });
+    await expect(exa.runFinancialDatasetEvaluation({
+      evaluationId: "evaluation-zdr", query: "bounded evaluation", outputSchema: {}, maxCostDollars: 1,
+    })).rejects.toThrow("exa_connect_zdr_incompatible");
+    expect(runFinancialDataset).toHaveBeenCalledOnce();
+  });
+
+  it("records a failed agent run charge after the caller has timed out", async () => {
+    const provider = Promise.withResolvers<unknown>();
+    const runFinancialDataset = vi.fn().mockReturnValue(provider.promise);
+    const exa = client({ search: vi.fn(), getContents: vi.fn(), runFinancialDataset }, { requestTimeoutMs: 20 });
+    const request = { evaluationId: "failed-late", query: "bounded evaluation", outputSchema: {}, maxCostDollars: 1 };
+    await expect(exa.runFinancialDatasetEvaluation(request)).rejects.toThrow("exa_budget_exhausted");
+    provider.reject(new AgentRunFailedError({ id: "failed-run", status: "failed", costDollars: { total: 0.25 } }));
+    await vi.waitFor(() => expect(exa.costLedger()).toContainEqual(expect.objectContaining({
+      operation: "financial_datasets", outcome: "failed", costUsd: 0.25, late: true, requestId: "failed-run",
+    })));
+    expect(exa.usage().costUsd).toBe(0.25);
+    expect(runFinancialDataset).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Contents paid work occupied until a late response settles", async () => {
+    const provider = Promise.withResolvers<unknown>();
+    const getContents = vi.fn().mockReturnValue(provider.promise);
+    const exa = client({ search: vi.fn(), getContents }, { contentsConcurrency: 1, maximumCostUsd: 1 });
+    const controller = new AbortController();
+    const pendingResult = exa.getSelectedContents(["https://example.com/one", "https://example.com/two"], {}, controller.signal)
+      .catch((error: Error) => error);
+    await vi.waitFor(() => expect(getContents).toHaveBeenCalledOnce());
+    controller.abort(new Error("edition_lease_lost"));
+    expect(await pendingResult).toMatchObject({ message: "exa_budget_exhausted" });
+    provider.resolve({ requestId: "late-contents", costDollars: { total: 0.25 }, results: [] });
+    await vi.waitFor(() => expect(exa.usage().costUsd).toBe(0.25));
+    expect(exa.costLedger()).toContainEqual(expect.objectContaining({ operation: "contents", late: true, costUsd: 0.25 }));
+    expect(getContents).toHaveBeenCalledOnce();
+  });
+
   it("honors retry-after and uses bounded retries", async () => {
     const sleep = vi.fn().mockResolvedValue(undefined);
     const search = vi.fn()
@@ -376,6 +465,9 @@ describe("official Exa SDK boundary", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(exa.usage()).toMatchObject({ costStatus: "unknown", budgetClosed: true });
+    await vi.waitFor(() => expect(exa.costLedger()).toContainEqual(expect.objectContaining({
+      operation: "search", outcome: "failed", costUsd: null, late: true,
+    })));
   });
 
   it("closes the paid-work budget and retains permits after a non-cooperative timeout", async () => {
@@ -683,7 +775,56 @@ describe("Financial Datasets evaluation gate", () => {
     expect(report.supportMatrix).toHaveLength(FINANCIAL_DATASET_EVALUATION_SYMBOLS.length * FINANCIAL_DATASET_FIELD_NAMES.length);
     expect(report.supportMatrix.filter((entry) => entry.status === "supported")).toHaveLength(FINANCIAL_DATASET_EVALUATION_SYMBOLS.length);
     expect(report.costUsd).toBe(0.25);
+    expect(report.supportMatrix[0]).toMatchObject({
+      value: 100, citations: [{ title: "Provider citation", url: "https://example.com/quote" }],
+    });
     expect(JSON.stringify(report)).not.toContain("secretRawPayload");
+  });
+
+  it("does not report untyped or unattributed fields as supported", async () => {
+    for (const override of [
+      { value: "100" }, { value: true }, { asOf: null }, { sessionLabel: null }, { citations: [] },
+    ]) {
+      const currentPrice = {
+        value: 100, asOf: "2026-09-01T12:00:00.000Z", sessionLabel: "premarket",
+        citations: [{ title: "Provider citation", url: "https://example.com/quote" }], ...override,
+      };
+      const fields = Object.fromEntries(FINANCIAL_DATASET_FIELD_NAMES.map((field) => [field,
+        field === "currentPrice" ? currentPrice : { value: null, asOf: null, sessionLabel: null, citations: [] },
+      ]));
+      const report = await evaluateFinancialDatasets({
+        runFinancialDatasetEvaluation: vi.fn().mockResolvedValue({
+          raw: { output: { structured: { snapshots: FINANCIAL_DATASET_EVALUATION_SYMBOLS.map((symbol) => ({ symbol, fields })) } } },
+        }),
+      }, {
+        evaluationId: "evaluation-invalid-evidence", configuredInstant: "2026-09-01T12:00:00.000Z",
+        configuredTimezone: "America/New_York", zdrStatus: "disabled", maximumCostUsd: 1,
+      });
+      expect(report.status).toBe("completed");
+      expect(report.supportMatrix.every((item) => item.status === "unsupported" && item.value === null)).toBe(true);
+    }
+  });
+
+  it("retains charged cost when the evaluation response fails schema validation", async () => {
+    const report = await evaluateFinancialDatasets({
+      runFinancialDatasetEvaluation: vi.fn().mockResolvedValue({ raw: { costDollars: { total: 0.25 }, output: {} } }),
+    }, {
+      evaluationId: "evaluation-rejected", configuredInstant: "2026-09-01T12:00:00.000Z",
+      configuredTimezone: "America/New_York", zdrStatus: "disabled", maximumCostUsd: 1,
+    });
+    expect(report).toMatchObject({ status: "failed", costUsd: 0.25 });
+  });
+
+  it("preserves the classified safe code in a failed evaluation report", async () => {
+    const report = await evaluateFinancialDatasets({
+      runFinancialDatasetEvaluation: vi.fn().mockRejectedValue(new MarketResearchExaError({
+        code: "exa_budget_exhausted", retryable: false, maximumRetries: 0, scope: "request", finalForSource: true,
+      })),
+    }, {
+      evaluationId: "evaluation-budget", configuredInstant: "2026-09-01T12:00:00.000Z",
+      configuredTimezone: "America/New_York", zdrStatus: "disabled", maximumCostUsd: 1,
+    });
+    expect(report).toMatchObject({ status: "failed", safeCode: "exa_budget_exhausted" });
   });
 });
 
