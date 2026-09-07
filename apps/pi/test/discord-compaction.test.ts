@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { portableConversationSummarySchema } from "../src/discord/contracts.js";
+import { portableCheckpointSystemPrompt } from "../src/discord/runner.js";
 import {
   DISCORD_CHECKPOINT_RETENTION_MS,
   DISCORD_MAX_CHECKPOINT_BYTES,
@@ -10,6 +13,15 @@ import {
 } from "../src/discord/compaction.js";
 
 describe("portable Discord checkpoint policy", () => {
+  it("gives the model the complete validated summary item schema", () => {
+    expect(portableCheckpointSystemPrompt).toContain(
+      JSON.stringify(z.toJSONSchema(portableConversationSummarySchema)),
+    );
+    for (const field of ["askedByAuthorId", "rejectedStatement", "replacementStatement", "sourceEventIds"]) {
+      expect(portableCheckpointSystemPrompt).toContain(field);
+    }
+  });
+
   it("uses the documented model reserve and 70 percent threshold", () => {
     expect(discordCompactionThreshold({
       contextWindow: 272_000,
