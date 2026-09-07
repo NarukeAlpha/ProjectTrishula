@@ -2133,13 +2133,22 @@ const piResultRecordSchema = z.object({
   exaCostUsd: z.number().finite().nonnegative().max(1_000),
   completedAt: strictIsoDateTime,
 }).strict().superRefine((value, context) => {
+  const operationalUnavailableEdition = value.edition.editionLabel === "Data unavailable"
+    && value.evidence.evidence.some((item) =>
+      item.evidenceId === "operational-market-data-unavailable"
+      && item.kind === "source_status"
+      && item.sourcePolicy === "unavailable"
+      && item.contentStatus === "failed")
+    && value.edition.primaryBoard.length === 0
+    && value.edition.challengers.length === 0
+    && value.edition.chartRequests.length === 0;
   if (
     value.editionId !== value.evidence.editionId
     || value.editionId !== value.edition.editionId
     || value.edition.editionDate !== value.evidence.session.editionDate
     || value.edition.timezone !== value.evidence.session.timezone
     || value.edition.sessionType !== value.evidence.session.sessionType
-    || value.edition.editionLabel !== value.evidence.session.editionLabel
+    || (value.edition.editionLabel !== value.evidence.session.editionLabel && !operationalUnavailableEdition)
     || value.edition.sourceIds.some((sourceId) => !value.evidence.allowedSourceIds.includes(sourceId))
   ) context.addIssue({ code: "custom", message: "Result edition and evidence do not match." });
   if (

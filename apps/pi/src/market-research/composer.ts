@@ -166,12 +166,21 @@ export function validateComposedEdition(
   preferences: MarketResearchPreferencesV1,
 ): MorningPaperEditionV1 {
   const edition = morningPaperEditionSchema.parse(value);
+  const operationalUnavailableEdition = edition.editionLabel === "Data unavailable"
+    && evidence.evidence.some((item) =>
+      item.evidenceId === "operational-market-data-unavailable"
+      && item.kind === "source_status"
+      && item.sourcePolicy === "unavailable"
+      && item.contentStatus === "failed")
+    && edition.primaryBoard.length === 0
+    && edition.challengers.length === 0
+    && edition.chartRequests.length === 0;
   if (
     edition.editionId !== evidence.editionId
     || edition.editionDate !== evidence.session.editionDate
     || edition.timezone !== evidence.session.timezone
     || edition.sessionType !== evidence.session.sessionType
-    || edition.editionLabel !== evidence.session.editionLabel
+    || (edition.editionLabel !== evidence.session.editionLabel && !operationalUnavailableEdition)
     || Date.parse(edition.asOf) > Date.parse(evidence.generatedAt) + 5 * 60 * 1_000
   ) throw new Error("composition_schema_invalid");
   if (

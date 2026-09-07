@@ -495,6 +495,80 @@ describe("full newspaper ranked output", () => {
 });
 
 describe("market-research durable collection recovery", () => {
+  it.each([false, true])("keeps duplicate URL audits stable across normalization and recovery (saved collection %s)", async (collectionSaved) => {
+    const marker = collectionMarker();
+    const articles = ["article-1", "article-2", "article-3", "article-4"].map((evidenceId, index) =>
+      marketResearchEvidenceItemSchema.parse({
+        evidenceId, kind: "news", provider: "Exa", sourcePolicy: "approved",
+        title: "The same syndicated market article",
+        url: index === 3 ? "https://syndicated.example.com/story" : "https://example.com/story",
+        canonicalUrlHash: (index === 3 ? "e" : "d").repeat(64),
+        retrievedAt: "2026-09-01T12:00:00.000Z", freshness: "fresh", contentStatus: "available",
+        highlights: ["The same market report appeared in several query results."], normalizedClaims: [],
+        contentHash: "c".repeat(64),
+      }));
+    const loaded = collectionSaved ? [marker, ...articles] : articles;
+    const first = harness(loaded);
+    await first.runner.run(request(loaded.map((item) => item.evidenceId)));
+    const initial = first.completed();
+    if (!initial) throw new Error("Missing initial duplicate-normalized result.");
+    expect(initial.evidence.evidence.filter((item) => item.kind === "news")).toHaveLength(1);
+    const audits = initial.evidence.evidence.filter((item) => item.evidenceId.startsWith("duplicate-url-"));
+    expect(audits).toHaveLength(2);
+    expect(new Set(initial.evidence.evidence.map((item) => item.evidenceId)).size).toBe(initial.evidence.evidence.length);
+    for (const audit of audits) expect(audit.normalizedClaims).toEqual([
+      "Duplicate source URL retained for audit; canonical evidence is article-1.",
+    ]);
+    expect(initial.evidence.session.editionLabel).toBe(request().session.editionLabel);
+    expect(initial.edition.editionLabel).toBe("Data unavailable");
+
+    // Convex retains original source rows and the normalized checkpoint. A replay
+    // must not create duplicate IDs or start auditing the previous audit records.
+    const persisted = [...new Map([...loaded, ...initial.evidence.evidence]
+      .map((item) => [item.evidenceId, item])).values()];
+    const replay = harness(persisted, { now: "2026-09-01T12:01:00.000Z" });
+    const resumed = request(persisted.map((item) => item.evidenceId));
+    await replay.runner.run({ ...resumed, generation: 2, dispatchId: "edition-1:research:2", claimToken: "claim-2" });
+    const result = replay.completed();
+    if (!result) throw new Error("Missing replay duplicate-normalized result.");
+    expect(replay.searchNews).not.toHaveBeenCalled();
+    expect(result.evidence.evidence.filter((item) => item.evidenceId.startsWith("duplicate-url-"))).toEqual(audits);
+    expect(result.evidence.evidence.map((item) => [item.evidenceId, item.contentHash]).sort())
+      .toEqual(initial.evidence.evidence.map((item) => [item.evidenceId, item.contentHash]).sort());
+    expect(result.evidence.session).toEqual(initial.evidence.session);
+    expect(result.edition.editionLabel).toBe("Data unavailable");
+  });
+
+  it("preserves frozen calendar references and distinct cost markers even when content hashes match", async () => {
+    const marker = collectionMarker();
+    const calendar = marketResearchEvidenceItemSchema.parse({
+      ...marker, evidenceId: "frozen-calendar", kind: "calendar", provider: "Reviewed calendar",
+      url: "https://www.nyse.com/trade/hours-calendars",
+    });
+    const searchMarkers = [0.01, 0.02].map((costUsd, index) => marketResearchEvidenceItemSchema.parse({
+      ...marker, evidenceId: `exa-search-slot-preserved-${index}`, costUsd,
+    }));
+    const loaded = [marker, calendar, ...searchMarkers];
+    const test = harness(loaded);
+    const job = request(loaded.map((item) => item.evidenceId));
+    await test.runner.run({ ...job, session: { ...job.session, sourceIds: [calendar.evidenceId] } });
+    const result = test.completed();
+    if (!result) throw new Error("Missing immutable evidence result.");
+    for (const item of loaded) expect(result.evidence.evidence).toContainEqual(item);
+    expect(result.evidence.session.sourceIds).toEqual([calendar.evidenceId]);
+    expect(result.evidence.session.editionLabel).toBe(job.session.editionLabel);
+    expect(result.exaRequestCount).toBe(2);
+    expect(result.exaCostUsd).toBeCloseTo(0.03);
+  });
+
+  it("rejects a reused evidence ID with a different content hash", async () => {
+    const marker = collectionMarker();
+    const test = harness([marker, { ...marker, contentHash: "c".repeat(64) }]);
+    await expect(test.runner.run(request([marker.evidenceId]))).rejects.toThrow("composition_schema_invalid");
+    expect(test.callbacks.complete).not.toHaveBeenCalled();
+    expect(test.callbacks.fail).toHaveBeenCalledWith(expect.anything(), "composition_schema_invalid", false, undefined);
+  });
+
   it("reuses a complete Exa checkpoint without repeating paid Search calls", async () => {
     const marker = collectionMarker();
     const test = harness([marker]);
@@ -503,6 +577,7 @@ describe("market-research durable collection recovery", () => {
 
     expect(test.searchNews).not.toHaveBeenCalled();
     expect(test.completed()?.edition.editionLabel).toBe("Data unavailable");
+    expect(test.completed()?.evidence.session.editionLabel).toBe(request().session.editionLabel);
     const result = test.completed();
     if (!result) throw new Error("Missing completed result.");
     expect(validateComposedEdition(result.edition, result.evidence, request().preferences)).toEqual(result.edition);

@@ -265,11 +265,28 @@ function exaCollectionCompleteEvidence(
   });
 }
 
+function uniqueEvidenceById(evidence: readonly MarketResearchEvidenceItem[]): MarketResearchEvidenceItem[] {
+  const byId = new Map<string, MarketResearchEvidenceItem>();
+  for (const item of evidence) {
+    const existing = byId.get(item.evidenceId);
+    if (existing !== undefined && existing.contentHash !== item.contentHash) {
+      throw new Error("composition_schema_invalid");
+    }
+    if (existing === undefined) byId.set(item.evidenceId, item);
+  }
+  return [...byId.values()];
+}
+
 function deduplicateWithAudit(
   evidence: readonly MarketResearchEvidenceItem[],
   retrievedAt: string,
 ): MarketResearchEvidenceItem[] {
-  const deduplicated = deduplicateEvidence(evidence);
+  const unique = uniqueEvidenceById(evidence);
+  // Only news competes for canonical article identity. Frozen calendar records,
+  // accounting markers, and prior audit records retain their own identities.
+  const deduplicated = deduplicateEvidence(unique.filter((item) => item.kind === "news"));
+  const retainedNewsIds = new Set(deduplicated.retained.map((item) => item.evidenceId));
+  const retained = unique.filter((item) => item.kind !== "news" || retainedNewsIds.has(item.evidenceId));
   const audit = deduplicated.duplicateUrls.map(({ retainedEvidenceId, duplicateUrl }) => {
     const detail = `Duplicate source URL retained for audit; canonical evidence is ${retainedEvidenceId}.`;
     return marketResearchEvidenceItemSchema.parse({
@@ -286,7 +303,7 @@ function deduplicateWithAudit(
       contentHash: sha256(`${detail}:${duplicateUrl}`),
     });
   });
-  return [...deduplicated.retained, ...audit];
+  return uniqueEvidenceById([...retained, ...audit]);
 }
 
 function snapshotEvidence(snapshot: MarketSnapshot): MarketResearchEvidenceItem[] {
@@ -793,9 +810,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
         generatedAt: now.toISOString(),
         session: {
           sessionType: session?.status ?? request.session.sessionType,
-          editionLabel: !marketDataAvailable
-            ? "Data unavailable"
-            : request.session.editionLabel,
+          editionLabel: request.session.editionLabel,
           editionDate: request.session.editionDate,
           timezone: request.session.timezone,
           configuredLocalTime: request.session.configuredLocalTime,

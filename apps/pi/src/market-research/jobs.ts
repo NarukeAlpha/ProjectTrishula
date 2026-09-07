@@ -1,4 +1,5 @@
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-known-value-widening -- Job failures enter as caught causes and are normalized to the fixed safe failure contract here. */
+import { ZodError } from "zod";
 import type { Logger } from "../runtime/logger.js";
 import {
   marketResearchFingerprint,
@@ -8,6 +9,7 @@ import {
   type MarketResearchSafeErrorCode,
 } from "./contracts.js";
 import type { MarketResearchRunner } from "./runner.js";
+import { marketResearchValidationDiagnostics } from "./validation-diagnostics.js";
 
 export type MarketResearchJobStatus =
   | { jobId: string; status: "running" }
@@ -136,11 +138,14 @@ export class MarketResearchJobRegistry {
       record.code = failure.code;
       record.retryable = failure.retryable;
       record.terminalAt = this.now();
-      this.options.logger.error("market_research_job_failed", {
+      const details = {
         editionId: record.request.editionId,
         generation: record.request.generation,
         code: failure.code,
-      });
+      };
+      this.options.logger.error("market_research_job_failed", error instanceof ZodError
+        ? { ...details, validation: marketResearchValidationDiagnostics(error) }
+        : details);
     } finally {
       clearTimeout(timeout);
     }
