@@ -16,6 +16,11 @@ import type {
 } from "../../convex/types";
 import { formatAge } from "../../shared/formatting/values";
 import { discordInstallUrl } from "./discordInstall";
+import {
+  acknowledgeNewspaperTest,
+  newspaperSettingsKey,
+  newspaperTestRequestId,
+} from "./newspaperSettings";
 
 type ServerChannelPurpose = "conversation" | "research";
 
@@ -326,12 +331,7 @@ function ChannelRouteField({
   );
 }
 
-type MarketResearchAction =
-  | "preview"
-  | "publish"
-  | "retry"
-  | "reconcile"
-  | "cancel";
+type MarketResearchAction = "test" | "retry" | "reconcile" | "cancel";
 
 function MarketResearchSettings({
   guild,
@@ -346,6 +346,7 @@ function MarketResearchSettings({
     guildId: string,
     action: MarketResearchAction,
     editionId?: string,
+    requestId?: string,
   ) => Promise<void>;
 }) {
   const preferences = status?.preferences;
@@ -367,22 +368,10 @@ function MarketResearchSettings({
   const [includeWeekends, setIncludeWeekends] = useState(
     preferences?.includeWeekends ?? true,
   );
-  const [editionDepth, setEditionDepth] = useState<"full" | "concise">(
-    preferences?.editionDepth ?? "full",
-  );
-  const [maximumRankedSetups, setMaximumRankedSetups] = useState(
-    preferences?.maximumRankedSetups ?? 5,
-  );
-  const [enabled, setEnabled] = useState(preferences?.enabled ?? false);
-  const [marketDataProviderId, setMarketDataProviderId] = useState(
-    preferences?.marketDataProviderId ?? "",
-  );
-  const [includeCharts, setIncludeCharts] = useState(
-    preferences?.includeCharts ?? false,
-  );
-  const [maximumCharts, setMaximumCharts] = useState(
-    preferences?.maximumCharts ?? 3,
-  );
+  const [savedOverride, setSavedOverride] = useState<{
+    revision: number | undefined;
+    settings: SaveMarketResearchControlSettings;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const forums = guild.channels.filter((channel) => channel.type === "forum");
@@ -398,7 +387,12 @@ function MarketResearchSettings({
     selectedForum.canCreateForumPost &&
     selectedForum.canSendInThreads &&
     selectedForum.canReadThreadHistory &&
-    (!selectedForum.requiresTag || forumTagId !== "");
+    (!selectedForum.requiresTag ||
+      validTags.some((tag) => tag.id === forumTagId));
+  const scheduleReady =
+    forumReady &&
+    timezoneConfirmed &&
+    /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(localTime);
 
   function controlSettings(
     scheduleEnabled: boolean,
@@ -413,30 +407,43 @@ function MarketResearchSettings({
       localHour: Number(hourText),
       localMinute: Number(minuteText),
       includeWeekends,
-      editionDepth,
-      maximumRankedSetups,
+      editionDepth: "full",
+      maximumRankedSetups: 10,
       enabled: scheduleEnabled,
-      includeCharts,
-      maximumCharts,
+      includeCharts: true,
+      maximumCharts: 3,
     };
-    if (
-      marketDataProviderId === "" ||
-      marketDataProviderId === "exa_financial_datasets"
-    ) {
-      settings.marketDataProviderId = marketDataProviderId || null;
-    }
     return settings;
   }
 
-  async function save() {
+  const savedSettings =
+    savedOverride && savedOverride.revision === preferences?.revision
+      ? savedOverride.settings
+      : preferences;
+  const scheduled =
+    savedSettings?.enabled === true &&
+    newspaperSettingsKey(savedSettings) ===
+      newspaperSettingsKey(controlSettings(true));
+
+  async function persist(scheduleEnabled: boolean) {
+    const settings = controlSettings(scheduleEnabled);
+    await onSave(settings);
+    setSavedOverride({ revision: preferences?.revision, settings });
+  }
+
+  async function save(scheduleEnabled: boolean) {
     setBusy(true);
     setMessage(null);
     try {
-      await onSave(controlSettings(enabled));
-      setMessage("Morning newspaper settings saved.");
+      await persist(scheduleEnabled);
+      setMessage(
+        scheduleEnabled
+          ? "Newspaper scheduled."
+          : "Settings saved. Click Schedule now to apply the schedule.",
+      );
     } catch {
       setMessage(
-        "Morning newspaper settings could not be saved. Check the forum, calendar, and provider gates.",
+        "Could not save the newspaper. Check the selected forum and time. The research service must be ready before scheduling.",
       );
     } finally {
       setBusy(false);
@@ -447,20 +454,23 @@ function MarketResearchSettings({
     setBusy(true);
     setMessage(null);
     try {
-      if (action === "preview" && preferences === undefined) {
-        // Initialize an unscheduled draft only. Preview never opts into publishing.
-        await onSave(controlSettings(false));
+      if (action === "test") {
+        const requestId = newspaperTestRequestId(controlSettings(scheduled));
+        await persist(scheduled);
+        await onAction(guild.guildId, action, undefined, requestId);
+        acknowledgeNewspaperTest(guild.guildId, requestId);
+      } else {
+        await onAction(guild.guildId, action, status?.current?.editionId);
       }
-      await onAction(guild.guildId, action, status?.current?.editionId);
       setMessage(
-        action === "preview"
-          ? "Preview queued using saved settings. No Discord post or scheduled publishing was enabled."
-          : action === "publish"
-            ? "Edition queued."
-            : "Edition updated.",
+        action === "test"
+          ? "Test queued. Research will post in the selected forum. The scheduled edition is separate."
+          : "Edition updated.",
       );
     } catch {
-      setMessage("The morning newspaper action could not be completed.");
+      setMessage(
+        "Could not queue the newspaper. Check forum access and research service readiness, then retry.",
+      );
     } finally {
       setBusy(false);
     }
@@ -478,14 +488,18 @@ function MarketResearchSettings({
         </div>
         <span
           className="status-pill"
-          data-status={preferences?.enabled ? "online" : "offline"}
+          data-status={scheduled ? "online" : "offline"}
         >
-          {preferences?.enabled ? "Schedule on" : "Schedule off"}
+          {scheduled
+            ? "Scheduled"
+            : savedSettings?.enabled
+              ? "Changes pending"
+              : "Not scheduled"}
         </span>
       </div>
       <p>
-        A separate research edition for your Discord forum. Conversation routes
-        stay unchanged.
+        Full research from your usual watchlist, with up to 10 qualified ranked
+        setups. Charts accompany positive ranked setups only.
       </p>
       <div className="discord-newspaper-grid">
         <label>
@@ -497,6 +511,7 @@ function MarketResearchSettings({
             onChange={(event) => {
               setForumChannelId(event.target.value);
               setForumTagId("");
+              setMessage(null);
             }}
           >
             <option value="">Choose a forum</option>
@@ -524,7 +539,10 @@ function MarketResearchSettings({
                 aria-label="Morning newspaper tag"
                 value={forumTagId}
                 disabled={busy}
-                onChange={(event) => setForumTagId(event.target.value)}
+                onChange={(event) => {
+                  setForumTagId(event.target.value);
+                  setMessage(null);
+                }}
               >
                 <option value="">Choose a tag</option>
                 {validTags.map((tag) => (
@@ -546,6 +564,7 @@ function MarketResearchSettings({
               if (event.target.value === "") return;
               setTimezone(event.target.value);
               setTimezoneConfirmed(true);
+              setMessage(null);
             }}
           >
             <option value="" disabled>
@@ -566,134 +585,33 @@ function MarketResearchSettings({
             type="time"
             value={localTime}
             disabled={busy}
-            onChange={(event) => setLocalTime(event.target.value)}
+            onChange={(event) => {
+              setLocalTime(event.target.value);
+              setMessage(null);
+            }}
           />
-        </label>
-        <label>
-          <span>Edition style</span>
-          <select
-            aria-label="Edition depth"
-            value={editionDepth}
-            disabled={busy}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value === "full" || value === "concise")
-                setEditionDepth(value);
-            }}
-          >
-            <option value="full">Full</option>
-            <option value="concise">Concise</option>
-          </select>
-        </label>
-        <label>
-          <span>Charts</span>
-          <select
-            aria-label="Chart images"
-            value={includeCharts ? maximumCharts : 0}
-            disabled={busy}
-            onChange={(event) => {
-              const count = Number(event.target.value);
-              setIncludeCharts(count > 0);
-              setMaximumCharts(count);
-            }}
-          >
-            <option value={0}>Off</option>
-            {[1, 2, 3].map((count) => (
-              <option
-                key={count}
-                value={count}
-                disabled={
-                  !includeCharts &&
-                  selectedForum !== undefined &&
-                  !selectedForum.canAttachFiles
-                }
-              >
-                {count}
-              </option>
-            ))}
-          </select>
         </label>
       </div>
-      <p className="discord-fine-print">
-        Charts are optional. Missing images do not block the text edition.
-        {selectedForum &&
-          !selectedForum.canAttachFiles &&
-          " This forum is missing ATTACH_FILES."}
-      </p>
       <div className="discord-newspaper-checks">
-        <label>
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={
-              busy ||
-              (!enabled &&
-                (!forumReady ||
-                  !timezoneConfirmed ||
-                  marketDataProviderId === ""))
-            }
-            onChange={(event) => setEnabled(event.target.checked)}
-          />
-          Automatic publishing
-        </label>
         <label>
           <input
             type="checkbox"
             checked={includeWeekends}
             disabled={busy}
-            onChange={(event) => setIncludeWeekends(event.target.checked)}
+            onChange={(event) => {
+              setIncludeWeekends(event.target.checked);
+              setMessage(null);
+            }}
           />
           Include weekend outlooks
         </label>
       </div>
-      <p className="discord-fine-print">
-        Automatic publishing needs a forum, timezone, and a data provider in
-        Advanced.
-      </p>
-      <details className="discord-newspaper-advanced">
-        <summary>Advanced</summary>
-        <div className="discord-newspaper-grid">
-          <label>
-            <span>Numerical data provider</span>
-            <select
-              aria-label="Numerical data provider"
-              value={marketDataProviderId}
-              disabled={busy}
-              onChange={(event) => setMarketDataProviderId(event.target.value)}
-            >
-              <option value="">No numerical provider</option>
-              <option value="exa_financial_datasets">
-                Exa Connect Financial Datasets
-              </option>
-              {marketDataProviderId !== "" &&
-                marketDataProviderId !== "exa_financial_datasets" && (
-                  <option value={marketDataProviderId}>
-                    Existing provider: {marketDataProviderId}
-                  </option>
-                )}
-            </select>
-          </label>
-          <label>
-            <span>Maximum ranked setups</span>
-            <input
-              aria-label="Maximum ranked setups"
-              type="number"
-              min="1"
-              max="5"
-              value={maximumRankedSetups}
-              disabled={busy}
-              onChange={(event) =>
-                setMaximumRankedSetups(Number(event.target.value))
-              }
-            />
-          </label>
-        </div>
+      {selectedForum && !selectedForum.canAttachFiles && (
         <p className="discord-fine-print">
-          Data access needs owner approval and a cost limit in Railway. Charts
-          need CHART-IMG access and forum attachment permission. These settings
-          do not change service access.
+          This forum cannot receive chart attachments. Research will still post
+          as text.
         </p>
-      </details>
+      )}
       {selectedForum && !forumReady && (
         <p className="discord-route-warning">
           This forum is missing a required permission or valid required tag.
@@ -705,24 +623,23 @@ function MarketResearchSettings({
           type="button"
           aria-label="Save morning newspaper"
           disabled={busy}
-          onClick={() => void save()}
+          onClick={() => void save(scheduled)}
         >
           Save
         </button>
         <button
           type="button"
-          aria-label="Run preview"
-          disabled={busy}
-          onClick={() => void runAction("preview")}
+          disabled={busy || !scheduleReady}
+          onClick={() => void runAction("test")}
         >
-          Preview (no Discord)
+          Test now
         </button>
         <button
           type="button"
-          disabled={busy || !forumReady}
-          onClick={() => void runAction("publish")}
+          disabled={busy || !scheduleReady || scheduled}
+          onClick={() => void save(true)}
         >
-          Publish now
+          {scheduled ? "Scheduled" : "Schedule now"}
         </button>
         {status?.current?.status === "queued" && (
           <button
@@ -759,7 +676,8 @@ function MarketResearchSettings({
           )}
       </div>
       <p className="discord-fine-print">
-        Actions use saved settings. Preview never posts to Discord.
+        Test now saves these settings and posts a separate edition. Schedule now
+        applies them to future editions at the selected time.
       </p>
       {status?.preview && (
         <details className="discord-fine-print" open>
@@ -822,6 +740,7 @@ function GuildCard({
     guildId: string,
     action: MarketResearchAction,
     editionId?: string,
+    requestId?: string,
   ) => Promise<void>;
 }) {
   const conversationChannel = channelForPurpose("conversation", guild);
@@ -1369,6 +1288,7 @@ export function DiscordControlView({
     guildId: string,
     action: MarketResearchAction,
     editionId?: string,
+    requestId?: string,
   ) => Promise<void>;
 }) {
   const [busyPurpose, setBusyPurpose] = useState<ServerChannelPurpose | null>(
@@ -1596,21 +1516,14 @@ export function DiscordControlPage({
       onSaveMarketResearch={(settings) =>
         saveMarketResearch(settings).then(() => undefined)
       }
-      onMarketResearchAction={(guildId, action, editionId) => {
-        if (action === "preview") {
-          return manualMarketResearch({
-            guildId,
-            dryRun: true,
-            publish: false,
-            regeneratePublishedEdition: false,
-          }).then(() => undefined);
-        }
-        if (action === "publish") {
+      onMarketResearchAction={(guildId, action, editionId, requestId) => {
+        if (action === "test") {
           return manualMarketResearch({
             guildId,
             dryRun: false,
             publish: true,
             regeneratePublishedEdition: false,
+            requestId,
           }).then(() => undefined);
         }
         if (!editionId)

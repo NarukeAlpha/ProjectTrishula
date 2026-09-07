@@ -151,6 +151,7 @@ export const publicApi = {
         dryRun: boolean;
         publish: boolean;
         regeneratePublishedEdition: boolean;
+        requestId?: string;
       },
       | { kind: "preview"; previewId: string; status: "queued" }
       | { kind: "edition"; editionId: string; duplicate: boolean }
