@@ -6,9 +6,19 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DiscordControlPlaneReadModel } from "../../convex/types";
-import { DiscordControlView } from "./DiscordControlPage";
+import type {
+  DiscordControlPlaneReadModel,
+  MarketResearchControlStatusReadModel,
+} from "../../convex/types";
+import { DiscordControlPage, DiscordControlView } from "./DiscordControlPage";
 import { discordInstallUrl } from "./discordInstall";
+
+const convexReact = vi.hoisted(() => ({
+  useMutation: vi.fn(() => vi.fn()),
+  useQuery: vi.fn(),
+}));
+
+vi.mock("convex/react", () => convexReact);
 
 function controlPlane(
   overrides: Partial<DiscordControlPlaneReadModel> = {},
@@ -81,7 +91,72 @@ function controlPlane(
 
 afterEach(cleanup);
 
+function marketResearchStatus(
+  timezone = "America/New_York",
+): MarketResearchControlStatusReadModel {
+  return {
+    guildId: "guild_1",
+    preferences: {
+      guildId: "guild_1",
+      enabled: false,
+      forumChannelId: null,
+      forumTagIds: [],
+      timezone,
+      timezoneConfirmed: false,
+      localHour: 8,
+      localMinute: 0,
+      includeWeekends: true,
+      includeCharts: false,
+      chartsAcceptancePassed: false,
+      editionDepth: "full",
+      maximumRankedSetups: 5,
+      revision: 1,
+      updatedAt: "2026-09-07T12:00:00.000Z",
+    },
+    current: null,
+  };
+}
+
 describe("Discord control surface", () => {
+  it("waits for both control queries before it initializes editable settings", () => {
+    convexReact.useQuery
+      .mockReset()
+      .mockReturnValueOnce(controlPlane())
+      .mockReturnValueOnce(undefined);
+
+    render(<DiscordControlPage />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading Discord control…",
+    );
+    expect(
+      screen.queryByRole("combobox", { name: "Schedule timezone" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("preserves a dirty setting when a hydrated query refreshes", () => {
+    let statuses = [marketResearchStatus()];
+    let queryNumber = 0;
+    convexReact.useQuery.mockReset().mockImplementation(() => {
+      queryNumber += 1;
+      return queryNumber % 2 === 1 ? controlPlane() : statuses;
+    });
+    const { rerender } = render(<DiscordControlPage />);
+    const timezone = screen.getByRole("combobox", {
+      name: "Schedule timezone",
+    });
+    fireEvent.change(timezone, {
+      target: { value: "America/Puerto_Rico" },
+    });
+
+    statuses = [marketResearchStatus("America/New_York")];
+    rerender(<DiscordControlPage />);
+
+    expect(
+      screen.getByRole("combobox", { name: "Schedule timezone" }),
+    ).toHaveValue("America/Puerto_Rico");
+  });
+
   it("builds a callback-free guild install link with minimum permissions", () => {
     expect(discordInstallUrl("1114379702015111228")).toBe(
       "https://discord.com/oauth2/authorize?client_id=1114379702015111228&integration_type=0&scope=bot&permissions=68608",
@@ -129,20 +204,28 @@ describe("Discord control surface", () => {
       />,
     );
 
-    const forum = screen.getByRole("combobox", { name: "Morning newspaper forum" });
+    const forum = screen.getByRole("combobox", {
+      name: "Morning newspaper forum",
+    });
     expect(forum.querySelector('option[value="channel_1"]')).toBeNull();
     fireEvent.change(forum, { target: { value: "channel_3" } });
     const tag = screen.getByRole("combobox", { name: "Morning newspaper tag" });
     expect(tag.querySelector('option[value="tag_2"]')).toBeNull();
     fireEvent.change(tag, { target: { value: "tag_1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save morning newspaper" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
 
-    await waitFor(() => expect(onSaveMarketResearch).toHaveBeenCalledWith(expect.objectContaining({
-      guildId: "guild_1",
-      forumChannelId: "channel_3",
-      forumTagIds: ["tag_1"],
-      enabled: false,
-    })));
+    await waitFor(() =>
+      expect(onSaveMarketResearch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          guildId: "guild_1",
+          forumChannelId: "channel_3",
+          forumTagIds: ["tag_1"],
+          enabled: false,
+        }),
+      ),
+    );
     expect(onSetGuildRouting).not.toHaveBeenCalled();
   });
 
