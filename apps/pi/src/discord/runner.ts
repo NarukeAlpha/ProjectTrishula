@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { ExecutorReadiness } from "../execution/executor.js";
 import type { CodexRuntime } from "../pi/codex-runtime.js";
 import type { AppConfig } from "../config.js";
+import type { Logger } from "../runtime/logger.js";
 import { composeDurableConversationContext } from "../assistant/context.js";
 import {
   DISCORD_ASSISTANT_PROFILE,
@@ -1022,6 +1023,7 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
   constructor(
     private readonly runtime: CodexRuntime,
     private readonly config: DiscordRunnerConfig,
+    private readonly logger?: Pick<Logger, "warn">,
   ) {
     this.lunaConversations = new LunaConversationStore({
       idleTtlMs: config.trishulaHotSessionIdleMs,
@@ -1308,6 +1310,11 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
             }
             nativeTurnState.enabled = false;
             nativeTurnState.fallbackUsed = true;
+            this.logger?.warn("discord_native_compaction_fallback", {
+              requestId: request.requestId,
+              checkpointId: nativeTurnState.checkpoint?.checkpointId ?? "unknown",
+              reason: "provider_rejected",
+            });
             session.agent.reset();
             if (attempt === "repair") session.setActiveToolsByName([]);
             return runPrompt();
@@ -1368,6 +1375,7 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
 export function createDiscordAgentRunner(
   runtime: CodexRuntime,
   config: DiscordRunnerConfig = DEFAULT_DISCORD_RUNNER_CONFIG,
+  logger?: Pick<Logger, "warn">,
 ): DiscordAgentRunner {
-  return new PiDiscordAgentRunner(runtime, config);
+  return new PiDiscordAgentRunner(runtime, config, logger);
 }

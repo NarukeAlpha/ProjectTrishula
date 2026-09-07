@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   const broker = createTradingBroker(config);
   const codexRuntime = createCodexRuntime(config.piAuthPath);
   const executor = createPiExecutor(config, broker, codexRuntime);
-  const discordAgents = createDiscordAgentRunner(codexRuntime, config);
+  const discordAgents = createDiscordAgentRunner(codexRuntime, config, consoleLogger);
   const service = await startExecutionService(config, executor, consoleLogger, broker, discordAgents);
 
   const shutdown = async (signal: string): Promise<void> => {
