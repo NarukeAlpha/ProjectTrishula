@@ -9,6 +9,7 @@ import {
   type QueryCtx,
 } from "./_generated/server.js";
 import { actorFromIdentity, requireAllowedWorkosUserId } from "./lib/auth.js";
+import { normalizeDiscordForumCapabilities } from "./lib/discord_contract.js";
 import { isMarketResearchForumIngress } from "./lib/market_research.js";
 import {
   DISCORD_AMBIENT_COOLDOWN_MS,
@@ -66,17 +67,17 @@ const discordChannelSnapshotValidator = v.object({
   canView: v.boolean(),
   canSend: v.boolean(),
   canReadHistory: v.boolean(),
-  canCreateForumPost: v.boolean(),
-  canSendInThreads: v.boolean(),
-  canReadThreadHistory: v.boolean(),
-  canAttachFiles: v.boolean(),
-  requiresTag: v.boolean(),
-  availableTags: v.array(v.object({
+  canCreateForumPost: v.optional(v.boolean()),
+  canSendInThreads: v.optional(v.boolean()),
+  canReadThreadHistory: v.optional(v.boolean()),
+  canAttachFiles: v.optional(v.boolean()),
+  requiresTag: v.optional(v.boolean()),
+  availableTags: v.optional(v.array(v.object({
     id: v.string(),
     name: v.string(),
     moderated: v.boolean(),
     emoji: v.optional(v.string()),
-  })),
+  }))),
 });
 const discordGuildSnapshotValidator = v.object({
   guildId: v.string(),
@@ -751,12 +752,7 @@ export const getControlPlane = query({
               canView: channel.canView,
               canSend: channel.canSend,
               canReadHistory: channel.canReadHistory,
-              canCreateForumPost: channel.canCreateForumPost,
-              canSendInThreads: channel.canSendInThreads,
-              canReadThreadHistory: channel.canReadThreadHistory,
-              canAttachFiles: channel.canAttachFiles,
-              requiresTag: channel.requiresTag,
-              availableTags: channel.availableTags,
+              ...normalizeDiscordForumCapabilities(channel),
               roles: channel.roles,
               loop,
             };
@@ -933,12 +929,7 @@ export const syncGuilds = internalMutation({
           canView: channelSnapshot.canView,
           canSend: channelSnapshot.canSend,
           canReadHistory: channelSnapshot.canReadHistory,
-          canCreateForumPost: channelSnapshot.canCreateForumPost,
-          canSendInThreads: channelSnapshot.canSendInThreads,
-          canReadThreadHistory: channelSnapshot.canReadThreadHistory,
-          canAttachFiles: channelSnapshot.canAttachFiles,
-          requiresTag: channelSnapshot.requiresTag,
-          availableTags: channelSnapshot.availableTags,
+          ...normalizeDiscordForumCapabilities(channelSnapshot),
           available: true,
           lastSeenAt: now,
           updatedAt: now,

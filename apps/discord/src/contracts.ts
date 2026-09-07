@@ -245,17 +245,17 @@ export const discoveredChannelSchema = z
     canView: z.boolean(),
     canSend: z.boolean(),
     canReadHistory: z.boolean(),
-    canCreateForumPost: z.boolean(),
-    canSendInThreads: z.boolean(),
-    canReadThreadHistory: z.boolean(),
-    canAttachFiles: z.boolean(),
-    requiresTag: z.boolean(),
+    canCreateForumPost: z.boolean().default(false),
+    canSendInThreads: z.boolean().default(false),
+    canReadThreadHistory: z.boolean().default(false),
+    canAttachFiles: z.boolean().default(false),
+    requiresTag: z.boolean().default(true),
     availableTags: z.array(z.object({
       id: snowflakeSchema,
       name: z.string().trim().min(1).max(100),
       moderated: z.boolean(),
       emoji: z.string().trim().min(1).max(100).optional(),
-    }).strict()).max(20),
+    }).strict()).max(20).default([]),
   })
   .strict();
 
