@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DISCORD_PERSONALITY_PROFILE,
   DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES,
+  DISCORD_PORTABLE_CHECKPOINT_MAX_SOURCE_EVENT_COUNT,
   DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
   discordConversationId,
   discordConversationLeaseToken,
@@ -10,7 +11,9 @@ import {
   discordUnicodeLength,
   isCurrentDiscordConversationFence,
   portableCheckpointRestorable,
+  portableCheckpointSourceBatchSupported,
   portableConversationSummarySchema,
+  portableSummaryEvidenceMatchesEvents,
   requireDiscordReplyContent,
   selectDiscordCanonicalTail,
   selectDiscordCheckpointTail,
@@ -203,6 +206,47 @@ describe("Discord canonical conversation invariants", () => {
     }).success).toBe(false);
   });
 
+  it("binds portable-summary attribution to an event from the attributed author", () => {
+    const summary = portableConversationSummarySchema.parse({
+      participants: [
+        { authorId: "456", displayName: "Mira" },
+        { authorId: "789", displayName: "Kai" },
+      ],
+      acceptedFacts: [],
+      corrections: [],
+      unresolvedQuestions: [],
+      commitments: [],
+      conversationPreferences: [{
+        statement: "Use tables for comparisons.",
+        authorId: "789",
+        sourceEventIds: ["event:1"],
+      }],
+      sourceFreshnessNotes: [],
+    });
+    const evidence = [
+      { eventId: "event:1", authorId: "456" },
+      { eventId: "event:2", authorId: "789" },
+    ];
+    expect(portableSummaryEvidenceMatchesEvents(summary, evidence)).toBe(false);
+    expect(portableSummaryEvidenceMatchesEvents({
+      ...summary,
+      conversationPreferences: [{
+        ...summary.conversationPreferences[0]!,
+        sourceEventIds: ["event:2"],
+      }],
+    }, evidence)).toBe(true);
+  });
+
+  it("skips a checkpoint source backlog that exceeds the transport contract", () => {
+    expect(portableCheckpointSourceBatchSupported(
+      DISCORD_PORTABLE_CHECKPOINT_MAX_SOURCE_EVENT_COUNT,
+    )).toBe(true);
+    expect(portableCheckpointSourceBatchSupported(
+      DISCORD_PORTABLE_CHECKPOINT_MAX_SOURCE_EVENT_COUNT + 1,
+    )).toBe(false);
+    expect(portableCheckpointSourceBatchSupported(6_500)).toBe(false);
+  });
+
   it("PERS-005/PERS-090 bounds the raw tail by tokens and reports every omission", () => {
     const events = [1, 2, 3].map((ordinal) => ({
       eventId: `event:${ordinal}`,
@@ -231,6 +275,22 @@ describe("Discord canonical conversation invariants", () => {
     const selected = selectDiscordCheckpointTail(events, { tokenBudget: 60 });
     expect(selected.events.map((event) => event.eventId)).toEqual(["event:3"]);
     expect(selected.omittedEventCount).toBe(2);
+    expect(selected.complete).toBe(false);
+  });
+
+  it("caps pre-checkpoint replay at the 2,000-event transport boundary", () => {
+    const events = Array.from({ length: 2_001 }, (_, index) => ({
+      eventId: `event:${index + 1}`,
+      ordinal: index + 1,
+      content: "x",
+    }));
+    const selected = selectDiscordCanonicalTail(events, {
+      tokenBudget: 190_400,
+      maximumEvents: 2_000,
+    });
+    expect(selected.events).toHaveLength(2_000);
+    expect(selected.events[0]?.eventId).toBe("event:2");
+    expect(selected.omittedEventCount).toBe(1);
     expect(selected.complete).toBe(false);
   });
 

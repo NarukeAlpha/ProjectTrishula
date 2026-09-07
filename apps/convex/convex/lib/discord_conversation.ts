@@ -36,6 +36,7 @@ export const DISCORD_RECENT_TAIL_TOKEN_BUDGET = 20_000;
 export const DISCORD_LUNA_CONTEXT_WINDOW = 272_000;
 export const DISCORD_COMPACTION_THRESHOLD_TOKENS = 190_400;
 export const DISCORD_MAX_RECENT_EVENT_COUNT = 2_000;
+export const DISCORD_PORTABLE_CHECKPOINT_MAX_SOURCE_EVENT_COUNT = 5_000;
 export const DISCORD_RECENT_TAIL_ESTIMATOR_VERSION =
   "utf8-bytes-div-3-plus-message-overhead:v1";
 
@@ -103,6 +104,66 @@ export const portableConversationSummarySchema = z.object({
     freshness: z.enum(["current", "limited", "unknown"]),
   }).strict()).max(100),
 }).strict();
+
+type PortableConversationSummary = z.infer<typeof portableConversationSummarySchema>;
+
+export interface PortableSummaryEvidenceEvent {
+  eventId: string;
+  authorId?: string;
+}
+
+export function portableSummaryEvidenceMatchesEvents(
+  summary: PortableConversationSummary,
+  events: readonly PortableSummaryEvidenceEvent[],
+): boolean {
+  const eventsById = new Map(events.map((event) => [event.eventId, event]));
+  const knownAuthorIds = new Set(events.flatMap((event) =>
+    event.authorId === undefined ? [] : [event.authorId]
+  ));
+  const sourcesExist = (sourceIds: readonly string[]) =>
+    sourceIds.every((eventId) => eventsById.has(eventId));
+  const authorCitedOwnEvent = (authorId: string, sourceIds: readonly string[]) =>
+    sourceIds.some((eventId) => eventsById.get(eventId)?.authorId === authorId);
+
+  return summary.participants.every((participant) => knownAuthorIds.has(participant.authorId))
+    && summary.acceptedFacts.every((fact) =>
+      sourcesExist(fact.sourceEventIds)
+      && (fact.subjectAuthorId === undefined || knownAuthorIds.has(fact.subjectAuthorId))
+      && (
+        fact.assertedByAuthorId === undefined
+        || authorCitedOwnEvent(fact.assertedByAuthorId, fact.sourceEventIds)
+      )
+    )
+    && summary.corrections.every((correction) =>
+      sourcesExist(correction.sourceEventIds)
+      && (
+        correction.correctedByAuthorId === undefined
+        || authorCitedOwnEvent(correction.correctedByAuthorId, correction.sourceEventIds)
+      )
+    )
+    && summary.unresolvedQuestions.every((question) =>
+      sourcesExist(question.sourceEventIds)
+      && authorCitedOwnEvent(question.askedByAuthorId, question.sourceEventIds)
+    )
+    && summary.commitments.every((commitment) =>
+      sourcesExist(commitment.sourceEventIds)
+      && (
+        commitment.owner.kind === "assistant"
+        || authorCitedOwnEvent(commitment.owner.authorId, commitment.sourceEventIds)
+      )
+    )
+    && summary.conversationPreferences.every((preference) =>
+      sourcesExist(preference.sourceEventIds)
+      && authorCitedOwnEvent(preference.authorId, preference.sourceEventIds)
+    )
+    && summary.sourceFreshnessNotes.every((note) => sourcesExist(note.sourceEventIds));
+}
+
+export function portableCheckpointSourceBatchSupported(sourceEventCount: number): boolean {
+  return Number.isSafeInteger(sourceEventCount)
+    && sourceEventCount > 0
+    && sourceEventCount <= DISCORD_PORTABLE_CHECKPOINT_MAX_SOURCE_EVENT_COUNT;
+}
 
 export function discordConversationId(guildId: string): string {
   return `discord:${guildId}`;
@@ -220,11 +281,16 @@ export function selectDiscordCanonicalTail<Event extends DiscordCanonicalTailEve
   options: {
     tokenBudget?: number;
     requiredEventIds?: ReadonlySet<string>;
+    maximumEvents?: number;
   } = {},
 ): DiscordCanonicalTailSelection<Event> {
   const tokenBudget = options.tokenBudget ?? DISCORD_RECENT_TAIL_TOKEN_BUDGET;
+  const maximumEvents = options.maximumEvents ?? Number.MAX_SAFE_INTEGER;
   if (!Number.isSafeInteger(tokenBudget) || tokenBudget <= 0) {
     throw new Error("Discord canonical tail token budget must be positive.");
+  }
+  if (!Number.isSafeInteger(maximumEvents) || maximumEvents <= 0) {
+    throw new Error("Discord canonical tail event limit must be positive.");
   }
   for (let index = 1; index < orderedEvents.length; index += 1) {
     if (orderedEvents[index - 1]!.ordinal >= orderedEvents[index]!.ordinal) {
@@ -240,7 +306,11 @@ export function selectDiscordCanonicalTail<Event extends DiscordCanonicalTailEve
     retained.add(event.eventId);
     estimatedTokens += estimateDiscordCanonicalEventTokens(event);
   }
+  if (retained.size > maximumEvents) {
+    throw new Error("Required Discord canonical events exceed the event limit.");
+  }
   for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+    if (retained.size >= maximumEvents) break;
     const event = orderedEvents[index]!;
     if (retained.has(event.eventId)) continue;
     const eventTokens = estimateDiscordCanonicalEventTokens(event);

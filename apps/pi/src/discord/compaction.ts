@@ -103,6 +103,75 @@ function portableSummaryAuthorIds(summary: PortableSummary): Set<string> {
   return result;
 }
 
+interface PortableSummaryAttribution {
+  authorId: string;
+  sourceEventIds: readonly string[];
+}
+
+function portableSummaryAttributions(summary: PortableSummary): PortableSummaryAttribution[] {
+  const attributions: PortableSummaryAttribution[] = [];
+  for (const fact of summary.acceptedFacts) {
+    if (fact.assertedByAuthorId !== undefined) {
+      attributions.push({
+        authorId: fact.assertedByAuthorId,
+        sourceEventIds: fact.sourceEventIds,
+      });
+    }
+  }
+  for (const correction of summary.corrections) {
+    if (correction.correctedByAuthorId !== undefined) {
+      attributions.push({
+        authorId: correction.correctedByAuthorId,
+        sourceEventIds: correction.sourceEventIds,
+      });
+    }
+  }
+  for (const question of summary.unresolvedQuestions) {
+    attributions.push({
+      authorId: question.askedByAuthorId,
+      sourceEventIds: question.sourceEventIds,
+    });
+  }
+  for (const commitment of summary.commitments) {
+    if (commitment.owner.kind === "participant") {
+      attributions.push({
+        authorId: commitment.owner.authorId,
+        sourceEventIds: commitment.sourceEventIds,
+      });
+    }
+  }
+  for (const preference of summary.conversationPreferences) {
+    attributions.push({
+      authorId: preference.authorId,
+      sourceEventIds: preference.sourceEventIds,
+    });
+  }
+  return attributions;
+}
+
+function portableSummaryAttributionsMatch(
+  summary: PortableSummary,
+  directlyAuthoredEventIds: ReadonlyMap<string, ReadonlySet<string>>,
+  previousSummary?: PortableSummary,
+): boolean {
+  const previousAttributions = previousSummary === undefined
+    ? []
+    : portableSummaryAttributions(previousSummary);
+  return portableSummaryAttributions(summary).every((attribution) => {
+    const directlyAuthored = directlyAuthoredEventIds.get(attribution.authorId);
+    if (
+      directlyAuthored !== undefined
+      && attribution.sourceEventIds.some((eventId) => directlyAuthored.has(eventId))
+    ) return true;
+
+    const sourceEventIds = new Set(attribution.sourceEventIds);
+    return previousAttributions.some((previous) =>
+      previous.authorId === attribution.authorId
+      && previous.sourceEventIds.every((eventId) => sourceEventIds.has(eventId))
+    );
+  });
+}
+
 /**
  * Builds the only checkpoint artifact that can cross the Pi boundary. The
  * provider supplies the typed summary only. Identity and token accounting stay
@@ -136,6 +205,21 @@ export function buildPortableCheckpointResponse(
     }
   }
   if ([...portableSummaryAuthorIds(summary)].some((authorId) => !allowedAuthorIds.has(authorId))) {
+    throw new DiscordAgentOutputError("invalid_response_schema");
+  }
+
+  const directlyAuthoredEventIds = new Map<string, Set<string>>();
+  for (const event of request.sourceEvents) {
+    if (event.authorId === undefined) continue;
+    const authoredEventIds = directlyAuthoredEventIds.get(event.authorId) ?? new Set<string>();
+    authoredEventIds.add(event.eventId);
+    directlyAuthoredEventIds.set(event.authorId, authoredEventIds);
+  }
+  if (!portableSummaryAttributionsMatch(
+    summary,
+    directlyAuthoredEventIds,
+    request.previousSummary,
+  )) {
     throw new DiscordAgentOutputError("invalid_response_schema");
   }
 

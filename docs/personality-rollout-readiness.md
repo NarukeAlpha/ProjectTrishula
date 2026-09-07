@@ -6,17 +6,18 @@ This record separates verified build evidence from live gates. It does not autho
 
 ## Ready for staged owner testing
 
-The durable Luna and isolated Sol pipeline is ready for a staged deployment with both compaction flags off. The portable checkpoint path is code-complete and opt-in. It is not approved for production activation yet.
+The durable Luna and isolated Sol pipeline is ready for a staged deployment with both compaction flags off. The bounded portable checkpoint path is implemented and opt-in. It is not approved for production activation yet.
 
 Verified implementation evidence:
 
 - `npm run check:personality` passes without a user login, provider call, or Discord delivery.
-- The deterministic run covers 46 Pi tests, 32 gateway tests, and 45 Convex tests.
+- The deterministic run covers 46 Pi tests, 32 gateway tests, and 48 Convex tests.
 - The fixture replay runs each routing case three times.
 - The synthetic restart fixture preserves author attribution, an accepted correction, an unresolved question, freshness, and the recent raw tail.
-- Portable generation uses a fresh Luna session with no tools. Pi accepts only typed summaries whose source-event IDs and author IDs occur in the supplied canonical evidence or prior validated summary.
-- Convex activates a checkpoint only after revision, epoch, owner binding, generation, routing generation, source hash, source references, exact recent-tail IDs, size, and token-accounting checks pass.
+- Portable generation uses a fresh Luna session with no tools. Pi accepts only typed summaries whose source-event IDs and author IDs occur in supplied evidence. Each authored claim must cite an event from that author or preserve the complete evidence bundle from a prior validated claim by that author.
+- Convex activates a checkpoint only after revision, epoch, owner binding, generation, routing generation, source hash, source references, author-to-source attribution, exact recent-tail IDs, size, and token-accounting checks pass.
 - The trigger uses the pinned 272,000-token model window. The threshold is 190,400 estimated tokens. The retained recent tail is contiguous and targets 20,000 estimated tokens.
+- The candidate producer never emits more than the 5,000 source events accepted by Pi. It skips an unsupported oversized backlog and continues scanning other guilds. It does not activate a partial checkpoint that could omit an unsummarized middle range.
 - Native opaque compaction is still hard false. The pinned Pi provider has no tested direct bridge to the official opaque compact-response item.
 
 ## Live evidence captured by the deployment owner
@@ -54,6 +55,7 @@ Keep `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED=false` in Pi and the Discord gateway
 | Failure fallback | Not run | Inject provider failure and stale compare-and-set; retain the prior checkpoint and raw context without a visible failure |
 | Quality and savings | Not run | Record recall, source grounding, input/output tokens, estimated cost, and latency against the non-compacted baseline |
 | Blind naturalness review | Not run | Score the fixture pairs with the section 16 rubric; deterministic surface checks alone are not a human rubric score |
+| Oversized source backlog | Safe skip only | Before activation on a guild with more than 5,000 eligible source events, add a reviewed atomic migration or reset that cannot omit an unsummarized middle range |
 
 ## Required gates before any Discord pilot
 

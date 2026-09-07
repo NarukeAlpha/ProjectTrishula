@@ -57,7 +57,9 @@ import {
   discordSnowflakeUpperBound,
   isCurrentDiscordConversationFence,
   portableCheckpointRestorable,
+  portableCheckpointSourceBatchSupported,
   portableConversationSummarySchema,
+  portableSummaryEvidenceMatchesEvents,
   estimateDiscordCanonicalEventTokens,
   requireDiscordReplyContent,
   selectDiscordCanonicalTail,
@@ -734,18 +736,9 @@ async function durableConversationContext(
           conversation,
           checkpoint.compactedThroughOrdinal,
         );
-        const sourceEventIds = new Set(canonicalSlice.events.map((event) => event.eventId));
-        const referencedEventIds = [
-          ...parsedSummary.acceptedFacts.flatMap((entry) => entry.sourceEventIds),
-          ...parsedSummary.corrections.flatMap((entry) => entry.sourceEventIds),
-          ...parsedSummary.unresolvedQuestions.flatMap((entry) => entry.sourceEventIds),
-          ...parsedSummary.commitments.flatMap((entry) => entry.sourceEventIds),
-          ...parsedSummary.conversationPreferences.flatMap((entry) => entry.sourceEventIds),
-          ...parsedSummary.sourceFreshnessNotes.flatMap((entry) => entry.sourceEventIds),
-        ];
         if (
           canonicalSlice.sourceContextHash !== checkpoint.sourceContextHash
-          || referencedEventIds.some((eventId) => !sourceEventIds.has(eventId))
+          || !portableSummaryEvidenceMatchesEvents(parsedSummary, canonicalSlice.events)
         ) {
           throw new Error("Portable checkpoint source evidence is not canonical.");
         }
@@ -793,6 +786,7 @@ async function durableConversationContext(
     content: event.content!,
   })), {
     requiredEventIds,
+    maximumEvents: DISCORD_MAX_RECENT_EVENT_COUNT,
     tokenBudget: activeCheckpointId === undefined
       ? DISCORD_COMPACTION_THRESHOLD_TOKENS
       : DISCORD_RECENT_TAIL_TOKEN_BUDGET,
@@ -1992,6 +1986,7 @@ export const nextPortableCheckpoint = internalMutation({
       });
       if (tail.complete || tail.events.length === 0) continue;
       const sourceEvents = visibleEvents.slice(0, visibleEvents.length - tail.events.length);
+      if (!portableCheckpointSourceBatchSupported(sourceEvents.length)) continue;
       const lastSourceEvent = sourceEvents.at(-1);
       if (lastSourceEvent === undefined) continue;
       const sourceSlice = await canonicalCheckpointSlice(
@@ -2127,16 +2122,7 @@ export const storePortableCheckpoint = internalMutation({
     ) {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
-    const sourceEventIds = new Set(canonicalSlice.events.map((event) => event.eventId));
-    const referencedEventIds = [
-      ...parsedSummary.acceptedFacts.flatMap((entry) => entry.sourceEventIds),
-      ...parsedSummary.corrections.flatMap((entry) => entry.sourceEventIds),
-      ...parsedSummary.unresolvedQuestions.flatMap((entry) => entry.sourceEventIds),
-      ...parsedSummary.commitments.flatMap((entry) => entry.sourceEventIds),
-      ...parsedSummary.conversationPreferences.flatMap((entry) => entry.sourceEventIds),
-      ...parsedSummary.sourceFreshnessNotes.flatMap((entry) => entry.sourceEventIds),
-    ];
-    if (referencedEventIds.some((eventId) => !sourceEventIds.has(eventId))) {
+    if (!portableSummaryEvidenceMatchesEvents(parsedSummary, canonicalSlice.events)) {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
     const normalizedRetainedEventIds = args.retainedRecentEventIds.map((id) =>

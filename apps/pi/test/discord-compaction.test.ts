@@ -63,15 +63,26 @@ describe("portable Discord checkpoint policy", () => {
       },
       sourceContextHash: "c".repeat(64),
       compactedThroughOrdinal: 2,
-      sourceEvents: [{
-        eventId: "event:2",
-        ordinal: 2,
-        role: "human" as const,
-        authorId: "456",
-        displayName: "Mira",
-        content: "Keep answers concise.",
-        createdAt: "2026-09-07T12:00:00.000Z",
-      }],
+      sourceEvents: [
+        {
+          eventId: "event:1",
+          ordinal: 1,
+          role: "human" as const,
+          authorId: "789",
+          displayName: "Kai",
+          content: "Use tables when comparisons need them.",
+          createdAt: "2026-09-07T11:59:00.000Z",
+        },
+        {
+          eventId: "event:2",
+          ordinal: 2,
+          role: "human" as const,
+          authorId: "456",
+          displayName: "Mira",
+          content: "Keep answers concise.",
+          createdAt: "2026-09-07T12:00:00.000Z",
+        },
+      ],
       retainedRecentEventIds: ["event:3"],
       inputEstimatedTokens: 120,
     };
@@ -110,6 +121,18 @@ describe("portable Discord checkpoint policy", () => {
     expect(() => buildPortableCheckpointResponse(request, {
       ...summary,
       participants: [{ authorId: "999", displayName: "Invented" }],
+    })).toThrow();
+    expect(() => buildPortableCheckpointResponse(request, {
+      ...summary,
+      participants: [
+        ...summary.participants,
+        { authorId: "789", displayName: "Kai" },
+      ],
+      conversationPreferences: [{
+        statement: "Use tables when comparisons need them.",
+        authorId: "789",
+        sourceEventIds: ["event:2"],
+      }],
     })).toThrow();
   });
 });
