@@ -290,6 +290,8 @@ export type DiscordActivityEventType =
   | "reply_queued"
   | "reply_sent"
   | "reply_failed"
+  | "delivery_uncertain"
+  | "delivery_reconciliation_required"
   | "loop_completed"
   | "loop_failed";
 
@@ -333,8 +335,38 @@ export interface DiscordChannelReadModel {
   canView: boolean;
   canSend: boolean;
   canReadHistory: boolean;
+  canCreateForumPost?: boolean;
+  canSendInThreads?: boolean;
+  canReadThreadHistory?: boolean;
+  canAttachFiles?: boolean;
+  requiresTag?: boolean;
+  availableTags?: Array<{
+    id: string;
+    name: string;
+    moderated: boolean;
+    emoji?: string;
+  }>;
   roles: DiscordChannelRole[];
   loop?: DiscordLoopReadModel;
+}
+
+export interface DiscordModelProfileReadModel {
+  model: string;
+  reasoningEffort: string;
+  serviceTier: string;
+}
+
+export interface DiscordConversationStatusReadModel {
+  conversationId: string;
+  epoch: number;
+  revision: number;
+  humanRevision: number;
+  personalityVersion: string;
+  models: {
+    luna: DiscordModelProfileReadModel;
+    sol: DiscordModelProfileReadModel;
+  };
+  lastSuccessfulActivityAt?: number;
 }
 
 export interface DiscordGuildReadModel {
@@ -346,6 +378,7 @@ export interface DiscordGuildReadModel {
     conversationChannelId?: string;
     researchLogChannelId?: string;
   };
+  conversation?: DiscordConversationStatusReadModel;
   channels: DiscordChannelReadModel[];
 }
 
@@ -366,5 +399,104 @@ export interface DiscordGuildRoutingReadModel {
   guildId: string;
   conversationChannelId: string | null;
   researchLogChannelId: string | null;
+  conversationId?: string;
+  epoch?: number;
+  routingGeneration?: number;
   updatedAt: number;
 }
+
+export interface DiscordConversationResetReadModel {
+  guildId: string;
+  conversationId: string;
+  epoch: number;
+  generation: number;
+  routingGeneration: number;
+  resetAt: number;
+}
+
+export interface DiscordConversationPrivacyDeletionReadModel {
+  guildId: string;
+  conversationId: string;
+  deletedRecords: number;
+  epoch: number;
+  deletedAt: number;
+}
+
+export type MarketResearchEditionStatus =
+  | "queued"
+  | "collecting"
+  | "researching"
+  | "calculating"
+  | "composing"
+  | "ready_to_publish"
+  | "creating_thread"
+  | "publishing_replies"
+  | "published"
+  | "retry_wait"
+  | "partial"
+  | "failed"
+  | "cancelled"
+  | "skipped_late";
+
+export interface MarketResearchPreferencesReadModel {
+  guildId: string;
+  enabled: boolean;
+  forumChannelId: string | null;
+  forumTagIds: string[];
+  timezone: string;
+  timezoneConfirmed: boolean;
+  localHour: number;
+  localMinute: number;
+  includeWeekends: boolean;
+  includeCharts: boolean;
+  chartsAcceptancePassed: boolean;
+  marketDataProviderId?: string | null;
+  maximumCharts?: number;
+  editionDepth: "full" | "concise";
+  maximumRankedSetups: number;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface MarketResearchCurrentEditionReadModel {
+  editionId: string;
+  editionDate: string;
+  status: MarketResearchEditionStatus;
+  stage: string;
+  lastErrorCode?: string;
+  sourceCount: number;
+  acceptedSourceCount: number;
+  exaCostUsd: number;
+  forumUrl?: string;
+  updatedAt: number;
+}
+
+export interface MarketResearchControlStatusReadModel {
+  guildId: string;
+  preferences: MarketResearchPreferencesReadModel;
+  current: MarketResearchCurrentEditionReadModel | null;
+  preview?: {
+    previewId: string;
+    status: "queued" | "running" | "completed" | "failed";
+    requestedAt: number;
+    qualitySummary: string[];
+    safeFailure?: string;
+  } | null;
+}
+
+export type SaveMarketResearchControlSettings = {
+  guildId: string;
+  forumChannelId: string | null;
+  forumTagIds: string[];
+  timezone: string;
+  timezoneConfirmed: boolean;
+  localHour: number;
+  localMinute: number;
+  includeWeekends: boolean;
+  editionDepth: "full" | "concise";
+  maximumRankedSetups: number;
+  enabled: boolean;
+  marketDataProviderId?: "exa_financial_datasets" | null;
+  includeCharts?: boolean;
+  maximumCharts?: number;
+};

@@ -56,6 +56,26 @@ const demoDiscord: DiscordControlPlaneReadModel = {
         readMessageHistory: true,
         messageContent: true,
       },
+      conversation: {
+        conversationId: "discord:demo-stardust",
+        epoch: 1,
+        revision: 8,
+        humanRevision: 5,
+        personalityVersion: "trishula-discord-v1",
+        models: {
+          luna: {
+            model: "gpt-5.6-luna",
+            reasoningEffort: "xhigh",
+            serviceTier: "priority",
+          },
+          sol: {
+            model: "gpt-5.6-sol",
+            reasoningEffort: "max",
+            serviceTier: "priority",
+          },
+        },
+        lastSuccessfulActivityAt: Date.now() - 60_000,
+      },
       channels: [
         {
           channelId: "demo-testing-bot",
@@ -281,6 +301,16 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
                 applicationId={config.discordApplicationId}
                 model={demoDiscord}
                 onSetGuildRouting={() => Promise.resolve()}
+                onResetGuildConversation={(guildId) =>
+                  Promise.resolve({
+                    guildId,
+                    conversationId: `discord:${guildId}`,
+                    epoch: 2,
+                    generation: 2,
+                    routingGeneration: 2,
+                    resetAt: Date.now(),
+                  })
+                }
               />
             }
           />

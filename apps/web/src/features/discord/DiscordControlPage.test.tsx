@@ -1,13 +1,23 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DiscordControlPlaneReadModel } from "../../convex/types";
-import { DiscordControlView } from "./DiscordControlPage";
+import type {
+  DiscordConversationPrivacyDeletionReadModel,
+  DiscordConversationResetReadModel,
+  DiscordControlPlaneReadModel,
+  MarketResearchControlStatusReadModel,
+} from "../../convex/types";
+import {
+  DiscordControlPageContent,
+  DiscordControlView,
+} from "./DiscordControlPage";
 import { discordInstallUrl } from "./discordInstall";
 
 function controlPlane(
@@ -29,6 +39,26 @@ function controlPlane(
           sendMessages: true,
           readMessageHistory: true,
           messageContent: true,
+        },
+        conversation: {
+          conversationId: "discord:guild_1",
+          epoch: 3,
+          revision: 17,
+          humanRevision: 11,
+          personalityVersion: "trishula-discord-v1",
+          models: {
+            luna: {
+              model: "gpt-5.6-luna",
+              reasoningEffort: "xhigh",
+              serviceTier: "priority",
+            },
+            sol: {
+              model: "gpt-5.6-sol",
+              reasoningEffort: "max",
+              serviceTier: "priority",
+            },
+          },
+          lastSuccessfulActivityAt: Date.now() - 60_000,
         },
         channels: [
           {
@@ -54,6 +84,24 @@ function controlPlane(
             canReadHistory: true,
             roles: ["research_log"],
           },
+          {
+            channelId: "channel_3",
+            name: "morning-paper",
+            type: "forum",
+            canView: true,
+            canSend: true,
+            canReadHistory: true,
+            canCreateForumPost: true,
+            canSendInThreads: true,
+            canReadThreadHistory: true,
+            canAttachFiles: true,
+            requiresTag: true,
+            availableTags: [
+              { id: "tag_1", name: "Morning", moderated: false, emoji: "📰" },
+              { id: "tag_2", name: "Moderated", moderated: true },
+            ],
+            roles: [],
+          },
         ],
       },
     ],
@@ -61,9 +109,100 @@ function controlPlane(
   };
 }
 
+function resetGuildConversation(guildId: string) {
+  return Promise.resolve({
+    guildId,
+    conversationId: `discord:${guildId}`,
+    epoch: 4,
+    generation: 8,
+    routingGeneration: 3,
+    resetAt: Date.now(),
+  });
+}
+
 afterEach(cleanup);
 
+function marketResearchStatus(
+  timezone = "America/New_York",
+): MarketResearchControlStatusReadModel {
+  return {
+    guildId: "guild_1",
+    preferences: {
+      guildId: "guild_1",
+      enabled: false,
+      forumChannelId: null,
+      forumTagIds: [],
+      timezone,
+      timezoneConfirmed: false,
+      localHour: 8,
+      localMinute: 0,
+      includeWeekends: true,
+      includeCharts: false,
+      chartsAcceptancePassed: false,
+      editionDepth: "full",
+      maximumRankedSetups: 5,
+      revision: 1,
+      updatedAt: "2026-09-07T12:00:00.000Z",
+    },
+    current: null,
+  };
+}
+
 describe("Discord control surface", () => {
+  it("waits for both control queries before it initializes editable settings", () => {
+    render(
+      <DiscordControlPageContent
+        model={controlPlane()}
+        marketResearch={undefined}
+        onResetGuildConversation={vi.fn()}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi.fn()}
+        onMarketResearchAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading Discord control…",
+    );
+    expect(
+      screen.queryByRole("combobox", { name: "Schedule timezone" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("preserves a dirty setting when a hydrated query refreshes", () => {
+    const callbacks = {
+      onResetGuildConversation: vi.fn(),
+      onSetGuildRouting: vi.fn(),
+      onSaveMarketResearch: vi.fn(),
+      onMarketResearchAction: vi.fn(),
+    };
+    const { rerender } = render(
+      <DiscordControlPageContent
+        model={controlPlane()}
+        marketResearch={[marketResearchStatus()]}
+        {...callbacks}
+      />,
+    );
+    const timezone = screen.getByRole("combobox", {
+      name: "Schedule timezone",
+    });
+    fireEvent.change(timezone, {
+      target: { value: "America/Puerto_Rico" },
+    });
+
+    rerender(
+      <DiscordControlPageContent
+        model={controlPlane()}
+        marketResearch={[marketResearchStatus("America/New_York")]}
+        {...callbacks}
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Schedule timezone" }),
+    ).toHaveValue("America/Puerto_Rico");
+  });
+
   it("builds a callback-free guild install link with minimum permissions", () => {
     expect(discordInstallUrl("1114379702015111228")).toBe(
       "https://discord.com/oauth2/authorize?client_id=1114379702015111228&integration_type=0&scope=bot&permissions=68608",
@@ -74,6 +213,7 @@ describe("Discord control surface", () => {
         applicationId="1114379702015111228"
         model={controlPlane()}
         onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
@@ -82,9 +222,13 @@ describe("Discord control surface", () => {
     ).toHaveAttribute("href", discordInstallUrl("1114379702015111228"));
   });
 
-  it("shows exactly two server-level routes instead of channel cards", () => {
+  it("shows three independent server-level routes instead of channel cards", () => {
     render(
-      <DiscordControlView model={controlPlane()} onSetGuildRouting={vi.fn()} />,
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
     );
 
     expect(
@@ -93,8 +237,159 @@ describe("Discord control surface", () => {
     expect(
       screen.getByRole("combobox", { name: "Research log channel" }),
     ).toHaveValue("channel_2");
-    expect(screen.getAllByRole("combobox")).toHaveLength(3);
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Morning newspaper forum" }),
+    ).toHaveValue("");
+    expect(screen.getAllByRole("combobox")).toHaveLength(7);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(4);
+  });
+
+  it("saves the forum route without changing either conversational route", async () => {
+    const onSetGuildRouting = vi.fn().mockResolvedValue(undefined);
+    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={onSetGuildRouting}
+        onSaveMarketResearch={onSaveMarketResearch}
+        onResetGuildConversation={vi.fn()}
+      />,
+    );
+
+    const forum = screen.getByRole("combobox", {
+      name: "Morning newspaper forum",
+    });
+    expect(forum.querySelector('option[value="channel_1"]')).toBeNull();
+    fireEvent.change(forum, { target: { value: "channel_3" } });
+    const tag = screen.getByRole("combobox", { name: "Morning newspaper tag" });
+    expect(tag.querySelector('option[value="tag_2"]')).toBeNull();
+    fireEvent.change(tag, { target: { value: "tag_1" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
+
+    await waitFor(() =>
+      expect(onSaveMarketResearch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          guildId: "guild_1",
+          forumChannelId: "channel_3",
+          forumTagIds: ["tag_1"],
+          enabled: false,
+        }),
+      ),
+    );
+    expect(onSetGuildRouting).not.toHaveBeenCalled();
+  });
+
+  it("runs a preview without selecting a forum or enabling scheduled publication", async () => {
+    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+    const onMarketResearchAction = vi.fn().mockResolvedValue(undefined);
+    const onSetGuildRouting = vi.fn();
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={onSetGuildRouting}
+        onSaveMarketResearch={onSaveMarketResearch}
+        onMarketResearchAction={onMarketResearchAction}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Publish now" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
+    await waitFor(() =>
+      expect(onMarketResearchAction).toHaveBeenCalledWith(
+        "guild_1",
+        "preview",
+        undefined,
+      ),
+    );
+    expect(onSaveMarketResearch).toHaveBeenCalledWith(
+      expect.objectContaining({ forumChannelId: null, enabled: false }),
+    );
+    expect(onSetGuildRouting).not.toHaveBeenCalled();
+  });
+
+  it("saves explicit chart and provider choices without claiming evaluation acceptance", async () => {
+    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        marketResearch={[marketResearchStatus()]}
+        onSaveMarketResearch={onSaveMarketResearch}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Numerical data provider" }),
+      { target: { value: "exa_financial_datasets" } },
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Include optional chart images for this server.",
+      }),
+    );
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Maximum chart images" }),
+      { target: { value: "2" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
+    await waitFor(() =>
+      expect(onSaveMarketResearch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          marketDataProviderId: "exa_financial_datasets",
+          includeCharts: true,
+          maximumCharts: 2,
+          enabled: false,
+        }),
+      ),
+    );
+    expect(onSaveMarketResearch.mock.calls[0]![0]).not.toHaveProperty(
+      "chartsAcceptancePassed",
+    );
+    expect(onSaveMarketResearch.mock.calls[0]![0]).not.toHaveProperty(
+      "ownerDecision",
+    );
+  });
+
+  it("displays preview completion and allows preview when the forum lacks attachment permission", async () => {
+    const model = controlPlane();
+    model.guilds[0]!.channels[2]!.canAttachFiles = false;
+    const status = marketResearchStatus();
+    status.preferences.forumChannelId = "channel_3";
+    status.preferences.forumTagIds = ["tag_1"];
+    status.preview = {
+      previewId: "MRP-test",
+      status: "completed",
+      requestedAt: Date.now(),
+      qualitySummary: ["Preview composed without delivery."],
+    };
+    const onMarketResearchAction = vi.fn().mockResolvedValue(undefined);
+    const onSaveMarketResearch = vi.fn();
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        marketResearch={[status]}
+        onSaveMarketResearch={onSaveMarketResearch}
+        onMarketResearchAction={onMarketResearchAction}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Include optional chart images for this server.",
+      }),
+    ).toBeDisabled();
+    expect(screen.getByText("Latest preview: completed")).toBeVisible();
+    expect(
+      screen.getByText("Preview composed without delivery."),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
+    await waitFor(() => expect(onMarketResearchAction).toHaveBeenCalledOnce());
+    expect(onSaveMarketResearch).not.toHaveBeenCalled();
   });
 
   it("does not present split legacy roles as a configured conversation", () => {
@@ -108,37 +403,47 @@ describe("Discord control surface", () => {
     firstChannel.roles = ["conversation_monitor"];
     secondChannel.roles = ["reply_target", "research_log"];
 
-    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
 
     expect(
       screen.getByRole("combobox", { name: "Conversation channel" }),
     ).toHaveValue("");
   });
 
-  it("moves a server route and preserves the other purpose", async () => {
+  it("rejects one channel assigned to both server roles", async () => {
     const onSetGuildRouting = vi.fn().mockResolvedValue(undefined);
     render(
       <DiscordControlView
         model={controlPlane()}
         onSetGuildRouting={onSetGuildRouting}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
     expect(screen.getByText("12 messages waiting")).toBeVisible();
+    expect(
+      screen
+        .getByRole("combobox", { name: "Research log channel" })
+        .querySelector('option[value="channel_1"]'),
+    ).toBeDisabled();
 
     fireEvent.change(
       screen.getByRole("combobox", { name: "Research log channel" }),
       { target: { value: "channel_1" } },
     );
 
-    await waitFor(() => {
-      expect(onSetGuildRouting).toHaveBeenCalledOnce();
-      expect(onSetGuildRouting).toHaveBeenCalledWith(
-        "guild_1",
-        "channel_1",
-        "channel_1",
-      );
-    });
+    expect(
+      await screen.findByText(
+        "Conversation and research log channels must be different.",
+      ),
+    ).toBeVisible();
+    expect(onSetGuildRouting).not.toHaveBeenCalled();
   });
 
   it("selects and updates one server at a time", async () => {
@@ -176,6 +481,7 @@ describe("Discord control surface", () => {
       <DiscordControlView
         model={model}
         onSetGuildRouting={onSetGuildRouting}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
@@ -220,6 +526,15 @@ describe("Discord control surface", () => {
           createdAt: Date.now(),
         },
         {
+          eventId: "run_1:delivery-reconciliation-required",
+          guildId: "guild_1",
+          channelId: "channel_1",
+          runId: "run_1",
+          eventType: "delivery_reconciliation_required",
+          replyKind: "final",
+          createdAt: Date.now(),
+        },
+        {
           eventId: "run_2:researching",
           guildId: "guild_2",
           channelId: "channel_2",
@@ -255,9 +570,18 @@ describe("Discord control surface", () => {
       ],
     });
 
-    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
 
     expect(screen.getByText("Acknowledgment sent")).toBeVisible();
+    expect(
+      screen.getByText("Delivery blocked for reconciliation"),
+    ).toBeVisible();
     expect(screen.queryByText("Writing reply")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Server"), {
@@ -266,6 +590,171 @@ describe("Discord control surface", () => {
 
     expect(screen.getByText("Writing reply")).toBeVisible();
     expect(screen.queryByText("Acknowledgment sent")).not.toBeInTheDocument();
+  });
+
+  it("shows content-free conversation status and confirms a memory reset", async () => {
+    let resolveReset:
+      | ((result: DiscordConversationResetReadModel) => void)
+      | undefined;
+    const resetPending = new Promise<DiscordConversationResetReadModel>(
+      (resolve) => {
+        resolveReset = resolve;
+      },
+    );
+    const onResetGuildConversation = vi.fn(() => resetPending);
+
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={onResetGuildConversation}
+      />,
+    );
+
+    const statusHeading = screen.getByRole("heading", {
+      name: "Conversation status",
+    });
+    const status = statusHeading.closest("section");
+    if (!status) throw new Error("The conversation status card is missing.");
+
+    expect(within(status).getByText("17")).toBeVisible();
+    expect(within(status).getByText("11")).toBeVisible();
+    expect(within(status).getByText("trishula-discord-v1")).toBeVisible();
+    expect(
+      within(status).getByText("gpt-5.6-luna · xhigh · priority"),
+    ).toBeVisible();
+    expect(
+      within(status).getByText("gpt-5.6-sol · max · priority"),
+    ).toBeVisible();
+    expect(
+      within(status).queryByText("discord:guild_1"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(status).getByRole("button", { name: "Reset server memory" }),
+    );
+
+    expect(
+      within(status).getByText(
+        /It does not delete Discord messages or audit records\./,
+      ),
+    ).toBeVisible();
+    const confirmation = within(status).getByRole("textbox", {
+      name: "Reset confirmation",
+    });
+    const submit = within(status).getByRole("button", {
+      name: "Start clean epoch",
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(confirmation, {
+      target: { value: "Reset Trishula memory for another server" },
+    });
+    expect(submit).toBeDisabled();
+    fireEvent.change(confirmation, {
+      target: { value: "Reset Trishula memory for Market Desk" },
+    });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    expect(onResetGuildConversation).toHaveBeenCalledOnce();
+    expect(onResetGuildConversation).toHaveBeenCalledWith("guild_1");
+    expect(
+      within(status).queryByText(/Epoch 4 is active\./),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveReset?.({
+        guildId: "guild_1",
+        conversationId: "discord:guild_1",
+        epoch: 4,
+        generation: 8,
+        routingGeneration: 3,
+        resetAt: Date.now(),
+      });
+    });
+
+    expect(
+      within(status).getByText(
+        "Trishula memory was reset for Market Desk. Epoch 4 is active.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("keeps privacy deletion separate and requires the exact server confirmation", async () => {
+    const onDeleteGuildConversationPrivacyData = vi
+      .fn<
+        (
+          guildId: string,
+        ) => Promise<DiscordConversationPrivacyDeletionReadModel>
+      >()
+      .mockResolvedValue({
+        guildId: "guild_1",
+        conversationId: "discord:guild_1",
+        deletedRecords: 42,
+        epoch: 4,
+        deletedAt: Date.now(),
+      });
+
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+        onDeleteGuildConversationPrivacyData={
+          onDeleteGuildConversationPrivacyData
+        }
+      />,
+    );
+
+    const statusHeading = screen.getByRole("heading", {
+      name: "Conversation status",
+    });
+    const status = statusHeading.closest("section");
+    if (!status) throw new Error("The conversation status card is missing.");
+
+    expect(
+      within(status).getByText(/It does not delete messages from Discord\./),
+    ).toBeVisible();
+    expect(
+      within(status).getByText(
+        /It does not delete Discord messages or audit records\./,
+      ),
+    ).toBeVisible();
+
+    fireEvent.click(
+      within(status).getByRole("button", { name: "Delete retained data" }),
+    );
+
+    const confirmation = within(status).getByRole("textbox", {
+      name: "Privacy deletion confirmation",
+    });
+    const submit = within(status).getByRole("button", {
+      name: "Delete retained data",
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(confirmation, {
+      target: { value: "Delete retained Trishula data for another server" },
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(confirmation, {
+      target: { value: "Delete retained Trishula data for Market Desk" },
+    });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(onDeleteGuildConversationPrivacyData).toHaveBeenCalledWith(
+        "guild_1",
+      ),
+    );
+    expect(
+      within(status).getByText(
+        "Retained Trishula data was deleted for Market Desk. Removed 42 records.",
+      ),
+    ).toBeVisible();
   });
 
   it("shows a disconnected gateway and blocks unavailable channel routes", () => {
@@ -296,7 +785,13 @@ describe("Discord control surface", () => {
       ],
     });
 
-    render(<DiscordControlView model={model} onSetGuildRouting={vi.fn()} />);
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
 
     expect(screen.getByText("The Discord gateway is offline.")).toBeVisible();
     const conversation = screen.getByRole("combobox", {
@@ -327,6 +822,7 @@ describe("Discord control surface", () => {
           guilds: [],
         }}
         onSetGuildRouting={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
@@ -344,12 +840,13 @@ describe("Discord control surface", () => {
       <DiscordControlView
         model={controlPlane()}
         onSetGuildRouting={() => Promise.reject(new Error("unavailable"))}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
 
     fireEvent.change(
       screen.getByRole("combobox", { name: "Research log channel" }),
-      { target: { value: "channel_1" } },
+      { target: { value: "" } },
     );
 
     expect(

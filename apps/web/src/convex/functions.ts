@@ -5,8 +5,13 @@ import type {
   CommandReadModel,
   DiscordChannelAssignmentReadModel,
   DiscordChannelRole,
+  DiscordConversationPrivacyDeletionReadModel,
+  DiscordConversationResetReadModel,
   DiscordControlPlaneReadModel,
   DiscordGuildRoutingReadModel,
+  MarketResearchControlStatusReadModel,
+  MarketResearchPreferencesReadModel,
+  SaveMarketResearchControlSettings,
   MessageReadModel,
   Page,
   PortfolioSnapshotReadModel,
@@ -111,6 +116,60 @@ export const publicApi = {
       },
       DiscordGuildRoutingReadModel
     >("discord:setGuildRouting"),
+    resetGuildConversation: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        confirmGuildId: string;
+      },
+      DiscordConversationResetReadModel
+    >("discord:resetGuildConversation"),
+    deleteGuildConversationPrivacyData: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        confirmGuildId: string;
+      },
+      DiscordConversationPrivacyDeletionReadModel
+    >("discord:deleteGuildConversationPrivacyData"),
+  },
+  marketResearch: {
+    getControlStatuses: makeFunctionReference<
+      "query",
+      NoArguments,
+      MarketResearchControlStatusReadModel[]
+    >("market_research:getControlStatuses"),
+    saveControlSettings: makeFunctionReference<
+      "mutation",
+      SaveMarketResearchControlSettings,
+      MarketResearchPreferencesReadModel
+    >("market_research:saveControlSettings"),
+    manualTrigger: makeFunctionReference<
+      "mutation",
+      {
+        guildId: string;
+        dryRun: boolean;
+        publish: boolean;
+        regeneratePublishedEdition: boolean;
+      },
+      | { kind: "preview"; previewId: string; status: "queued" }
+      | { kind: "edition"; editionId: string; duplicate: boolean }
+    >("market_research:manualTrigger"),
+    retryEdition: makeFunctionReference<
+      "mutation",
+      { editionId: string },
+      { status: string; editionId: string }
+    >("market_research:retryEdition"),
+    requestReconciliation: makeFunctionReference<
+      "mutation",
+      { editionId: string },
+      { status: "retry_wait"; editionId: string }
+    >("market_research:requestReconciliation"),
+    cancelUnstarted: makeFunctionReference<
+      "mutation",
+      { editionId: string },
+      { status: "cancelled" }
+    >("market_research:cancelUnstarted"),
   },
   trading: {
     getDashboard: makeFunctionReference<
