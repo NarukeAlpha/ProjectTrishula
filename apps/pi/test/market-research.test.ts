@@ -279,6 +279,82 @@ describe("official Exa SDK boundary", () => {
     expect(search).toHaveBeenCalledOnce();
   });
 
+  it.each(["search", "contents", "financial_datasets", "cost_gate"] as const)(
+    "gives queued %s work its full provider timeout after admission",
+    async (operation) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      try {
+        const starts: number[] = [];
+        const provider = vi.fn(() => {
+          starts.push(Date.now());
+          return new Promise<unknown>((resolve) => {
+            setTimeout(() => resolve({ requestId: `request-${starts.length}`, costDollars: { total: 0.01 }, results: [] }), 15);
+          });
+        });
+        const options: Partial<ConstructorParameters<typeof MarketResearchExaClient>[0]> = {
+          requestTimeoutMs: 20,
+          searchConcurrency: operation === "cost_gate" ? 2 : 1,
+          contentsConcurrency: 1,
+        };
+        if (operation === "cost_gate") options.maximumCostUsd = 1;
+        const exa = client({ search: provider, getContents: provider, runFinancialDataset: provider }, options);
+        if (!slot) throw new Error("Missing plan slot.");
+        const run = (index: number) => {
+          if (operation === "contents") return exa.getSelectedContents([`https://example.com/${index}`]);
+          if (operation === "financial_datasets") return exa.runFinancialDatasetEvaluation({
+            evaluationId: `evaluation-${index}`, query: "bounded evaluation", outputSchema: {}, maxCostDollars: 1,
+          });
+          return exa.searchNews({ ...slot, queryId: `slot-${index}` });
+        };
+        const result = Promise.all([run(1), run(2)]).then(() => "completed", (error: Error) => error);
+
+        await vi.advanceTimersByTimeAsync(15);
+        expect(starts).toEqual([0, 15]);
+        await vi.advanceTimersByTimeAsync(14);
+        expect(exa.usage()).toMatchObject({ costStatus: "known", budgetClosed: false });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await result).toBe("completed");
+        expect(exa.usage().costUsd).toBeCloseTo(0.02);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([false, true])("stops queued work on an active timeout without waiting for SDK settlement (cost gate %s)", async (costGate) => {
+    vi.useFakeTimers();
+    try {
+      const sdkResult = Promise.withResolvers<unknown>();
+      const search = vi.fn().mockReturnValue(sdkResult.promise);
+      const options: Partial<ConstructorParameters<typeof MarketResearchExaClient>[0]> = {
+        requestTimeoutMs: 20, searchConcurrency: 1,
+      };
+      if (costGate) options.maximumCostUsd = 1;
+      const exa = client({ search, getContents: vi.fn() }, options);
+      if (!slot) throw new Error("Missing plan slot.");
+      const results = Promise.all([
+        exa.searchNews(slot).catch((error: Error) => error),
+        exa.searchNews({ ...slot, queryId: "queued-slot" }).catch((error: Error) => error),
+      ]);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await results).toEqual([
+        expect.objectContaining({ message: "exa_budget_exhausted" }),
+        expect.objectContaining({ message: "exa_budget_exhausted" }),
+      ]);
+      expect(search).toHaveBeenCalledOnce();
+      expect(exa.usage()).toMatchObject({ searchRequests: 1, costStatus: "unknown", budgetClosed: true });
+      sdkResult.resolve({ requestId: "late-result", costDollars: { total: 0.01 }, results: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exa.usage().costUsd).toBe(0.01);
+      expect(search).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([undefined, -1, Number.NaN, "0.01"])("closes the optional budget when returned cost is %s", async (total) => {
     const search = vi.fn().mockResolvedValue({ requestId: "unknown-cost", costDollars: { total }, results: [] });
     const exa = client({ search, getContents: vi.fn() }, { maximumCostUsd: 1 });

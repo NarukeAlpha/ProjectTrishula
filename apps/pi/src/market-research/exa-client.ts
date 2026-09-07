@@ -305,6 +305,7 @@ export class MarketResearchExaClient {
   private contentPages = 0;
   private accruedCostUsd = 0;
   private budgetClosed = false;
+  private readonly budgetClosure = new AbortController();
   private costStatus: "known" | "unknown" = "known";
   private readonly costEvents: ExaCostEvent[] = [];
 
@@ -363,7 +364,7 @@ export class MarketResearchExaClient {
     const { raw, requestCost } = await this.retry(
       () => this.withTimeout(
         (requestSignal, markProviderStarted) => this.withCostGate(
-          () => this.searchSemaphore.use(async () => {
+          (admissionSignal) => this.searchSemaphore.use(async () => {
             this.assertCostAvailable();
             if (this.searchRequests >= this.options.maximumSearchRequests) throw new MarketResearchExaError({
               code: "exa_budget_exhausted", retryable: false, maximumRetries: 0, scope: "request", finalForSource: true,
@@ -372,7 +373,7 @@ export class MarketResearchExaClient {
             markProviderStarted();
             return this.paidRequest("search", requestSignal,
               () => this.transport.search(slot.query, searchOptions, requestSignal));
-          }, requestSignal),
+          }, admissionSignal),
           requestSignal,
         ),
         signal,
@@ -457,7 +458,7 @@ export class MarketResearchExaClient {
         const { raw, requestCost } = await this.retry(
           () => this.withTimeout(
             (requestSignal, markProviderStarted) => this.withCostGate(
-              () => this.contentsSemaphore.use(async () => {
+              (admissionSignal) => this.contentsSemaphore.use(async () => {
                 this.assertCostAvailable();
                 if (this.contentPages >= this.options.maximumContentPages) throw new MarketResearchExaError({
                   code: "exa_budget_exhausted", retryable: false, maximumRetries: 0, scope: "request", finalForSource: true,
@@ -466,7 +467,7 @@ export class MarketResearchExaClient {
                 markProviderStarted();
                 return this.paidRequest("contents", requestSignal,
                   () => this.transport.getContents(url, contentsOptions, requestSignal));
-              }, requestSignal),
+              }, admissionSignal),
               requestSignal,
             ),
             signal,
@@ -533,14 +534,14 @@ export class MarketResearchExaClient {
       const { raw } = await this.retry(
         () => this.withTimeout(
           (requestSignal, markProviderStarted) => this.withCostGate(
-            () => this.evaluationSemaphore.use(() => {
+            (admissionSignal) => this.evaluationSemaphore.use(() => {
               this.assertCostAvailable();
               const boundedRequest = this.financialDatasetRequestWithinBudget(request);
               markProviderStarted();
               return this.paidRequest("financial_datasets", requestSignal,
                 () => this.transport.runFinancialDataset?.(boundedRequest, requestSignal)
                   ?? Promise.reject(new Error("exa_invalid_request")));
-            }, requestSignal),
+            }, admissionSignal),
             requestSignal,
           ),
           signal,
@@ -643,16 +644,30 @@ export class MarketResearchExaClient {
 
   private accountCost(value: number | null): void {
     if (value === null) {
-      this.costStatus = "unknown";
-      this.budgetClosed = true;
+      this.closeUnknownCostBudget();
     } else {
       this.addCost(value);
     }
   }
 
-  private withCostGate<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    throwIfAborted(signal);
-    return this.costGate === undefined ? operation() : this.costGate.use(operation, signal);
+  private closeUnknownCostBudget(): void {
+    this.costStatus = "unknown";
+    this.budgetClosed = true;
+    this.budgetClosure.abort(new MarketResearchExaError({
+      code: "exa_budget_exhausted", retryable: false, maximumRetries: 0, scope: "request", finalForSource: true,
+    }));
+  }
+
+  private withCostGate<T>(operation: (admissionSignal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    // Closing the budget cancels admission, not already-started SDK calls. Their
+    // permits remain occupied and their eventual costs must still be recorded.
+    const admissionSignal = signal === undefined
+      ? this.budgetClosure.signal
+      : AbortSignal.any([signal, this.budgetClosure.signal]);
+    throwIfAborted(admissionSignal);
+    return this.costGate === undefined
+      ? operation(admissionSignal)
+      : this.costGate.use(() => operation(admissionSignal), admissionSignal);
   }
 
   private async retry<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -691,12 +706,11 @@ export class MarketResearchExaClient {
     const timeout = new AbortController();
     const abort = () => timeout.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => timeout.abort(new Error("Exa request timed out.")), this.options.requestTimeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const aborted = new Promise<T>((_resolve, reject) => {
       timeout.signal.addEventListener("abort", () => {
         if (providerStarted && !operationSettled) {
-          this.budgetClosed = true;
-          this.costStatus = "unknown";
+          this.closeUnknownCostBudget();
         }
         if (signal?.aborted) {
           reject(abortError(signal));
@@ -708,7 +722,12 @@ export class MarketResearchExaClient {
       }, { once: true });
     });
     const inFlight = Promise.resolve()
-      .then(() => operation(timeout.signal, () => { providerStarted = true; }))
+      .then(() => operation(timeout.signal, () => {
+        // Queue time is not provider time. Start only after both admission
+        // permits are held; keep them until the underlying SDK work settles.
+        providerStarted = true;
+        timer = setTimeout(() => timeout.abort(new Error("Exa request timed out.")), this.options.requestTimeoutMs);
+      }))
       .finally(() => { operationSettled = true; });
     try {
       return await Promise.race([inFlight, aborted]);
