@@ -42,6 +42,7 @@ async function main(): Promise<void> {
               request.preferences.contentsPageBudget,
             ),
             ...(maximumCostUsd === undefined ? {} : { maximumCostUsd }),
+            onCostEvent: callbacks.costObserver(request),
             logger: consoleLogger,
           });
         },

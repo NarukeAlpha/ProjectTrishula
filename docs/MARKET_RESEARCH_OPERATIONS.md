@@ -38,7 +38,11 @@ Do not infer live values from source defaults. Inspect the deployed service befo
 
 Pi uses the official `exa-js` package pinned to `2.19.0`. Keep that reviewed boundary fixed until a package upgrade receives a separate contract and regression review. Health can expose only `enabled`, `exaConfigured`, and runner readiness for this feature.
 
-`exa-js` 2.19.0 does not expose an `AbortSignal` for the underlying paid Search, Contents, or Agent operations. If a paid SDK call is in flight when its timeout or lease aborts, Pi rejects the result, closes that client's paid-work budget, and keeps the provider and cost permits occupied until the SDK promise settles. A missing or invalid returned cost also closes paid work, even when no edition dollar cap is configured. Pi retains a bounded in-memory event for an abandoned operation and records a returned late cost when the SDK settles. These late events are not yet a durable billing ledger. A late provider failure can leave the exact charge unknown. Automatic recovery cannot start a replacement paid request after this state. Review provider billing and durable edition checkpoints before an owner requests a manual retry.
+`exa-js` 2.19.0 does not expose an `AbortSignal` for the underlying paid Search, Contents, or Agent operations. If a paid SDK call is in flight when its timeout or lease aborts, Pi rejects the result, closes that client's paid-work budget, and keeps the provider and cost permits occupied until the SDK promise settles. A missing or invalid returned cost also closes paid work, even when no edition dollar cap is configured. Automatic recovery cannot start a replacement paid request after this state.
+
+Pi retains the last 128 cost observations in memory and submits each observation to Convex through the authenticated market-research endpoint. Every research or preview claim creates an immutable owner, target, generation, and token-hash binding. This binding lets the original paid request report a late settlement after its work lease expires or a later generation starts. Pi sends cost events independently of the cancelled run signal, retries the same event ID up to three times, and sends at most 1,024 events for one claim. Convex rejects an invalid binding or changed duplicate, deduplicates an exact retry, and stores no provider response body or credential.
+
+The durable observed-cost fields are separate from the accepted evidence-derived `exaCostUsd`. A known cost increases `exaObservedCostUsd`. A missing cost increases `exaUnknownCostEventCount`. This delivery is not a disk spool, so process termination before a successful delivery can lose an observation. An abandoned observation and its later settlement do not share a provider attempt ID. The unknown count therefore remains conservative even when a later event records a known cost. Review both cost records and provider billing before an owner requests a manual retry.
 
 An owner can save settings and run a preview with no forum. Enabling a schedule fails closed unless it has a confirmed timezone, a valid forum and tag configuration, a reviewed market-session calendar, and a configured market-data provider identifier.
 
@@ -54,10 +58,10 @@ From the repository root, run this only when the account is confirmed to have Ze
 npm --prefix apps/pi run market-research:evaluate-financial-datasets -- \
   --execute \
   --confirm-zdr-disabled \
-  --evaluation-id <stable-review-id> \
-  --instant <regular-market-day-08:00-with-UTC-offset> \
-  --timezone <confirmed-IANA-timezone> \
-  --max-cost-usd <approved-positive-cap> \
+  --evaluation-id STABLE_REVIEW_ID \
+  --instant YYYY-MM-DDT08:00:00-04:00 \
+  --timezone CONFIRMED_IANA_TIMEZONE \
+  --max-cost-usd APPROVED_POSITIVE_CAP \
   --timeout-ms 120000
 ```
 
@@ -67,9 +71,9 @@ The runtime adapter supports grounded current price, grounded prior close, groun
 
 After an approved evaluation and independent comparison, set the three Pi provider controls to the values described above. Then select **Exa Connect Financial Datasets** in the server settings. A saved server choice does not change the Pi runtime or owner decision. Run a preview before publication. Enable the saved schedule only after the owner also confirms the timezone, selects the forum and tag, and completes the calendar and publication gates.
 
-## Required external gates
+## Required production gates
 
-Complete these gates outside this repository before enablement:
+Complete these gates outside this repository before the production schedule and automation cutover. A private staging preview can run with the Pi service gate enabled while the saved schedule stays off. Enable the Discord service gate only for a controlled private publication test. Apply only the prerequisites needed for that test.
 
 1. Approve Exa source rights, cost, redaction, retention, and Zero Data Retention behavior. Record an explicit production policy for FinancialJuice, Barchart, ForexFactory, Yahoo, and TradingView. A source without permission must remain visibly unavailable, and no local scraper can bypass the decision. Run an opt-in live Search and Contents smoke test. Retain only safe request IDs, HTTPS sources, bounded highlights, statuses, and returned cost. Do not print or fingerprint the key.
 2. Run the opt-in Financial Datasets evaluation command at the configured 08:00 instant on a regular market day. Record the configured local time and Eastern market time, access result, per-field support, citations, cost, latency, and independent price and prior-close comparison. If the account rejects `dataSources` because of Zero Data Retention, record `exa_connect_zdr_incompatible`. Do not change the account setting automatically. The owner must record `approved`, `partial`, or `rejected`.
@@ -77,7 +81,7 @@ Complete these gates outside this repository before enablement:
 4. Load a reviewed NYSE calendar snapshot from an approved official host. At enablement, it must be no more than 45 days old and cover the current date through December 31 of the next calendar year. Store the official URL, retrieval time, effective range, hash, version, and bounded daily sessions. Use an immutable owner override for an emergency closure.
 5. Prove unattended composition readiness. Restart Pi before a staging run and confirm that the mounted Codex authentication works without an interactive login. Exercise authentication-required, provider-not-ready, timeout, bad-schema, and unknown-citation failures.
 6. Grant the bot View Channel, Send Messages, Create Posts, Send Messages in Threads, Read Message History, and Attach Files when charts are enabled. Select a valid non-moderated required tag.
-7. Run an isolated preview and a published edition in a private forum. Test Pi restart during research, Discord restart after partial replies, permission removal and restoration, rate limiting, ambiguous thread creation, duplicate reconciliation, mention suppression, chart fallback, and secret redaction. If charts are planned, complete one private-forum chart acceptance run before changing any chart gate.
+7. Run an isolated preview and a published edition in a private forum. Test Pi restart during research, Discord restart after partial replies, permission removal and restoration, rate limiting, ambiguous thread creation, duplicate reconciliation, mention suppression, chart fallback, and secret redaction. If charts are planned, enable both chart controls for this controlled private-forum acceptance run. Keep the saved schedule off until the run passes.
 8. Observe a real scheduled 08:00 run. A preview, manual publication, or late-session run does not satisfy this gate. Confirm that premarket fields belong to the current session and that exactly one thread uses the scheduled edition key.
 9. Accept three consecutive scheduled editions. Then inspect the existing **Market Research** automation by immutable ID and record its title, target, schedule, status, and prompt fingerprint. Pause it only after explicit owner approval. Do not delete it.
 
@@ -158,7 +162,9 @@ Retention does not delete edition records, final section summaries, forum thread
 
 ## Observability and operator evidence
 
-Use Convex as the durable operational record. Edition rows expose the current status and stage, scheduled and start times, research and publication generations, lease expiries, attempts, Search count, Exa cost, source counts, expected and sent part counts, safe failure, and Discord identifiers. Preview rows expose status, stage, safe failure, expiry, result fingerprint, and the bounded quality summary.
+Use Convex as the durable operational record. Edition rows expose the current status and stage, scheduled and start times, research and publication generations, lease expiries, attempts, Search count, accepted evidence-derived Exa cost, separately observed Exa cost, cost-event and unknown-cost counts, source counts, expected and sent part counts, safe failure, and Discord identifiers. Preview rows expose status, stage, safe failure, expiry, result fingerprint, the bounded quality summary, and the same observed-cost counters.
+
+`marketResearchCostBindings` stores the immutable accounting capability as a token hash. `marketResearchCostEvents` stores bounded, deduplicated operation, outcome, cost, late-settlement, time, and optional safe provider-request identifiers. It does not store raw provider payloads. Compare the observed-cost totals with the evidence-derived accepted cost and external provider billing. An unknown-cost count is a review requirement, not a zero-dollar charge.
 
 `marketResearchEvents` records safe enqueue, claim, skip, retry, cancellation, composition acceptance, publication acknowledgement, partial or failed publication, reconciliation, duplicate incident, and completion transitions. Event details contain bounded IDs, sequence values, stage, and safe codes. They do not contain prompts, article bodies, evidence packets, edition bodies, authorization data, or secrets.
 
