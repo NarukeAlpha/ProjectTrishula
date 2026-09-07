@@ -118,6 +118,8 @@ export default defineRailway(() => {
       CONVEX_INSTANCE_SECRET: preserve(),
       CONVEX_SELF_HOSTED_URL: preserve(),
       DISCORD_GATEWAY_SHARED_SECRET: preserve(),
+      EXECUTION_PRIVATE_DOMAIN_SUFFIX: preserve(),
+      MARKET_RESEARCH_OWNER_ID: preserve(),
       SERVICE_SHARED_SECRET: preserve(),
       WEB_APP_ORIGIN: preserve(),
       WORKOS_ALLOWED_USER_IDS: preserve(),
