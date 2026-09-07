@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "../src/app.js";
-import type { AppRunRegistry, MarketResearchJobRegistryBoundary } from "../src/app.js";
+import type { AppDependencies, AppRunRegistry, MarketResearchJobRegistryBoundary } from "../src/app.js";
 import type { TradingBroker } from "../src/broker/types.js";
+import type { MarketResearchRunner } from "../src/market-research/runner.js";
 import { TestExecutor, runRequest } from "./helpers.js";
 
 const secret = "a-secure-service-secret-with-32-chars";
@@ -48,6 +49,15 @@ function makeMarketResearchJobs(): MarketResearchJobRegistryBoundary {
     submit: vi.fn(() => ({ type: "not_accepting" as const })),
     get: vi.fn(() => ({ jobId: "edition-1:research:1", status: "running" as const })),
     cancel: vi.fn(() => "cancelled" as const),
+  };
+}
+
+function makeMarketResearchRunner(ready: boolean): MarketResearchRunner {
+  return {
+    initialize: vi.fn(async () => undefined),
+    readiness: vi.fn(() => ({ ready })),
+    run: vi.fn(async () => { throw new Error("Health checks must not run research."); }),
+    dispose: vi.fn(async () => undefined),
   };
 }
 
@@ -140,9 +150,36 @@ describe("execution HTTP API", () => {
       marketResearchEnabled: true,
       exaConfigured: true,
     })).get("/health");
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(503);
     expect(response.body.marketResearch).toEqual({ enabled: true, exaConfigured: true });
     expect(JSON.stringify(response.body)).not.toMatch(/api.?key|key.?prefix|key.?suffix|fingerprint/i);
+  });
+
+  it.each([
+    { enabled: true, exa: true, runner: false, jobs: true, status: 503 },
+    { enabled: true, exa: false, runner: true, jobs: true, status: 503 },
+    { enabled: true, exa: true, runner: true, jobs: false, status: 503 },
+    { enabled: true, exa: true, runner: true, jobs: true, status: 200 },
+    { enabled: false, exa: false, runner: false, jobs: false, status: 200 },
+  ])("reports research readiness for $enabled/$exa/$runner/$jobs", async ({ enabled, exa, runner, jobs, status }) => {
+    const marketResearch = makeMarketResearchRunner(runner);
+    const dependencies: AppDependencies = {
+      sharedSecret: secret,
+      discordSharedSecret: discordSecret,
+      executor: new TestExecutor(),
+      registry: makeRegistry(),
+      marketResearchEnabled: enabled,
+      exaConfigured: exa,
+      marketResearch,
+    };
+    if (jobs) dependencies.marketResearchJobs = makeMarketResearchJobs();
+    const response = await request(createApp(dependencies)).get("/health");
+
+    expect(response.status).toBe(status);
+    expect(response.body.ok).toBe(status === 200);
+    expect(response.body.marketResearch).toEqual({ enabled, exaConfigured: exa, runner: { ready: runner } });
+    expect(marketResearch.readiness).toHaveBeenCalledTimes(1);
+    expect(marketResearch.run).not.toHaveBeenCalled();
   });
 
   it("requires the bound owner on market-research job reads and cancellation", async () => {
