@@ -208,7 +208,11 @@ describe("official Exa SDK boundary", () => {
   it("preserves successful Contents URLs when another URL fails", async () => {
     const getContents = vi.fn(async (url: string | string[]) => {
       if (url === "https://blocked.example/story") throw { statusCode: 403, code: "ROBOTS_FILTER_FAILED" };
-      return { requestId: "ok", results: [{ id: "ok", title: "OK", url, highlights: ["usable"] }] };
+      return {
+        requestId: "ok",
+        costDollars: { total: 0 },
+        results: [{ id: "ok", title: "OK", url, highlights: ["usable"] }],
+      };
     });
     const exa = client({ search: vi.fn(), getContents });
     const result = await exa.getSelectedContents([
@@ -242,6 +246,7 @@ describe("official Exa SDK boundary", () => {
     const statuses = ["available", "cached", "delayed", "stale", "unknown", "blocked", "unavailable", "failed", "provider-new-status"] as const;
     const getContents = vi.fn(async (url: string | string[]) => ({
       requestId: `request-${String(url)}`,
+      costDollars: { total: 0 },
       results: [{ id: "doc", title: "Bounded content", url, highlights: ["usable"], status: statuses[getContents.mock.calls.length - 1] }],
     }));
     const exa = client({ search: vi.fn(), getContents });
@@ -279,6 +284,19 @@ describe("official Exa SDK boundary", () => {
     expect(search).toHaveBeenCalledOnce();
   });
 
+  it("closes paid work after an unknown cost even without a configured dollar cap", async () => {
+    const search = vi.fn().mockResolvedValue({ requestId: "unknown-cost", results: [] });
+    const exa = client({ search, getContents: vi.fn() });
+    if (!slot) throw new Error("Missing plan slot.");
+
+    await exa.searchNews(slot);
+
+    await expect(exa.searchNews({ ...slot, queryId: "must-not-run" }))
+      .rejects.toThrow("exa_budget_exhausted");
+    expect(exa.usage()).toMatchObject({ costStatus: "unknown", budgetClosed: true });
+    expect(search).toHaveBeenCalledOnce();
+  });
+
   it("accounts for Financial Datasets cost before releasing the cost permit", async () => {
     const runFinancialDataset = vi.fn().mockResolvedValue({ costDollars: { total: 1 }, output: {} });
     const exa = client({ search: vi.fn(), getContents: vi.fn(), runFinancialDataset }, { maximumCostUsd: 1 });
@@ -301,7 +319,7 @@ describe("official Exa SDK boundary", () => {
     controller.abort(new Error("edition_lease_lost"));
     expect(await firstResult).toMatchObject({ decision: { code: "exa_budget_exhausted", retryable: false } });
     await expect(exa.runFinancialDatasetEvaluation(request)).rejects.toThrow("exa_budget_exhausted");
-    provider.resolve({ requestId: "late-evaluation", costDollars: { total: 0.25 }, privateResponse: "not-in-ledger" });
+    provider.resolve({ id: "late-evaluation", costDollars: { total: 0.25 }, privateResponse: "not-in-ledger" });
     await vi.waitFor(() => expect(exa.usage().costUsd).toBe(0.25));
     expect(exa.costLedger()).toMatchObject([
       { operation: "financial_datasets", outcome: "abandoned", costUsd: null },

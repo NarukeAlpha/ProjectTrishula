@@ -2,9 +2,9 @@
 
 The morning market newspaper is a separate scheduled system. It does not use a Discord message, a conversation-loop cursor, `discordLoopRuns`, `discordOutbox`, or the `/discord` Pi route.
 
-The repository keeps the feature and chart delivery disabled by default. Do not enable either path until every external gate in this document passes.
+Each process defaults its service-level market-research gate to disabled when the related environment variable is absent. Railway preserves the deployed values. The control page cannot change these service-level gates.
 
-Repository implementation is not production readiness. The Exa, calendar, composition, market-data, Discord, schedule, and cutover gates need live evidence that repository tests cannot provide. The current Pi runtime uses `DisabledMarketDataProvider`, so it cannot produce an approved numerical market conclusion.
+Repository implementation is not production readiness. The Exa, calendar, composition, market-data, Discord, schedule, and cutover gates need live evidence that repository tests cannot provide. Pi contains an Exa Financial Datasets adapter, but it stays unavailable unless the runtime gate, recorded owner decision, explicit cost cap, and frozen server preference all select it. The repository does not contain a live Financial Datasets evaluation result.
 
 ## Service flow
 
@@ -19,33 +19,61 @@ Repository implementation is not production readiness. The Exa, calendar, compos
 
 The Discord gateway rejects conversational ingress from both the configured newspaper forum and its child threads. The existing conversation and research-log routes remain unchanged.
 
-## Disabled defaults
+## Runtime activation controls
 
-Keep these Railway values until staging acceptance is complete:
+Treat these as independent service controls:
 
 ```text
-Pi:      MARKET_RESEARCH_ENABLED=false
-Discord: MARKET_RESEARCH_ENABLED=false
-Discord: MARKET_RESEARCH_CHARTS_ENABLED=false
+Pi:      MARKET_RESEARCH_ENABLED
+Pi:      MARKET_DATA_PROVIDER_ID
+Pi:      EXA_FINANCIAL_DATASETS_OWNER_DECISION
+Pi:      EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST
+Discord: MARKET_RESEARCH_ENABLED
+Discord: MARKET_RESEARCH_CHARTS_ENABLED
 ```
 
-`EXA_API_KEY` and `EXA_MAX_COST_USD_PER_EDITION` are dashboard-managed preserved values. Never put their values in source, a command, a plan export, a test fixture, a log, or a support message.
+Do not infer live values from source defaults. Inspect the deployed service before a test. Keep `MARKET_RESEARCH_ENABLED` off on Pi until its Exa credential is installed because Pi rejects that combination at startup. The Discord research gate can be enabled independently. The per-server schedule remains a separate saved preference and can stay off while an owner uses previews.
+
+`EXA_API_KEY`, `EXA_MAX_COST_USD_PER_EDITION`, and the Financial Datasets per-request cap are dashboard-managed preserved values. Set a finite edition cap and a finite per-request cap before live work. Never put secret values in source, a command, a plan export, a test fixture, a log, or a support message.
 
 Pi uses the official `exa-js` package pinned to `2.19.0`. Keep that reviewed boundary fixed until a package upgrade receives a separate contract and regression review. Health can expose only `enabled`, `exaConfigured`, and runner readiness for this feature.
 
-`exa-js` 2.19.0 does not expose an `AbortSignal` for Search or Contents. If a paid SDK call is in flight when its timeout or lease aborts, Pi rejects the result, closes that edition's paid-work budget, and keeps the concurrency and cost permits occupied until the SDK promise settles. Pi records a returned late cost in memory, but a late provider failure can leave the exact charged cost unknown. The durable edition fails with `exa_budget_exhausted`, and automatic recovery cannot start a replacement paid request. Review provider billing and the existing checkpoints before an owner requests a manual retry.
+`exa-js` 2.19.0 does not expose an `AbortSignal` for the underlying paid Search, Contents, or Agent operations. If a paid SDK call is in flight when its timeout or lease aborts, Pi rejects the result, closes that client's paid-work budget, and keeps the provider and cost permits occupied until the SDK promise settles. A missing or invalid returned cost also closes paid work, even when no edition dollar cap is configured. Pi retains a bounded in-memory event for an abandoned operation and records a returned late cost when the SDK settles. These late events are not yet a durable billing ledger. A late provider failure can leave the exact charge unknown. Automatic recovery cannot start a replacement paid request after this state. Review provider billing and durable edition checkpoints before an owner requests a manual retry.
 
-An owner can save disabled forum and schedule settings before external data access is ready. Enabling a schedule fails closed unless it has a confirmed timezone, a valid forum and tag configuration, a reviewed market-session calendar, and a configured market-data provider identifier.
+An owner can save settings and run a preview with no forum. Enabling a schedule fails closed unless it has a confirmed timezone, a valid forum and tag configuration, a reviewed market-session calendar, and a configured market-data provider identifier.
 
-A configured provider identifier is not a live provider. The current runtime still constructs `DisabledMarketDataProvider`. Keep the schedule disabled until a licensed adapter is implemented and the live market-data gate passes.
+A configured provider identifier is not an approval. Pi constructs the Financial Datasets adapter only when the server preference is `exa_financial_datasets`, `MARKET_DATA_PROVIDER_ID=exa_financial_datasets`, `EXA_FINANCIAL_DATASETS_OWNER_DECISION=approved`, and a positive per-request cap is configured. Every other combination uses the unavailable provider. Keep the schedule disabled until the live data gate passes.
+
+## Financial Datasets evaluation and activation
+
+The evaluation command is opt-in. It reads `EXA_API_KEY` only from the operator environment. It does not accept a key argument. It emits a bounded review report and does not emit the raw provider response.
+
+From the repository root, run this only when the account is confirmed to have Zero Data Retention disabled:
+
+```sh
+npm --prefix apps/pi run market-research:evaluate-financial-datasets -- \
+  --execute \
+  --confirm-zdr-disabled \
+  --evaluation-id <stable-review-id> \
+  --instant <regular-market-day-08:00-with-UTC-offset> \
+  --timezone <confirmed-IANA-timezone> \
+  --max-cost-usd <approved-positive-cap> \
+  --timeout-ms 120000
+```
+
+Do not use `--confirm-zdr-disabled` when the account state is enabled or unknown. Without that confirmation, the CLI rejects its options before it creates a client or issues a provider request. The evaluation library uses `exa_connect_zdr_incompatible` for a known incompatible state. A `completed` report is not an approval. Compare current price and prior close with an independent authorized source. Review every returned timestamp, session label, citation, field status, cost, and latency. Then record the owner decision outside the generated report as `approved`, `partial`, or `rejected`.
+
+The runtime adapter supports grounded current price, grounded prior close, grounded daily and weekly OHLCV bars, and grounded corporate actions when Financial Datasets returns them. It does not claim support for 5-minute, 15-minute, or 60-minute bars, premarket high or low, premarket volume, bid, ask, spread, a market-movers feed, or an exchange calendar. It uses the reviewed frozen Convex calendar. Unsupported values remain unavailable and cannot be inferred from prior-close or daily data.
+
+After an approved evaluation and independent comparison, set the three Pi provider controls to the values described above. Then select **Exa Connect Financial Datasets** in the server settings. A saved server choice does not change the Pi runtime or owner decision. Run a preview before publication. Enable the saved schedule only after the owner also confirms the timezone, selects the forum and tag, and completes the calendar and publication gates.
 
 ## Required external gates
 
 Complete these gates outside this repository before enablement:
 
 1. Approve Exa source rights, cost, redaction, retention, and Zero Data Retention behavior. Record an explicit production policy for FinancialJuice, Barchart, ForexFactory, Yahoo, and TradingView. A source without permission must remain visibly unavailable, and no local scraper can bypass the decision. Run an opt-in live Search and Contents smoke test. Retain only safe request IDs, HTTPS sources, bounded highlights, statuses, and returned cost. Do not print or fingerprint the key.
-2. Run the opt-in Financial Datasets evaluation at the configured 08:00 instant on a regular market day. Record the configured local time and Eastern market time, access result, per-field support, citations, cost, latency, and independent price and prior-close comparison. If the account rejects `dataSources` because of Zero Data Retention, record `exa_connect_zdr_incompatible`. Do not change the account setting automatically. The owner must record `approved`, `partial`, or `rejected`.
-3. Approve and integrate a licensed structured market-data provider. Verify every primary symbol's price, prior close, premarket fields, bars, timestamps, session labels, entitlement, delay, and conflict behavior on a regular market day. The disabled adapter in the repository does not satisfy this gate.
+2. Run the opt-in Financial Datasets evaluation command at the configured 08:00 instant on a regular market day. Record the configured local time and Eastern market time, access result, per-field support, citations, cost, latency, and independent price and prior-close comparison. If the account rejects `dataSources` because of Zero Data Retention, record `exa_connect_zdr_incompatible`. Do not change the account setting automatically. The owner must record `approved`, `partial`, or `rejected`.
+3. Approve the implemented Financial Datasets adapter only for fields that the live evaluation proves. Verify every primary symbol's price, prior close, supported bars, timestamps, session labels, entitlement, delay, grounding, and conflict behavior on a regular market day. Keep the unsupported fields listed above unavailable. A mocked adapter test or a completed CLI process does not satisfy this gate.
 4. Load a reviewed NYSE calendar snapshot from an approved official host. At enablement, it must be no more than 45 days old and cover the current date through December 31 of the next calendar year. Store the official URL, retrieval time, effective range, hash, version, and bounded daily sessions. Use an immutable owner override for an emergency closure.
 5. Prove unattended composition readiness. Restart Pi before a staging run and confirm that the mounted Codex authentication works without an interactive login. Exercise authentication-required, provider-not-ready, timeout, bad-schema, and unknown-citation failures.
 6. Grant the bot View Channel, Send Messages, Create Posts, Send Messages in Threads, Read Message History, and Attach Files when charts are enabled. Select a valid non-moderated required tag.
@@ -53,7 +81,7 @@ Complete these gates outside this repository before enablement:
 8. Observe a real scheduled 08:00 run. A preview, manual publication, or late-session run does not satisfy this gate. Confirm that premarket fields belong to the current session and that exactly one thread uses the scheduled edition key.
 9. Accept three consecutive scheduled editions. Then inspect the existing **Market Research** automation by immutable ID and record its title, target, schedule, status, and prompt fingerprint. Pause it only after explicit owner approval. Do not delete it.
 
-The Financial Datasets harness is an opt-in library boundary. The scheduled runner does not call it, and the repository does not contain a live evaluation result. Invoke it only through an approved operator path that explicitly states whether Zero Data Retention is enabled. Keep the resulting bounded report outside normal edition evidence until the owner records a decision.
+The Financial Datasets evaluation command and the scheduled adapter are separate paths. The evaluation command always returns an owner decision of `pending`; it cannot enable the adapter. The scheduled runner calls the adapter only when all runtime and frozen-preference gates match. Keep the evaluation report outside normal edition evidence until an owner completes the independent comparison and records a decision.
 
 ## Preview behavior before the data gate
 
@@ -63,9 +91,9 @@ The preview freezes the same preferences and calendar session as an edition. It 
 
 On success, Convex stores a result fingerprint and a bounded quality summary. The summary includes the label, regime, retained evidence count, Search-slot count, primary coverage, setup count, and up to five short story lines. Convex validates and then discards delivery parts. It never makes them available to the Discord poller.
 
-On failure, Convex stores only the safe failure and a short operator summary. With the current disabled market-data adapter, the runner instead produces a visible `Data unavailable` operational edition with no setup scores or market conclusion. A completed degraded preview proves the isolated path and strict contract. It does not satisfy the licensed numerical-data gate.
+On failure, Convex stores only the safe failure and a short operator summary. When the provider gates do not match or supported grounded numerical fields are unavailable, the runner instead produces a visible `Data unavailable` operational edition with no setup scores or market conclusion. A completed degraded preview proves the isolated path and strict contract. It does not satisfy the licensed numerical-data gate.
 
-Use **Run preview** for this path. Use **Publish now** only after the forum and all data gates pass. **Cancel queued edition** never cancels a running preview or edition. **Retry edition** preserves the existing edition and durable evidence. **Reconcile forum thread** searches external Discord state and cannot create a second starter.
+Use **Run preview** for this path. Preview can initialize an unscheduled settings draft and run without a selected forum. It still requires the Pi service gate, Exa credential, reviewed calendar, and any selected provider's matching runtime gates. Use **Publish now** only after the forum and all data gates pass. **Cancel queued edition** never cancels a running preview or edition. **Retry edition** preserves the existing edition and durable evidence. **Reconcile forum thread** searches external Discord state and cannot create a second starter.
 
 ## Calendar operations
 
@@ -118,7 +146,9 @@ The newspaper reuses the trusted in-process `ChartImgClient`. Pi can request at 
 
 The Discord service maps only an explicit supported-symbol allowlist to provider symbols. `ChartImgClient` validates the PNG media type, 8 MiB byte cap, and dimensions. It never sends an arbitrary remote image URL to Discord. A timeout, unsupported symbol, provider failure, malformed PNG, or oversized PNG produces complete text without an attachment.
 
-Keep `MARKET_RESEARCH_CHARTS_ENABLED=false`, `includeCharts=false`, and `chartsAcceptancePassed=false` until a private-forum chart acceptance run passes. Convex rejects chart requests when the frozen edition does not contain both owner acceptance and chart inclusion.
+Chart delivery needs both the Discord runtime gate `MARKET_RESEARCH_CHARTS_ENABLED=true` and the per-server **Include optional chart images** setting. The selected forum must grant Attach Files. The saved maximum stays between zero and three. Convex rejects chart requests when the frozen server settings do not include charts or when the request exceeds that maximum.
+
+A direct CHART-IMG PNG probe proves only provider transport and image parsing. It does not prove Discord attachment permissions, forum routing, fallback behavior, or an end-to-end private-forum delivery. Complete that acceptance run before relying on images. Text remains the authoritative delivery and continues when an image fails.
 
 ## Retention
 
@@ -132,7 +162,7 @@ Use Convex as the durable operational record. Edition rows expose the current st
 
 `marketResearchEvents` records safe enqueue, claim, skip, retry, cancellation, composition acceptance, publication acknowledgement, partial or failed publication, reconciliation, duplicate incident, and completion transitions. Event details contain bounded IDs, sequence values, stage, and safe codes. They do not contain prompts, article bodies, evidence packets, edition bodies, authorization data, or secrets.
 
-Pi logs one safe completion or failure event with edition ID, generation, safe failure, and bounded counts. Discord logs poll and chart-degradation failures with fixed codes. The web control shows the latest edition date, status, stage, accepted and total source counts, Exa cost, safe failure, and forum link. Health shows only fixed readiness booleans.
+Pi logs one safe completion or failure event with edition ID, generation, safe failure, and bounded counts. Discord logs poll and chart-degradation failures with fixed codes. The web control shows the latest edition date, status, stage, accepted and total source counts, Exa cost, safe failure, and forum link. It also shows the latest preview status and bounded quality summary. Health shows only fixed readiness booleans.
 
 Before production enablement, add the deployment-level alerts required by the specification. Alert on a missing scheduled run, missed publication deadline, authentication failure, invalid forum configuration, consecutive failures, a partial edition, zero usable evidence, and any duplicate incident. Repository state and safe logs do not by themselves prove those external alerts are installed. Capture stage-duration, freshness, domain-diversity, ticker-coverage, retry, and provider-latency evidence during staging even when the current control page does not display every metric.
 

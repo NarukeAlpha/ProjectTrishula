@@ -150,6 +150,7 @@ interface RawExaResult {
 }
 
 interface RawExaResponse {
+  id?: unknown;
   requestId?: unknown;
   resolvedSearchType?: unknown;
   searchTime?: unknown;
@@ -600,7 +601,8 @@ export class MarketResearchExaClient {
       const raw = rawResponse(value);
       const requestCost = cost(raw);
       this.accountCost(requestCost);
-      const requestId = stringField(raw.requestId, 256);
+      const requestId = stringField(raw.requestId, 256)
+        ?? (operation === "financial_datasets" ? stringField(raw.id, 256) : undefined);
       this.recordCostEvent({
         operation, outcome: "settled", costUsd: requestCost, late: signal.aborted,
         observedAt: this.now().toISOString(),
@@ -627,7 +629,7 @@ export class MarketResearchExaClient {
   private accountCost(value: number | null): void {
     if (value === null) {
       this.costStatus = "unknown";
-      if (this.options.maximumCostUsd !== undefined) this.budgetClosed = true;
+      this.budgetClosed = true;
     } else {
       this.addCost(value);
     }
