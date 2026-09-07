@@ -428,10 +428,13 @@ export function portableCheckpointRestorable(
     revision: number;
     model: string;
     capabilityProfileHash: string;
+    personalityVersion?: string;
+    systemPromptHash?: string;
   },
   now: number,
+  requiredStatus: "active" | "candidate" = "active",
 ): boolean {
-  return checkpoint.status === "active"
+  return checkpoint.status === requiredStatus
     && checkpoint.expiresAt > now
     && checkpoint.ownerId === expected.ownerId
     && checkpoint.ownerBindingVersion === expected.ownerBindingVersion
@@ -444,7 +447,33 @@ export function portableCheckpointRestorable(
     && checkpoint.model === expected.model
     && checkpoint.toolPolicyHash === expected.capabilityProfileHash
     && checkpoint.sourceRevision <= expected.revision
+    && checkpoint.personalityVersion === (expected.personalityVersion ?? DISCORD_PERSONALITY_PROFILE.personalityVersion)
+    && checkpoint.systemPromptHash === (expected.systemPromptHash ?? DISCORD_PERSONALITY_PROFILE.systemPromptHash)
     && checkpoint.personalityVersion === DISCORD_PERSONALITY_PROFILE.personalityVersion
     && checkpoint.systemPromptHash === DISCORD_PERSONALITY_PROFILE.systemPromptHash
     && checkpoint.capabilityProfileHash === DISCORD_PERSONALITY_PROFILE.capabilityProfileHash;
+}
+
+/** One deterministic prefix per scheduling pass; the unprocessed middle stays unactivated. */
+export function selectDiscordCheckpointSourceBatch<T extends DiscordCanonicalTailEvent>(
+  events: readonly T[],
+  tailCount: number,
+  options: { maximumBytes?: number; tokenBudget?: number } = {},
+): T[] {
+  const batch: T[] = [];
+  let bytes = 0;
+  let tokens = 0;
+  for (const event of events.slice(0, Math.max(0, events.length - tailCount))) {
+    const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength + 1;
+    const eventTokens = estimateDiscordCanonicalEventTokens(event);
+    if (
+      batch.length >= DISCORD_PORTABLE_CHECKPOINT_MAX_SOURCE_EVENT_COUNT
+      || bytes + eventBytes > (options.maximumBytes ?? 900_000)
+      || tokens + eventTokens > (options.tokenBudget ?? DISCORD_COMPACTION_THRESHOLD_TOKENS)
+    ) break;
+    batch.push(event);
+    bytes += eventBytes;
+    tokens += eventTokens;
+  }
+  return batch;
 }
