@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { internal } from "./_generated/api.js";
 import { httpAction } from "./_generated/server.js";
+import { marketResearchCostEventSchema } from "./market_research.js";
 import {
   authorizedDiscordGatewayRequest,
   authorizedServiceRequest,
@@ -32,7 +33,13 @@ const leasedEdition = {
   claimToken: id,
 };
 
-const piRequest = z.discriminatedUnion("operation", [
+export const marketResearchPiRequestSchema = z.discriminatedUnion("operation", [
+  z.object({
+    operation: z.literal("recordExaCostEvent"),
+    ownerId: id,
+    ...leasedEdition,
+    event: marketResearchCostEventSchema,
+  }).strict(),
   z.object({
     operation: z.literal("heartbeat"),
     ...leasedEdition,
@@ -111,11 +118,16 @@ async function boundedJson(request: Request): Promise<unknown | null> {
 
 export const marketResearchPi = httpAction(async (ctx, request) => {
   if (!authorizedServiceRequest(request)) return json({ error: "Unauthorized." }, 401);
-  const parsed = piRequest.safeParse(await boundedJson(request));
+  const parsed = marketResearchPiRequestSchema.safeParse(await boundedJson(request));
   if (!parsed.success) return json({ error: "Invalid market-research Pi request." }, 400);
   try {
     const body = parsed.data;
     switch (body.operation) {
+      case "recordExaCostEvent": {
+        const { operation: _, ...args } = body;
+        const result = await ctx.runMutation(internal.market_research.recordExaCostEvent, args);
+        return json(result, result.accepted ? 200 : 409);
+      }
       case "heartbeat": {
         const { operation: _, ...args } = body;
         return json(await ctx.runMutation(internal.market_research.heartbeatResearch, args));

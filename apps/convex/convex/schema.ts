@@ -1123,6 +1123,9 @@ export default defineSchema({
     resumeFrom: v.optional(marketResearchStageValidator),
     exaRequestCount: v.number(),
     exaCostUsd: v.number(),
+    exaObservedCostUsd: v.optional(v.number()),
+    exaCostEventCount: v.optional(v.number()),
+    exaUnknownCostEventCount: v.optional(v.number()),
     sourceCount: v.number(),
     acceptedSourceCount: v.number(),
     threadId: v.optional(v.string()),
@@ -1148,6 +1151,31 @@ export default defineSchema({
     .index("by_status_publicationLeaseExpiresAt", ["status", "publicationLeaseExpiresAt"])
     .index("by_leaseExpiresAt", ["leaseExpiresAt"])
     .index("by_editionId", ["editionId"]),
+
+  marketResearchCostBindings: defineTable({
+    ownerId: v.string(),
+    targetId: v.string(),
+    targetKind: v.union(v.literal("edition"), v.literal("preview")),
+    generation: v.number(),
+    claimTokenHash: v.string(),
+    eventCount: v.number(),
+    knownCostUsd: v.number(),
+    unknownCostEventCount: v.number(),
+    createdAt: v.number(),
+  }).index("by_owner_target_generation", ["ownerId", "targetId", "generation"]),
+
+  marketResearchCostEvents: defineTable({
+    bindingId: v.id("marketResearchCostBindings"),
+    eventId: v.string(),
+    operation: v.union(v.literal("search"), v.literal("contents"), v.literal("financial_datasets")),
+    outcome: v.union(v.literal("settled"), v.literal("abandoned"), v.literal("failed")),
+    costUsd: v.union(v.number(), v.null()),
+    late: v.boolean(),
+    observedAt: v.string(),
+    requestId: v.optional(v.string()),
+    fingerprint: v.string(),
+    createdAt: v.number(),
+  }).index("by_binding_event", ["bindingId", "eventId"]),
 
   marketResearchEvidence: defineTable({
     editionId: v.string(),
@@ -1292,6 +1320,9 @@ export default defineSchema({
     resultFingerprint: v.optional(v.string()),
     safeFailure: v.optional(marketResearchSafeErrorValidator),
     qualitySummary: v.array(v.string()),
+    exaObservedCostUsd: v.optional(v.number()),
+    exaCostEventCount: v.optional(v.number()),
+    exaUnknownCostEventCount: v.optional(v.number()),
     expiresAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),

@@ -1196,6 +1196,9 @@ export const getControlStatuses = query({
           requestedAt: preview.requestedAt,
           qualitySummary: preview.qualitySummary.slice(0, 30).map((line) => line.slice(0, 1_000)),
           safeFailure: preview.safeFailure,
+          exaObservedCostUsd: preview.exaObservedCostUsd,
+          exaCostEventCount: preview.exaCostEventCount,
+          exaUnknownCostEventCount: preview.exaUnknownCostEventCount,
         } : null,
         current: latest ? {
           editionId: latest.editionId,
@@ -1206,6 +1209,9 @@ export const getControlStatuses = query({
           sourceCount: latest.sourceCount,
           acceptedSourceCount: latest.acceptedSourceCount,
           exaCostUsd: latest.exaCostUsd,
+          exaObservedCostUsd: latest.exaObservedCostUsd,
+          exaCostEventCount: latest.exaCostEventCount,
+          exaUnknownCostEventCount: latest.exaUnknownCostEventCount,
           forumUrl: latest.threadId ? `https://discord.com/channels/${latest.guildId}/${latest.threadId}` : undefined,
           updatedAt: latest.updatedAt,
         } : null,
@@ -1474,6 +1480,101 @@ export const checkDueEditions = internalMutation({
   },
 });
 
+export const MARKET_RESEARCH_MAX_COST_EVENTS_PER_CLAIM = 1_024;
+
+export const marketResearchCostEventSchema = z.object({
+  eventId: z.string().regex(idPattern),
+  operation: z.enum(["search", "contents", "financial_datasets"]),
+  outcome: z.enum(["settled", "abandoned", "failed"]),
+  costUsd: z.number().finite().min(0).max(1_000).nullable(),
+  late: z.boolean(),
+  observedAt: z.iso.datetime({ offset: true }).max(64),
+  requestId: z.string().regex(idPattern).optional(),
+}).strict().refine((event) => event.outcome !== "abandoned" || event.costUsd === null);
+
+interface ExaCostBindingInput {
+  ownerId: string;
+  targetId: string;
+  targetKind: "edition" | "preview";
+  generation: number;
+  claimToken: string;
+}
+
+// Only claim issuance creates this immutable accounting authorization. Unlike work leases,
+// it survives generation changes so already-paid requests can report their final cost.
+export async function registerExaCostBinding(
+  ctx: Pick<MutationCtx, "db">,
+  input: ExaCostBindingInput,
+  now: number,
+): Promise<void> {
+  const { claimToken, ...binding } = input;
+  await ctx.db.insert("marketResearchCostBindings", {
+    ...binding,
+    claimTokenHash: await sha256Hex(claimToken),
+    eventCount: 0,
+    knownCostUsd: 0,
+    unknownCostEventCount: 0,
+    createdAt: now,
+  });
+}
+
+export async function persistExaCostEvent(
+  ctx: Pick<MutationCtx, "db">,
+  args: { ownerId: string; editionId: string; generation: number; claimToken: string; event: unknown },
+) {
+  const event = marketResearchCostEventSchema.safeParse(args.event);
+  if (
+    !event.success || !isConfiguredMarketResearchOwner(args.ownerId)
+    || !idPattern.test(args.editionId) || !idPattern.test(args.claimToken)
+    || !Number.isSafeInteger(args.generation) || args.generation < 1
+  ) return { accepted: false as const };
+  const binding = await ctx.db.query("marketResearchCostBindings")
+    .withIndex("by_owner_target_generation", (index) => index
+      .eq("ownerId", args.ownerId).eq("targetId", args.editionId).eq("generation", args.generation))
+    .unique();
+  if (!binding || binding.claimTokenHash !== await sha256Hex(args.claimToken)) {
+    return { accepted: false as const };
+  }
+  const fingerprint = await sha256Hex(canonicalJson(event.data));
+  const existing = await ctx.db.query("marketResearchCostEvents")
+    .withIndex("by_binding_event", (index) => index.eq("bindingId", binding._id).eq("eventId", event.data.eventId))
+    .unique();
+  if (existing) return existing.fingerprint === fingerprint
+    ? { accepted: true as const, duplicate: true as const }
+    : { accepted: false as const };
+  if (binding.eventCount >= MARKET_RESEARCH_MAX_COST_EVENTS_PER_CLAIM) return { accepted: false as const };
+  const now = Date.now();
+  const { requestId, ...costEvent } = event.data;
+  await ctx.db.insert("marketResearchCostEvents", {
+    ...costEvent, bindingId: binding._id, fingerprint, createdAt: now,
+    ...(requestId === undefined ? {} : { requestId }),
+  });
+  await ctx.db.patch(binding._id, {
+    eventCount: binding.eventCount + 1,
+    knownCostUsd: binding.knownCostUsd + (event.data.costUsd ?? 0),
+    unknownCostEventCount: binding.unknownCostEventCount + Number(event.data.costUsd === null),
+  });
+  const target = binding.targetKind === "preview"
+    ? await previewByStableId(ctx, binding.targetId)
+    : await editionByStableId(ctx, binding.targetId);
+  // The immutable binding retains the bill even after preview retention removes its target.
+  if (target?.ownerId === binding.ownerId) {
+    await ctx.db.patch(target._id, {
+      exaObservedCostUsd: (target.exaObservedCostUsd ?? 0) + (event.data.costUsd ?? 0),
+      exaCostEventCount: (target.exaCostEventCount ?? 0) + 1,
+      exaUnknownCostEventCount: (target.exaUnknownCostEventCount ?? 0) + Number(event.data.costUsd === null),
+    });
+  }
+  return { accepted: true as const, duplicate: false as const };
+}
+
+export const recordExaCostEvent = internalMutation({
+  args: {
+    ownerId: v.string(), editionId: v.string(), generation: v.number(), claimToken: v.string(), event: v.any(),
+  },
+  handler: persistExaCostEvent,
+});
+
 export const claimResearch = internalMutation({
   args: { editionId: v.string(), workerId: v.string() },
   handler: async (ctx, args) => {
@@ -1500,6 +1601,9 @@ export const claimResearch = internalMutation({
     }
     const generation = edition.generation + 1;
     const claimId = stableMarketResearchToken([edition.editionId, args.workerId, generation, now]);
+    await registerExaCostBinding(ctx, {
+      ownerId: edition.ownerId, targetId: edition.editionId, targetKind: "edition", generation, claimToken: claimId,
+    }, now);
     await ctx.db.patch(edition._id, {
       status: "collecting",
       stage: "collecting",
@@ -1527,6 +1631,9 @@ export const claimPreview = internalMutation({
     const now = Date.now();
     const generation = preview.generation + 1;
     const claimId = stableMarketResearchToken([preview.previewId, args.workerId, generation, now]);
+    await registerExaCostBinding(ctx, {
+      ownerId: preview.ownerId, targetId: preview.previewId, targetKind: "preview", generation, claimToken: claimId,
+    }, now);
     await ctx.db.patch(preview._id, {
       status: "running",
       stage: "collecting",
@@ -2844,6 +2951,9 @@ export const recoverBatch = internalMutation({
         if (!canRecoverResearch(edition, now)) { rejected += 1; continue; }
         const generation = edition.generation + 1;
         const claimId = stableMarketResearchToken([edition.editionId, "recovery", generation, now]);
+        await registerExaCostBinding(ctx, {
+          ownerId: edition.ownerId, targetId: edition.editionId, targetKind: "edition", generation, claimToken: claimId,
+        }, now);
         await ctx.db.patch(edition._id, {
           status: edition.stage === "queued" ? "collecting" : edition.stage,
           workerId: "convex-recovery",
@@ -2889,6 +2999,9 @@ export const recoverBatch = internalMutation({
         if (!canRecoverResearch(edition, now)) { rejected += 1; continue; }
         const generation = edition.generation + 1;
         const claimId = stableMarketResearchToken([edition.editionId, "recovery", generation, now]);
+        await registerExaCostBinding(ctx, {
+          ownerId: edition.ownerId, targetId: edition.editionId, targetKind: "edition", generation, claimToken: claimId,
+        }, now);
         await ctx.db.patch(edition._id, {
           status: edition.resumeFrom === "researching" || edition.resumeFrom === "calculating" || edition.resumeFrom === "composing" ? edition.resumeFrom : "collecting",
           stage: edition.resumeFrom ?? "collecting",
