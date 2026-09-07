@@ -1,7 +1,8 @@
 # Newspaper controls
 
-The revised workflow is implemented locally. It needs a coordinated Convex,
-Pi, and web deployment before the production page can use it.
+The revised workflow is deployed. All four service build inputs match tested
+source `72ec93d1d030c781f768de21e787c70dc4c2ff5c`. Railway reports successful
+deployments, and the signed-in production page shows the new controls.
 
 ## Settings
 
@@ -31,9 +32,12 @@ Pi, and web deployment before the production page can use it.
 `npm run check` passed: 177 Convex, 312 Pi, 101 Discord, and 72 web tests,
 plus formatter, lint, typechecks, builds, browser bundle checks, and four
 deployment-source tests. The built-in browser verified the local demo layout
-and the Scheduled-to-Schedule-now state change.
+and Scheduled-to-Schedule-now state change, then the signed-in production form.
 
-Deploy the matching backend before the web client: the previous Convex version
-does not accept the new manual test request ID or the 10-setup limit. Production
-deployment and live research/publication were not performed in this change.
-The owner still selects the production forum and schedule.
+Convex, Pi, and Discord were deployed before the web client. The approved Convex
+source-analysis/typecheck passed, and its generated API inventory is committed.
+Pi and Discord both returned HTTP 200 from their readiness endpoints.
+
+Live research/publication was not tested. Pi still lacks the Exa credential,
+and both research runtimes remain disabled. Deployment did not change those
+settings or the owner's forum, timezone, time, or inactive schedule.

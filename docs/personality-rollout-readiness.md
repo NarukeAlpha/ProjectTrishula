@@ -2,6 +2,14 @@
 
 Evidence date: 2026-09-07
 
+Deployment checkpoint: the integrated Convex epoch-zero/resume fixes, Pi source,
+and Discord native-v2/recovery/publication telemetry are now deployed. All service
+build inputs match `72ec93d1d030c781f768de21e787c70dc4c2ff5c`; Pi and Discord live
+readiness checks passed. The existing private loop is shown complete, with no
+pending messages. No new mention or reset was sent. This deployment does not
+satisfy the native continuation, storage-protection, or long-context acceptance
+gates below; those switches remain unchanged.
+
 This record separates verified build evidence from live gates. It does not authorize a Discord post, a deployment, or a trading action.
 
 ## Implementation tested; live pilot not ready
@@ -41,7 +49,7 @@ Codex ran these synthetic probes against the deployed Pi service on 2026-09-07 u
 | Sol literal `ultra` | Fail as expected | Provider rejected `ultra`; accepted values ended at `max` |
 | Luna naturalness fixtures | Pass | Nine of nine synthetic simple, informal, and correction runs passed deterministic surface checks |
 | Portable checkpoint schema | Pass | One synthetic checkpoint attempt; 100 estimated input tokens, 263 estimated output tokens, -163 estimated saved tokens, 764 serialized bytes, and one source reference |
-| Native compaction | Failed stream validation | Pi release `5d2ea6403ffc110545c88a1341d13e6b9cf3d483` made one instrumented request and received HTTP 200, followed by `response_invalid`. No opaque artifact or continuation proof was produced. Missing Content-Type is not itself a parser rejection. |
+| Native compaction artifact | Pass; continuation failed | Pi release `3633f794cf4908517a3680b26e84646f956e5f54` returned one streamed compaction item and passed artifact validation. The next same-process continuation failed before its instrumented network request. No continuation, full restart, or attestation is proven. |
 
 The Luna and Sol transport probes used a 512-token output cap and only synthetic `READY` input. They prove OAuth and transport compatibility. The nine naturalness runs prove only deterministic surface checks. The one-event portable probe proves the deployed schema path, but its negative estimated savings do not satisfy the long-context or economics gate. No probe yet proves research quality, blind naturalness, full restart continuity, or production latency.
 
@@ -79,7 +87,7 @@ Keep `TRISHULA_NATIVE_COMPACTION_ENABLED=false` and leave its attestation unset 
 
 | Gate | Status | Required evidence |
 | --- | --- | --- |
-| OAuth remote-compaction route | Attempted; strict validation failed | HTTP 200 is transport evidence only. Capture one valid `remote_compaction_v2` artifact through the service-owned Codex OAuth runtime |
+| OAuth remote-compaction route | Synthetic artifact pass | Pi `3633f79` accepted one opaque streamed item with terminal, usage, and identity validation. This does not prove subsequent recall, long-context quality, or durable restore |
 | Opaque-only recall | Not run | Recall the assistant-only sentinel in both same-process and fresh-runtime continuations |
 | Request storage evidence | Offline pass; live pending | Capture `store=false`, SSE transport, priority tier, Luna xhigh, and no `previous_response_id` on the live request |
 | Provider fallback | Offline pass; live pending | Reject an injected artifact, complete the same visible turn from portable context, and durably clear the opaque artifact with content-free warnings only |
