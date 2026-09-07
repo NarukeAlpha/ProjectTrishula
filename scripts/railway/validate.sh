@@ -170,6 +170,11 @@ grep -Fq 'MARKET_RESEARCH_CHARTS_ENABLED: preserve()' "$iac" || {
   exit 1
 }
 
+grep -Fq 'TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION: preserve()' "$iac" || {
+  printf 'Native compaction must preserve the operator-controlled live-probe attestation.\n' >&2
+  exit 1
+}
+
 grep -Fq 'npm ci --include=dev' "$REPO_ROOT/infra/railway/convex-functions/Dockerfile" || {
   printf 'The Convex function deployer must install TypeScript for deploy-time typechecking.\n' >&2
   exit 1

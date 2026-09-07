@@ -10,7 +10,7 @@ and verify that the owner can test them through the website and Discord.
 - Both feature agents use persistent worktrees and must commit recovery and implementation milestones.
 - The owner will select the newspaper forum. Do not create a forum automatically.
 - Automatic newspaper publishing stays off during initial testing.
-- Runtime feature switches are not the same as the per-server schedule. The owner requested enabled, testable features; do not label a disabled research runtime ready for testing.
+- Runtime feature switches are not the same as the per-server schedule. The owner objected to the extra runtime switches; the exact default change remains pending. Do not label a disabled research runtime ready for testing.
 
 ## Live checks on 2026-09-07
 
@@ -39,11 +39,16 @@ and verify that the owner can test them through the website and Discord.
 - The first live portable-summary probe failed schema validation. The summary prompt omitted the schema for array items. A generated JSON Schema and regression test are implemented; live retry is pending deployment. Portable summaries have not been enabled in production.
 - The full gate passed at `1ac6215`: 521 app tests and four deployment-source tests. It includes durable Exa cost events and the summary-prompt fix. A subsequent Pi-only spending-cap fix requires the final combined gate.
 - A second owner question asks whether newspaper/chart runtimes should default on while per-server schedules stay off. The approval check rejected changing these defaults without explicit authorization. No such default change was committed or applied.
+- The cost-ledger Convex follow-up deployed successfully at `2c6edd4`. The Pi summary/cost follow-up deployed successfully at `40770cb`.
+- The portable-summary live retry passed at `40770cb`: one synthetic source reference, 764 serialized bytes, 100 estimated input tokens, and 263 estimated summary tokens. The negative savings on this tiny fixture are expected; this proves schema compatibility, not long-history savings or a production checkpoint activation.
+- Native-compaction audit found predecessor identity, source-lineage, terminal-stream, usage-evidence, and portable-fallback defects. Those fixes and Convex native persistence are in progress. No live native attestation has been issued.
+- The owner reported unstyled newspaper controls. The responsive fix passed all 59 web tests and the web format/lint/typecheck/build/bundle gates. Built-in browser checks at 834-pixel desktop and 390-pixel phone widths showed aligned labels, contained controls, and no horizontal overflow. Console warnings/errors were empty. The UI-only fix is pushed at `90f28de`; deployment verification is pending.
+- The Railway plan after adding preservation for the native live-probe attestation reported no drift. No feature switch was enabled.
 
 ## Remaining release work
 
 1. Finish the native compaction adapter, persistence, and synthetic continuation/restart verification.
-2. Deploy and rerun the portable-summary live probe; integrate the durable cost-ledger follow-up.
+2. Verify the newspaper spacing deployment; the portable-summary retry and durable cost-ledger follow-up are complete.
 3. Preserve durable delivery, owner boundaries, and existing control-page actions through the final checkpoints.
 4. Run the root `npm run check` gate and inspect the combined diff.
 5. Review the Railway plan and sync required runtime configuration without exposing secrets.
