@@ -5,6 +5,7 @@ import {
   DISCORD_GATEWAY_PROTOCOL_HEADER,
   discordGatewayRequestSchema,
   projectLegacyClaimLoopResponse,
+  projectLegacyHeartbeatResponse,
   projectLegacyNewestContextResponse,
   projectLegacyRunnableResponse,
   type DiscordGatewayOperation,
@@ -142,7 +143,7 @@ export const discordGateway = httpAction(async (ctx, request) => {
       case "heartbeat": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(internal.discord.heartbeat, withoutUndefined(args));
-        return success(operation, result);
+        return success(operation, durableProtocol ? result : projectLegacyHeartbeatResponse(result));
       }
       case "listRunnable": {
         const { operation, ...args } = body;

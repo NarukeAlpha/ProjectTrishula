@@ -244,6 +244,21 @@ export function projectLegacyClaimLoopResponse<
   return projected;
 }
 
+interface LegacyHeartbeatResult {
+  gatewayAccepted: boolean;
+  loopAccepted?: boolean | undefined;
+  leaseExpiresAt?: number | undefined;
+  reason?: string | undefined;
+}
+
+export function projectLegacyHeartbeatResponse<T extends LegacyHeartbeatResult>(result: T) {
+  const projected: LegacyHeartbeatResult = { gatewayAccepted: result.gatewayAccepted };
+  if (result.loopAccepted !== undefined) projected.loopAccepted = result.loopAccepted;
+  if (result.leaseExpiresAt !== undefined) projected.leaseExpiresAt = result.leaseExpiresAt;
+  if (result.reason !== undefined) projected.reason = result.reason;
+  return projected;
+}
+
 interface LegacyNewestContextResult {
   guildId: string;
   channelId: string;

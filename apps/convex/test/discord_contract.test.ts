@@ -5,6 +5,7 @@ import {
   discordGatewayRequestSchema,
   normalizeDiscordForumCapabilities,
   projectLegacyClaimLoopResponse,
+  projectLegacyHeartbeatResponse,
   projectLegacyNewestContextResponse,
   projectLegacyRunnableResponse,
 } from "../convex/lib/discord_contract.js";
@@ -58,6 +59,12 @@ describe("Discord gateway HTTP contract", () => {
 });
 
 const legacyMessageSchema = z.object({ messageId: z.string() }).passthrough();
+const legacyHeartbeatResponseSchema = z.object({
+  gatewayAccepted: z.boolean(),
+  loopAccepted: z.boolean().optional(),
+  leaseExpiresAt: z.number().optional(),
+  reason: z.string().optional(),
+}).strict();
 const legacyClaimResponseSchema = z.discriminatedUnion("claimed", [
   z.object({ claimed: z.literal(false), reason: z.string() }).strict(),
   z.object({
@@ -174,6 +181,21 @@ describe("Discord gateway HTTP contract", () => {
         discordMessageId: "message_1",
       },
     ].every((request) => discordGatewayRequestSchema.safeParse(request).success)).toBe(true);
+  });
+
+  it("keeps successful and rejected heartbeats compatible with the old strict schema", () => {
+    const cases = [
+      { gatewayAccepted: true, loopAccepted: undefined },
+      { gatewayAccepted: true, loopAccepted: false, reason: "stale_generation" },
+      { gatewayAccepted: true, loopAccepted: true, leaseExpiresAt: 100, conversationLeaseExpiresAt: 200 },
+    ];
+    for (const result of cases) {
+      const projected = projectLegacyHeartbeatResponse(result);
+      expect(legacyHeartbeatResponseSchema.safeParse(projected).success).toBe(true);
+      expect(projected).not.toHaveProperty("conversationLeaseExpiresAt");
+      expect(projected.gatewayAccepted).toBe(result.gatewayAccepted);
+      expect(projected.loopAccepted).toBe(result.loopAccepted);
+    }
   });
 
   it("projects durable responses into the exact strict legacy gateway shapes", () => {
