@@ -5,8 +5,8 @@ and verify that the owner can test them through the website and Discord.
 
 ## Current checkpoint
 
-- Personality baseline: `9efca49`, committed locally; production still has the older chart release.
-- Market research: recovered in `0ef9711`; 63 changed files restored from successful historical patches.
+- Both feature baselines are integrated. Production still has the older chart release.
+- Market research was recovered in `0ef9711`; 63 changed files were restored from successful historical patches.
 - Both feature agents use persistent worktrees and must commit recovery and implementation milestones.
 - The owner will select the newspaper forum. Do not create a forum automatically.
 - Automatic newspaper publishing stays off during initial testing.
@@ -26,12 +26,16 @@ and verify that the owner can test them through the website and Discord.
 - Applied the owner's approved Railway model, request-limit, and Convex owner/private-host settings. The revised plan excluded all feature on/off switches and preserved current Serverless behavior.
 - The integrated Convex, Pi, and Discord suites passed 106, 236, and 65 tests at the compatibility checkpoint. Final feature commits still require the combined full gate.
 - Updated the MCP SDK to `1.26.0` and the existing transitive `fast-uri` and `qs` dependencies. The Pi package-manager audit reports zero vulnerabilities at this checkpoint.
+- The full integrated `npm run check` passed at `b7621e6`: 479 app tests and four deployment-source tests, plus formatting, lint, typechecks, builds, bundle boundaries, and Railway validation. This is a checkpoint, not final release evidence; the subsequent audit identified replay-count and checkpoint-attribution defects for correction.
+- Built-in browser demo checks passed at desktop and 390-pixel phone width. Content width equals viewport width; reset confirmation opens and cancels; console error/warning list is empty. Live owner settings testing still needs a WorkOS sign-in.
+- The integrated source is backed up on `codex/feature-release-integration`. This branch does not trigger production deployment.
+- A single live CHART-IMG request from the Discord service returned HTTP 200 and a valid 800 by 600 PNG (47,215 bytes). It did not publish to Discord. This proves provider access, not the full newspaper attachment-delivery path.
 
 ## Remaining release work
 
-1. Recover or reconstruct the market-research feature and close the recorded audit defects.
-2. Complete the personality checkpoint and restart test path with honest provider compatibility evidence.
-3. Merge both features without losing durable delivery, owner boundaries, or existing control-page actions.
+1. Finish the real numerical-provider/evaluation path and newspaper chart controls.
+2. Close the concrete personality audit defects and run the live synthetic model probes.
+3. Integrate the final checkpoints without losing durable delivery, owner boundaries, or existing control-page actions.
 4. Run the root `npm run check` gate and inspect the combined diff.
 5. Review the Railway plan and sync required runtime configuration without exposing secrets.
 6. Deploy Convex, Pi, Discord, then web. Verify the deployed commit and internal readiness at each step.
