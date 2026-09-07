@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-conditional-empty-object-spread, anti-slop/no-runtime-typeof -- Express exposes transport values and exact optional response fields at this HTTP boundary. */
 import express, { type ErrorRequestHandler } from "express";
 import type { ExecutionExecutor } from "./execution/executor.js";
 import type { AcceptRunResult, CancelRunResult } from "./execution/run-registry.js";
@@ -15,6 +16,18 @@ import { isBoundActor } from "./identity/actor-binding.js";
 import { discordAgentJobParamsSchema, discordAgentRequestSchema } from "./discord/contracts.js";
 import type { DiscordAgentRunner } from "./discord/runner.js";
 import type { DiscordAgentJobRegistry } from "./discord/jobs.js";
+import {
+  marketResearchJobOwnerQuerySchema,
+  marketResearchJobParamsSchema,
+  marketResearchJobRequestSchema,
+} from "./market-research/contracts.js";
+import type { MarketResearchRunner } from "./market-research/runner.js";
+import type { MarketResearchJobRegistry } from "./market-research/jobs.js";
+
+export type MarketResearchJobRegistryBoundary = Pick<
+  MarketResearchJobRegistry,
+  "submit" | "get" | "cancel"
+>;
 
 export interface AppDependencies {
   sharedSecret: string;
@@ -25,6 +38,10 @@ export interface AppDependencies {
   boundActorId?: string;
   discordAgents?: DiscordAgentRunner;
   discordAgentJobs?: DiscordAgentJobRegistry;
+  marketResearchEnabled?: boolean;
+  exaConfigured?: boolean;
+  marketResearch?: MarketResearchRunner;
+  marketResearchJobs?: MarketResearchJobRegistryBoundary;
 }
 
 export interface AppRunRegistry {
@@ -40,6 +57,11 @@ interface HealthResponse {
   acceptingRuns: boolean;
   executor: ReturnType<ExecutionExecutor["readiness"]>;
   discordAgents?: ReturnType<DiscordAgentRunner["readiness"]>;
+  marketResearch: {
+    enabled: boolean;
+    exaConfigured: boolean;
+    runner?: ReturnType<MarketResearchRunner["readiness"]>;
+  };
 }
 
 export function createApp(dependencies: AppDependencies): express.Express {
@@ -59,9 +81,90 @@ export function createApp(dependencies: AppDependencies): express.Express {
       service: "project-trishula-pi",
       acceptingRuns: dependencies.registry.isAccepting(),
       executor,
+      marketResearch: {
+        enabled: dependencies.marketResearchEnabled ?? false,
+        exaConfigured: dependencies.exaConfigured ?? false,
+        ...(dependencies.marketResearch ? { runner: dependencies.marketResearch.readiness() } : {}),
+      },
     };
     if (discordAgents) health.discordAgents = discordAgents;
     response.status(ready ? 200 : 503).json(health);
+  });
+
+  app.post("/market-research/jobs", authenticate, json, (request, response) => {
+    if (!(dependencies.marketResearchEnabled ?? false)) {
+      response.status(503).json({ error: "market_research_disabled" });
+      return;
+    }
+    if (!dependencies.marketResearch?.readiness().ready || !dependencies.marketResearchJobs) {
+      response.status(503).json({ error: dependencies.marketResearch?.readiness().reason ?? "composition_provider_not_ready" });
+      return;
+    }
+    const parsed = marketResearchJobRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ error: "exa_invalid_request" });
+      return;
+    }
+    if (!isBoundActor(dependencies.boundActorId, parsed.data.ownerId)) {
+      response.status(403).json({ error: "actor_mismatch" });
+      return;
+    }
+    const submission = dependencies.marketResearchJobs.submit(parsed.data);
+    if (submission.type === "conflict") {
+      response.status(409).json({ error: "market_research_job_conflict" });
+      return;
+    }
+    if (submission.type === "capacity") {
+      response.setHeader("Retry-After", "1");
+      response.status(429).json({ error: "market_research_job_capacity" });
+      return;
+    }
+    if (submission.type === "not_accepting") {
+      response.status(503).json({ error: "market_research_disabled" });
+      return;
+    }
+    if (!("job" in submission)) {
+      response.status(500).json({ error: "market_research_job_invalid_state" });
+      return;
+    }
+    response.status(submission.job.status === "running" ? 202 : 200).json(submission.job);
+  });
+
+  app.get("/market-research/jobs/:jobId", authenticate, (request, response) => {
+    const params = marketResearchJobParamsSchema.safeParse(request.params);
+    const query = marketResearchJobOwnerQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      response.status(400).json({ error: "exa_invalid_request" });
+      return;
+    }
+    if (!isBoundActor(dependencies.boundActorId, query.data.ownerId)) {
+      response.status(403).json({ error: "actor_mismatch" });
+      return;
+    }
+    const job = dependencies.marketResearchJobs?.get(params.data.jobId, query.data.ownerId);
+    if (!job) {
+      response.status(404).json({ error: "market_research_job_not_found" });
+      return;
+    }
+    response.json(job);
+  });
+
+  app.delete("/market-research/jobs/:jobId", authenticate, (request, response) => {
+    const params = marketResearchJobParamsSchema.safeParse(request.params);
+    const query = marketResearchJobOwnerQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) {
+      response.status(400).json({ error: "exa_invalid_request" });
+      return;
+    }
+    if (!isBoundActor(dependencies.boundActorId, query.data.ownerId)) {
+      response.status(403).json({ error: "actor_mismatch" });
+      return;
+    }
+    if (dependencies.marketResearchJobs?.cancel(params.data.jobId, query.data.ownerId) !== "cancelled") {
+      response.status(404).json({ error: "market_research_job_not_found" });
+      return;
+    }
+    response.json({ jobId: params.data.jobId, status: "cancelled" });
   });
 
   app.post("/discord/agents/run", authenticateDiscord, json, async (request, response) => {

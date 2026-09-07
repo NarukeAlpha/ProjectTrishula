@@ -199,6 +199,158 @@ export const discordAssistantTurnStageValidator = v.union(
   v.literal("cancelled"),
 );
 
+export const marketResearchSafeErrorValidator = v.union(
+  v.literal("market_research_disabled"),
+  v.literal("forum_not_configured"),
+  v.literal("forum_wrong_channel_type"),
+  v.literal("forum_permissions_incomplete"),
+  v.literal("edition_already_exists"),
+  v.literal("edition_lease_lost"),
+  v.literal("exa_not_configured"),
+  v.literal("exa_auth_failed"),
+  v.literal("exa_budget_exhausted"),
+  v.literal("exa_rate_limited"),
+  v.literal("exa_unavailable"),
+  v.literal("exa_invalid_request"),
+  v.literal("exa_connect_zdr_incompatible"),
+  v.literal("source_rights_blocked"),
+  v.literal("source_unavailable"),
+  v.literal("market_data_not_configured"),
+  v.literal("market_data_stale"),
+  v.literal("market_data_conflict"),
+  v.literal("market_data_unavailable"),
+  v.literal("market_session_calendar_stale"),
+  v.literal("session_unknown"),
+  v.literal("evidence_below_minimum"),
+  v.literal("composition_auth_required"),
+  v.literal("composition_provider_not_ready"),
+  v.literal("composition_timeout"),
+  v.literal("composition_schema_invalid"),
+  v.literal("composition_citation_invalid"),
+  v.literal("chart_unavailable"),
+  v.literal("chart_artifact_expired"),
+  v.literal("discord_thread_create_failed"),
+  v.literal("discord_thread_reconcile_failed"),
+  v.literal("discord_thread_reconcile_ambiguous"),
+  v.literal("discord_reply_failed"),
+  v.literal("discord_permission_failed"),
+  v.literal("discord_rate_limited"),
+  v.literal("late_cutoff_exceeded"),
+);
+
+export const marketResearchSourcePolicyValidator = v.union(
+  v.literal("approved"),
+  v.literal("evaluation_only"),
+  v.literal("permission_required"),
+  v.literal("blocked"),
+  v.literal("unavailable"),
+);
+
+export const marketResearchRequestedSourceValidator = v.union(
+  v.literal("FinancialJuice"),
+  v.literal("Barchart"),
+  v.literal("ForexFactory"),
+  v.literal("Yahoo"),
+  v.literal("TradingView"),
+);
+
+export const marketResearchPreferencesValidator = v.object({
+  schemaVersion: v.literal(1),
+  preferenceId: v.string(),
+  scheduleId: v.string(),
+  ownerId: v.string(),
+  guildId: v.string(),
+  enabled: v.boolean(),
+  forumChannelId: v.union(v.string(), v.null()),
+  forumTagIds: v.array(v.string()),
+  timezone: v.string(),
+  timezoneConfirmed: v.boolean(),
+  displayTimezones: v.array(v.string()),
+  localHour: v.number(),
+  localMinute: v.number(),
+  primarySymbols: v.array(v.string()),
+  symbolPriorities: v.array(v.object({ symbol: v.string(), priority: v.number() })),
+  sectorSymbols: v.array(v.string()),
+  discoverySymbols: v.array(v.string()),
+  followedSectors: v.array(v.string()),
+  trackedThemes: v.array(v.string()),
+  macroTopics: v.array(v.string()),
+  eventCategories: v.array(v.string()),
+  preferredDomains: v.array(v.string()),
+  excludedDomains: v.array(v.string()),
+  requestedSources: v.array(marketResearchRequestedSourceValidator),
+  reportSections: v.object({
+    overnightMacro: v.boolean(),
+    crossAsset: v.boolean(),
+    indexSector: v.boolean(),
+    calendar: v.boolean(),
+    primaryBoard: v.literal(true),
+    challengers: v.boolean(),
+    tickerDossiers: v.boolean(),
+    validation: v.boolean(),
+    afterOpen: v.boolean(),
+    requestedSources: v.boolean(),
+    dataQuality: v.literal(true),
+    sources: v.literal(true),
+  }),
+  maximumRankedSetups: v.number(),
+  editionDepth: v.union(v.literal("full"), v.literal("concise")),
+  includeWeekends: v.boolean(),
+  includeCharts: v.boolean(),
+  chartsAcceptancePassed: v.boolean(),
+  maximumCharts: v.number(),
+  lateEditionCutoffLocalTime: v.string(),
+  searchRequestBudget: v.number(),
+  contentsPageBudget: v.number(),
+  exaMaxCostUsd: v.optional(v.number()),
+  marketDataProviderId: v.union(v.string(), v.null()),
+  marketSessionCalendarId: v.string(),
+  durableTheses: v.array(v.object({
+    thesisId: v.string(),
+    symbol: v.string(),
+    text: v.string(),
+    priority: v.number(),
+    keyLevels: v.array(v.number()),
+    invalidation: v.string(),
+    expiresAt: v.union(v.string(), v.null()),
+    status: v.union(v.literal("active"), v.literal("expired"), v.literal("invalidated")),
+  })),
+  sourcePolicyVersion: v.string(),
+  promptVersion: v.string(),
+  revision: v.number(),
+  createdAt: v.string(),
+  updatedAt: v.string(),
+});
+
+export const marketResearchEditionStatusValidator = v.union(
+  v.literal("queued"),
+  v.literal("collecting"),
+  v.literal("researching"),
+  v.literal("calculating"),
+  v.literal("composing"),
+  v.literal("ready_to_publish"),
+  v.literal("creating_thread"),
+  v.literal("publishing_replies"),
+  v.literal("published"),
+  v.literal("retry_wait"),
+  v.literal("partial"),
+  v.literal("failed"),
+  v.literal("cancelled"),
+  v.literal("skipped_late"),
+);
+
+export const marketResearchStageValidator = v.union(
+  v.literal("queued"),
+  v.literal("collecting"),
+  v.literal("researching"),
+  v.literal("calculating"),
+  v.literal("composing"),
+  v.literal("ready_to_publish"),
+  v.literal("creating_thread"),
+  v.literal("publishing_replies"),
+  v.literal("published"),
+);
+
 export const positionValidator = v.object({
   symbol: v.string(),
   quantity: v.number(),
@@ -513,6 +665,17 @@ export default defineSchema({
     canView: v.boolean(),
     canSend: v.boolean(),
     canReadHistory: v.boolean(),
+    canCreateForumPost: v.boolean(),
+    canSendInThreads: v.boolean(),
+    canReadThreadHistory: v.boolean(),
+    canAttachFiles: v.boolean(),
+    requiresTag: v.boolean(),
+    availableTags: v.array(v.object({
+      id: v.string(),
+      name: v.string(),
+      moderated: v.boolean(),
+      emoji: v.optional(v.string()),
+    })),
     roles: v.array(discordChannelRoleValidator),
     available: v.boolean(),
     lastSeenAt: v.number(),
@@ -896,5 +1059,290 @@ export default defineSchema({
     .index("by_owner_event", ["ownerId", "eventId"])
     .index("by_owner_createdAt", ["ownerId", "createdAt"])
     .index("by_owner_guild_createdAt", ["ownerId", "guildId", "createdAt"]),
+
+  marketResearchPreferences: defineTable({
+    ...marketResearchPreferencesValidator.fields,
+    configurationSnapshotHash: v.string(),
+  })
+    .index("by_owner_guild", ["ownerId", "guildId"])
+    .index("by_enabled_updatedAt", ["enabled", "updatedAt"]),
+
+  marketResearchEditions: defineTable({
+    ownerId: v.string(),
+    guildId: v.string(),
+    scheduleId: v.string(),
+    forumChannelId: v.string(),
+    editionId: v.string(),
+    scheduledKey: v.string(),
+    editionRevision: v.number(),
+    baseEditionId: v.optional(v.string()),
+    editionDate: v.string(),
+    timezone: v.string(),
+    sessionType: v.union(
+      v.literal("OPEN"),
+      v.literal("EARLY_CLOSE"),
+      v.literal("CLOSED"),
+      v.literal("UNKNOWN"),
+    ),
+    editionLabel: v.union(
+      v.literal("Morning Market Newspaper"),
+      v.literal("Weekend Outlook"),
+      v.literal("Market Holiday Outlook"),
+      v.literal("Late Edition"),
+      v.literal("Data unavailable"),
+    ),
+    calendarVersion: v.string(),
+    sessionSourceIds: v.array(v.string()),
+    previousSessionDate: v.union(v.string(), v.null()),
+    previousSessionClose: v.union(v.string(), v.null()),
+    nextSessionDate: v.union(v.string(), v.null()),
+    trigger: v.union(
+      v.literal("scheduled"),
+      v.literal("manual_publish"),
+      v.literal("retry"),
+      v.literal("regeneration"),
+    ),
+    status: marketResearchEditionStatusValidator,
+    stage: marketResearchStageValidator,
+    configurationRevision: v.number(),
+    configurationSnapshotHash: v.string(),
+    resultFingerprint: v.optional(v.string()),
+    configurationSnapshot: marketResearchPreferencesValidator,
+    promptVersion: v.string(),
+    sourcePolicyVersion: v.string(),
+    workerId: v.optional(v.string()),
+    claimId: v.optional(v.string()),
+    generation: v.number(),
+    leaseExpiresAt: v.optional(v.number()),
+    publicationGeneration: v.number(),
+    publicationWorkerId: v.optional(v.string()),
+    publicationToken: v.optional(v.string()),
+    publicationLeaseExpiresAt: v.optional(v.number()),
+    attempts: v.number(),
+    nextAttemptAt: v.optional(v.number()),
+    resumeFrom: v.optional(marketResearchStageValidator),
+    exaRequestCount: v.number(),
+    exaCostUsd: v.number(),
+    sourceCount: v.number(),
+    acceptedSourceCount: v.number(),
+    threadId: v.optional(v.string()),
+    starterMessageId: v.optional(v.string()),
+    forumTitle: v.optional(v.string()),
+    expectedPartCount: v.optional(v.number()),
+    sentPartCount: v.optional(v.number()),
+    lastErrorCode: v.optional(marketResearchSafeErrorValidator),
+    lastErrorMessage: v.optional(v.string()),
+    scheduledFor: v.number(),
+    cutoffAt: v.number(),
+    startedAt: v.optional(v.number()),
+    composedAt: v.optional(v.number()),
+    publishedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_scheduledKey_revision", ["ownerId", "scheduledKey", "editionRevision"])
+    .index("by_status_nextAttemptAt", ["status", "nextAttemptAt"])
+    .index("by_owner_guild_editionDate", ["ownerId", "guildId", "editionDate"])
+    .index("by_status_leaseExpiresAt", ["status", "leaseExpiresAt"])
+    .index("by_status_publicationLeaseExpiresAt", ["status", "publicationLeaseExpiresAt"])
+    .index("by_leaseExpiresAt", ["leaseExpiresAt"])
+    .index("by_editionId", ["editionId"]),
+
+  marketResearchEvidence: defineTable({
+    editionId: v.string(),
+    evidenceId: v.string(),
+    checkpointSequence: v.number(),
+    kind: v.union(
+      v.literal("news"), v.literal("official"), v.literal("quote"), v.literal("bar"),
+      v.literal("calculation"), v.literal("calendar"), v.literal("corporate_action"),
+      v.literal("source_status"),
+    ),
+    provider: v.string(),
+    sourcePolicy: marketResearchSourcePolicyValidator,
+    title: v.optional(v.string()),
+    url: v.optional(v.string()),
+    canonicalUrlHash: v.optional(v.string()),
+    author: v.optional(v.string()),
+    publishedAt: v.optional(v.string()),
+    providerTimestamp: v.optional(v.string()),
+    retrievedAt: v.string(),
+    sessionLabel: v.optional(v.union(
+      v.literal("premarket"), v.literal("regular"), v.literal("after_hours"),
+      v.literal("closed"), v.literal("unknown"),
+    )),
+    freshness: v.union(v.literal("fresh"), v.literal("cached"), v.literal("delayed"), v.literal("stale"), v.literal("unknown")),
+    contentStatus: v.union(
+      v.literal("available"), v.literal("cached"), v.literal("delayed"), v.literal("stale"),
+      v.literal("unknown"), v.literal("blocked"), v.literal("failed"),
+    ),
+    highlights: v.array(v.string()),
+    normalizedClaims: v.array(v.string()),
+    requestId: v.optional(v.string()),
+    costUsd: v.optional(v.number()),
+    contentHash: v.string(),
+    retentionExpiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_edition_evidenceId", ["editionId", "evidenceId"])
+    .index("by_edition_kind", ["editionId", "kind"])
+    .index("by_edition_canonicalUrlHash", ["editionId", "canonicalUrlHash"])
+    .index("by_edition_checkpointSequence", ["editionId", "checkpointSequence"])
+    .index("by_retentionExpiresAt", ["retentionExpiresAt"]),
+
+  marketResearchSections: defineTable({
+    editionId: v.string(),
+    sectionId: v.string(),
+    sequence: v.number(),
+    kind: v.string(),
+    heading: v.string(),
+    markdown: v.string(),
+    sourceIds: v.array(v.string()),
+    chartRequestsJson: v.string(),
+    createdAt: v.number(),
+  }).index("by_edition_sequence", ["editionId", "sequence"]),
+
+  marketResearchDeliveries: defineTable({
+    editionId: v.string(),
+    ownerId: v.string(),
+    deliveryId: v.string(),
+    idempotencyKey: v.string(),
+    sequence: v.number(),
+    kind: v.union(v.literal("starter"), v.literal("reply")),
+    content: v.string(),
+    contentHash: v.string(),
+    sourceSectionIds: v.array(v.string()),
+    chartAttachmentIds: v.array(v.string()),
+    status: v.union(v.literal("pending"), v.literal("sending"), v.literal("sent"), v.literal("failed")),
+    attempts: v.number(),
+    deliveryWorkerId: v.optional(v.string()),
+    deliveryToken: v.optional(v.string()),
+    deliveryLeaseExpiresAt: v.optional(v.number()),
+    discordThreadId: v.optional(v.string()),
+    discordMessageId: v.optional(v.string()),
+    nonce: v.string(),
+    lastErrorCode: v.optional(marketResearchSafeErrorValidator),
+    lastErrorMessage: v.optional(v.string()),
+    nextAttemptAt: v.optional(v.number()),
+    sentAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_edition_sequence", ["editionId", "sequence"])
+    .index("by_deliveryId", ["deliveryId"])
+    .index("by_idempotencyKey", ["idempotencyKey"])
+    .index("by_status_createdAt", ["status", "createdAt"])
+    .index("by_owner_status_createdAt", ["ownerId", "status", "createdAt"])
+    .index("by_owner_status_nextAttemptAt", ["ownerId", "status", "nextAttemptAt"])
+    .index("by_status_nextAttemptAt", ["status", "nextAttemptAt"])
+    .index("by_status_deliveryLeaseExpiresAt", ["status", "deliveryLeaseExpiresAt"])
+    .index("by_deliveryLeaseExpiresAt", ["deliveryLeaseExpiresAt"]),
+
+  marketResearchEvents: defineTable({
+    eventId: v.string(),
+    editionId: v.string(),
+    ownerId: v.string(),
+    guildId: v.string(),
+    eventType: v.string(),
+    stage: v.optional(marketResearchStageValidator),
+    safeCode: v.optional(marketResearchSafeErrorValidator),
+    details: v.array(v.object({ key: v.string(), value: v.string() })),
+    createdAt: v.number(),
+  })
+    .index("by_edition_createdAt", ["editionId", "createdAt"])
+    .index("by_owner_createdAt", ["ownerId", "createdAt"]),
+
+  marketResearchPreviews: defineTable({
+    previewId: v.string(),
+    ownerId: v.string(),
+    guildId: v.string(),
+    configurationSnapshotHash: v.string(),
+    configurationSnapshot: marketResearchPreferencesValidator,
+    requestedAt: v.number(),
+    scheduledFor: v.number(),
+    sessionType: v.union(
+      v.literal("OPEN"),
+      v.literal("EARLY_CLOSE"),
+      v.literal("CLOSED"),
+      v.literal("UNKNOWN"),
+    ),
+    editionLabel: v.union(
+      v.literal("Morning Market Newspaper"),
+      v.literal("Weekend Outlook"),
+      v.literal("Market Holiday Outlook"),
+      v.literal("Late Edition"),
+      v.literal("Data unavailable"),
+    ),
+    editionDate: v.string(),
+    timezone: v.string(),
+    calendarVersion: v.string(),
+    sessionSourceIds: v.array(v.string()),
+    previousSessionDate: v.union(v.string(), v.null()),
+    previousSessionClose: v.union(v.string(), v.null()),
+    nextSessionDate: v.union(v.string(), v.null()),
+    status: v.union(v.literal("queued"), v.literal("running"), v.literal("completed"), v.literal("failed")),
+    stage: marketResearchStageValidator,
+    generation: v.number(),
+    attempts: v.number(),
+    workerId: v.optional(v.string()),
+    claimId: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    evidenceJson: v.string(),
+    editionJson: v.optional(v.string()),
+    resultFingerprint: v.optional(v.string()),
+    safeFailure: v.optional(marketResearchSafeErrorValidator),
+    qualitySummary: v.array(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_previewId", ["previewId"])
+    .index("by_owner_previewId", ["ownerId", "previewId"])
+    .index("by_expiresAt", ["expiresAt"])
+    .index("by_status_expiresAt", ["status", "expiresAt"])
+    .index("by_status_leaseExpiresAt", ["status", "leaseExpiresAt"]),
+
+  marketSessionCalendars: defineTable({
+    ownerId: v.string(),
+    calendarId: v.string(),
+    version: v.string(),
+    sourceUrl: v.string(),
+    retrievedAt: v.number(),
+    effectiveStart: v.string(),
+    effectiveEnd: v.string(),
+    contentHash: v.string(),
+    sessions: v.array(v.object({
+      date: v.string(),
+      status: v.union(v.literal("OPEN"), v.literal("EARLY_CLOSE"), v.literal("CLOSED")),
+      regularOpen: v.optional(v.string()),
+      regularClose: v.optional(v.string()),
+      earlyClose: v.optional(v.string()),
+    })),
+    reviewed: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_calendar_version", ["ownerId", "calendarId", "version"])
+    .index("by_owner_calendar_updatedAt", ["ownerId", "calendarId", "updatedAt"])
+    .index("by_effectiveEnd", ["effectiveEnd"]),
+
+  marketSessionOverrides: defineTable({
+    overrideId: v.string(),
+    calendarId: v.string(),
+    ownerId: v.string(),
+    date: v.string(),
+    status: v.union(v.literal("OPEN"), v.literal("EARLY_CLOSE"), v.literal("CLOSED")),
+    regularOpen: v.optional(v.string()),
+    regularClose: v.optional(v.string()),
+    earlyClose: v.optional(v.string()),
+    reason: v.string(),
+    sourceUrl: v.string(),
+    effectiveStart: v.number(),
+    effectiveEnd: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_owner_overrideId", ["ownerId", "overrideId"])
+    .index("by_owner_calendar_date", ["ownerId", "calendarId", "date"])
+    .index("by_owner_createdAt", ["ownerId", "createdAt"]),
 
 });

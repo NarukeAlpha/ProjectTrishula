@@ -10,6 +10,7 @@ import {
 } from "./_generated/server.js";
 import { actorFromIdentity, requireAllowedWorkosUserId } from "./lib/auth.js";
 import { canonicalJson, sha256Hex } from "./lib/canonical_json.js";
+import { isMarketResearchForumIngress } from "./lib/market_research.js";
 import {
   DISCORD_AMBIENT_COOLDOWN_MS,
   DISCORD_AMBIENT_DEBOUNCE_MS,
@@ -84,6 +85,17 @@ const discordChannelSnapshotValidator = v.object({
   canView: v.boolean(),
   canSend: v.boolean(),
   canReadHistory: v.boolean(),
+  canCreateForumPost: v.boolean(),
+  canSendInThreads: v.boolean(),
+  canReadThreadHistory: v.boolean(),
+  canAttachFiles: v.boolean(),
+  requiresTag: v.boolean(),
+  availableTags: v.array(v.object({
+    id: v.string(),
+    name: v.string(),
+    moderated: v.boolean(),
+    emoji: v.optional(v.string()),
+  })),
 });
 const discordGuildSnapshotValidator = v.object({
   guildId: v.string(),
@@ -96,6 +108,7 @@ const discordMessageValidator = v.object({
   actorId: serviceId,
   guildId: serviceId,
   channelId: serviceId,
+  parentChannelId: v.optional(serviceId),
   messageId: serviceId,
   authorId: serviceId,
   authorName: v.string(),
@@ -1528,6 +1541,12 @@ export const getControlPlane = query({
               canView: channel.canView,
               canSend: channel.canSend,
               canReadHistory: channel.canReadHistory,
+              canCreateForumPost: channel.canCreateForumPost,
+              canSendInThreads: channel.canSendInThreads,
+              canReadThreadHistory: channel.canReadThreadHistory,
+              canAttachFiles: channel.canAttachFiles,
+              requiresTag: channel.requiresTag,
+              availableTags: channel.availableTags,
               roles: channel.roles,
               loop,
             };
@@ -2173,6 +2192,12 @@ export const syncGuilds = internalMutation({
           canView: channelSnapshot.canView,
           canSend: channelSnapshot.canSend,
           canReadHistory: channelSnapshot.canReadHistory,
+          canCreateForumPost: channelSnapshot.canCreateForumPost,
+          canSendInThreads: channelSnapshot.canSendInThreads,
+          canReadThreadHistory: channelSnapshot.canReadThreadHistory,
+          canAttachFiles: channelSnapshot.canAttachFiles,
+          requiresTag: channelSnapshot.requiresTag,
+          availableTags: channelSnapshot.availableTags,
           available: true,
           lastSeenAt: now,
           updatedAt: now,
@@ -2254,6 +2279,17 @@ export const ingestMessage = internalMutation({
     const guildId = requireDiscordId(args.guildId, "guildId");
     const channelId = requireDiscordId(args.channelId, "channelId");
     const messageId = requireDiscordId(args.messageId, "messageId");
+    const newspaperPreferences = await ctx.db
+      .query("marketResearchPreferences")
+      .withIndex("by_owner_guild", (index) => index.eq("ownerId", ownerId).eq("guildId", guildId))
+      .unique();
+    if (isMarketResearchForumIngress(
+      newspaperPreferences?.forumChannelId,
+      channelId,
+      args.parentChannelId,
+    )) {
+      return { accepted: false as const, reason: "market_research_forum" as const };
+    }
     const channel = await discordChannel(ctx, ownerId, guildId, channelId);
     if (!channel?.available) {
       return { accepted: false as const, reason: "not_monitored" as const };

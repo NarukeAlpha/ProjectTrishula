@@ -19,6 +19,8 @@ describe("loadConfig", () => {
     expect(config.piServiceUrl).toBe("http://pi.railway.internal:8080");
     expect(config.discordBotToken).toBeUndefined();
     expect(config.chartImgApiKey).toBeUndefined();
+    expect(config.marketResearchEnabled).toBe(false);
+    expect(config.marketResearchChartsEnabled).toBe(false);
     expect(config.convexSharedSecret).toBe(
       baseEnvironment.CONVEX_DISCORD_SHARED_SECRET,
     );

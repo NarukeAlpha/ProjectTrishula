@@ -10,6 +10,9 @@ This private service runs Project Trishula's web-chat and Discord agents. Convex
 - `GET /discord/agents/jobs/:jobId` returns the strict terminal result.
 - `DELETE /discord/agents/jobs/:jobId` cancels a running job.
 - `POST /discord/agents/run` keeps the synchronous contract for rolling deployment compatibility.
+- `POST /market-research/jobs` accepts one actor-bound, fenced newspaper job and starts it asynchronously.
+- `GET /market-research/jobs/:jobId` returns only the bounded newspaper job status.
+- `DELETE /market-research/jobs/:jobId` cancels a running newspaper job in this Pi process.
 - `POST /runs/:runId/cancel` accepts `{ "commandId": "...", "runId": "...", "actorId": "..." }`. The body `runId` must match the path.
 - `POST /connections/robinhood/start` accepts `{ "actorId": "..." }`.
 - `POST /connections/robinhood/complete` accepts `{ "actorId": "...", "code": "...", "state": "..." }`.
@@ -20,6 +23,10 @@ This private service runs Project Trishula's web-chat and Discord agents. Convex
 All `/discord/agents/*` routes require `Authorization: Bearer <PI_DISCORD_SHARED_SECRET>`. Other POST routes require `Authorization: Bearer <SERVICE_SHARED_SECRET>`. The two secrets must differ. In production, every actor-bearing request must match `BOUND_ACTOR_ID`.
 
 Discord exposes public-research tools only. It cannot use the brokerage, credential-vault, order, shell, process, code-execution, filesystem, or private-network tools. Web chat keeps a separate capability profile and separate conversation history.
+
+The `/market-research/jobs` routes use `SERVICE_SHARED_SECRET`, not the Discord agent secret. They have a dedicated registry and do not call a Discord conversation profile. The runner creates one isolated tool-free composer session and does not import, construct, or receive a trading broker.
+
+The feature is disabled by default. Pi requires `EXA_API_KEY` only when `MARKET_RESEARCH_ENABLED=true`. Health reports only the feature flag, `exaConfigured` boolean, and runner readiness. It never returns the key, provider authorization, prompts, evidence bodies, or edition text.
 
 ## Durable Discord profiles
 
@@ -92,6 +99,7 @@ The container starts through `dist/start.js`. When the auth file is absent, it r
 | `PI_DISCORD_SHARED_SECRET` | Discord-only credential. It must differ from the service secret. |
 | `CONVEX_SITE_URL` | Exact Convex HTTP Actions prefix ending in `/http`. |
 | `BOUND_ACTOR_ID` | Exact WorkOS subject served by this runtime. Required in production. |
+| `EXA_API_KEY` | Pi-only Exa credential. Required only when morning research is enabled. |
 
 ## Trishula profile variables
 
@@ -138,6 +146,14 @@ These keys are parsed and tested. Literal profile values provide deployment visi
 | `ROBINHOOD_OAUTH_REDIRECT_URI` | `${CONVEX_SITE_URL}/broker/robinhood/callback` |
 | `ROBINHOOD_OAUTH_CLIENT_ID` | unset; MCP dynamic registration is used when supported |
 | `LIVE_TRADING_ENABLED` | `false` |
+| `MARKET_RESEARCH_ENABLED` | `false` |
+| `PI_MARKET_RESEARCH_MODEL` | `gpt-5.6-sol` |
+| `EXA_SEARCH_CONCURRENCY` | `2` |
+| `EXA_CONTENTS_CONCURRENCY` | `5` |
+| `EXA_REQUEST_TIMEOUT_MS` | `20000` |
+| `EXA_MAX_SEARCH_REQUESTS_PER_EDITION` | `12` |
+| `EXA_MAX_CONTENT_PAGES_PER_EDITION` | `24` |
+| `EXA_MAX_COST_USD_PER_EDITION` | unset; set a reviewed cost ceiling before enablement |
 
 `PI_CREDENTIAL_ENCRYPTION_KEY` is required when `BROKER_MODE=robinhood`. Use an independent secret with at least 32 characters. The service never falls back to `SERVICE_SHARED_SECRET` for credential encryption.
 

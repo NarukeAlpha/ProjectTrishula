@@ -2,6 +2,7 @@ import { z } from "zod";
 import { discordCompactionThreshold } from "./discord/compaction.js";
 
 const positiveInteger = z.coerce.number().int().positive();
+const nonnegativeMoney = z.coerce.number().finite().nonnegative();
 const stableActorId = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
 
 const environmentSchema = z.object({
@@ -58,6 +59,15 @@ const environmentSchema = z.object({
   ROBINHOOD_OAUTH_REDIRECT_URI: z.string().url().optional(),
   ROBINHOOD_OAUTH_CLIENT_ID: z.string().trim().min(1).optional(),
   LIVE_TRADING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  MARKET_RESEARCH_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  EXA_API_KEY: z.string().trim().min(1).optional(),
+  EXA_SEARCH_CONCURRENCY: positiveInteger.max(10).default(2),
+  EXA_CONTENTS_CONCURRENCY: positiveInteger.max(25).default(5),
+  EXA_REQUEST_TIMEOUT_MS: positiveInteger.min(1_000).max(120_000).default(20_000),
+  EXA_MAX_SEARCH_REQUESTS_PER_EDITION: positiveInteger.max(100).default(12),
+  EXA_MAX_CONTENT_PAGES_PER_EDITION: positiveInteger.max(100).default(24),
+  EXA_MAX_COST_USD_PER_EDITION: nonnegativeMoney.max(1_000).optional(),
+  PI_MARKET_RESEARCH_MODEL: z.string().trim().min(1).default("gpt-5.6-sol"),
 });
 
 export interface AppConfig {
@@ -107,6 +117,15 @@ export interface AppConfig {
   robinhoodOAuthRedirectUri: string;
   robinhoodOAuthClientId?: string;
   liveTradingEnabled: boolean;
+  marketResearchEnabled: boolean;
+  exaApiKey: string | undefined;
+  exaSearchConcurrency: number;
+  exaContentsConcurrency: number;
+  exaRequestTimeoutMs: number;
+  exaMaxSearchRequestsPerEdition: number;
+  exaMaxContentPagesPerEdition: number;
+  exaMaxCostUsdPerEdition: number | undefined;
+  marketResearchModel: string;
 }
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -132,6 +151,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
   if (value.BROKER_MODE === "robinhood" && value.PI_CREDENTIAL_ENCRYPTION_KEY === undefined) {
     throw new Error("PI_CREDENTIAL_ENCRYPTION_KEY is required in Robinhood mode.");
+  }
+  if (value.MARKET_RESEARCH_ENABLED && value.EXA_API_KEY === undefined) {
+    throw new Error("EXA_API_KEY is required when MARKET_RESEARCH_ENABLED is true.");
   }
 
   const robinhoodOAuthRedirectUri = value.ROBINHOOD_OAUTH_REDIRECT_URI
@@ -202,6 +224,15 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     brokerMode: value.BROKER_MODE,
     robinhoodOAuthRedirectUri,
     liveTradingEnabled: value.LIVE_TRADING_ENABLED,
+    marketResearchEnabled: value.MARKET_RESEARCH_ENABLED,
+    exaApiKey: value.EXA_API_KEY,
+    exaSearchConcurrency: value.EXA_SEARCH_CONCURRENCY,
+    exaContentsConcurrency: value.EXA_CONTENTS_CONCURRENCY,
+    exaRequestTimeoutMs: value.EXA_REQUEST_TIMEOUT_MS,
+    exaMaxSearchRequestsPerEdition: value.EXA_MAX_SEARCH_REQUESTS_PER_EDITION,
+    exaMaxContentPagesPerEdition: value.EXA_MAX_CONTENT_PAGES_PER_EDITION,
+    exaMaxCostUsdPerEdition: value.EXA_MAX_COST_USD_PER_EDITION,
+    marketResearchModel: value.PI_MARKET_RESEARCH_MODEL,
   };
   if (value.ROBINHOOD_OAUTH_CLIENT_ID !== undefined) config.robinhoodOAuthClientId = value.ROBINHOOD_OAUTH_CLIENT_ID;
   return config;

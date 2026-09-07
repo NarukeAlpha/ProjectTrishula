@@ -55,6 +55,12 @@ const environmentSchema = z
       .max(1_000)
       .default(500),
     TRISHULA_DURABLE_CONVERSATIONS_ENABLED: booleanFlag.default(true),
+    MARKET_RESEARCH_ENABLED: booleanFlag.default(false),
+    MARKET_RESEARCH_CHARTS_ENABLED: booleanFlag.default(false),
+    MARKET_RESEARCH_POLL_INTERVAL_MS: positiveInteger
+      .min(1_000)
+      .max(60_000)
+      .default(5_000),
   })
   .superRefine((value, context) => {
     if (value.CONVEX_DISCORD_SHARED_SECRET === value.PI_DISCORD_SHARED_SECRET) {
@@ -85,6 +91,9 @@ export interface DiscordGatewayConfig {
   agentTimeoutMs: number;
   maxReconcileMessages: number;
   durableConversationsEnabled: boolean;
+  marketResearchEnabled: boolean;
+  marketResearchChartsEnabled: boolean;
+  marketResearchPollIntervalMs: number;
 }
 
 function normalizeBaseUrl(raw: string, label: string): string {
@@ -149,5 +158,8 @@ export function loadConfig(
     agentTimeoutMs: value.AGENT_TIMEOUT_MS,
     maxReconcileMessages: value.DISCORD_MAX_RECONCILE_MESSAGES,
     durableConversationsEnabled: value.TRISHULA_DURABLE_CONVERSATIONS_ENABLED,
+    marketResearchEnabled: value.MARKET_RESEARCH_ENABLED,
+    marketResearchChartsEnabled: value.MARKET_RESEARCH_CHARTS_ENABLED,
+    marketResearchPollIntervalMs: value.MARKET_RESEARCH_POLL_INTERVAL_MS,
   };
 }

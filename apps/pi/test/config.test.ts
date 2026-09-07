@@ -19,6 +19,12 @@ describe("loadConfig", () => {
     expect(config.robinhoodOAuthRedirectUri).toBe("http://convex.internal/http/broker/robinhood/callback");
     expect(config.piCredentialKeyVersion).toBe(1);
     expect(config.discordSharedSecret).toBe(base.PI_DISCORD_SHARED_SECRET);
+    expect(config.marketResearchEnabled).toBe(false);
+    expect(config.exaApiKey).toBeUndefined();
+    expect(config.exaSearchConcurrency).toBe(2);
+    expect(config.exaContentsConcurrency).toBe(5);
+    expect(config.exaMaxSearchRequestsPerEdition).toBe(12);
+    expect(config.exaMaxContentPagesPerEdition).toBe(24);
     expect(config).toMatchObject({
       trishulaLunaModel: "gpt-5.6-luna",
       trishulaLunaReasoningEffort: "xhigh",
@@ -136,5 +142,20 @@ describe("loadConfig", () => {
 
   it("rejects batching windows above 100 milliseconds", () => {
     expect(() => loadConfig({ ...base, RESULT_BATCH_WINDOW_MS: "101" })).toThrow(/configuration/);
+  });
+
+  it("starts without an Exa key while market research is disabled", () => {
+    expect(loadConfig(base).marketResearchEnabled).toBe(false);
+  });
+
+  it("requires an Exa key only when market research is enabled", () => {
+    expect(() => loadConfig({ ...base, MARKET_RESEARCH_ENABLED: "true" })).toThrow(/EXA_API_KEY/);
+    const config = loadConfig({
+      ...base,
+      MARKET_RESEARCH_ENABLED: "true",
+      EXA_API_KEY: "test-exa-key-not-a-production-secret",
+    });
+    expect(config.marketResearchEnabled).toBe(true);
+    expect(config.exaApiKey).toBe("test-exa-key-not-a-production-secret");
   });
 });
