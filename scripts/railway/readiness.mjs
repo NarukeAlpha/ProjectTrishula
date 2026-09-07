@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
+import { deploymentMatchesSource, fullCommit } from "./deployment-source.mjs";
 
 const { values } = parseArgs({
   options: {
     "expected-commit": { type: "string" },
+    "expected-source": { type: "string" },
     environment: { type: "string", default: "production" },
   },
 });
@@ -42,6 +44,11 @@ function requiredUrl(value, expectedProtocol, expectedPath) {
 }
 
 function main() {
+  for (const option of ["expected-commit", "expected-source"]) {
+    if (values[option] !== undefined && !fullCommit(values[option])) {
+      throw new Error(`--${option} requires a full Git commit ID.`);
+    }
+  }
   const state = railwayJson(["status", "--json"]);
   const environment = state.environments.edges.find(
     ({ node }) => node.name === values.environment,
@@ -54,11 +61,16 @@ function main() {
       ({ node }) => node.serviceId === id,
     )?.node;
     const deployment = instance?.latestDeployment;
+    const sourceMatches = values["expected-source"]
+      ? deploymentMatchesSource(name, deployment?.meta?.commitHash, values["expected-source"])
+      : null;
     return {
       service: name,
       status: deployment?.status ?? "MISSING",
       commit: deployment?.meta?.commitHash ?? null,
+      sourceMatches,
       passed: ["SUCCESS", "SLEEPING"].includes(deployment?.status)
+        && sourceMatches !== false
         && (!values["expected-commit"]
           || deployment?.meta?.commitHash === values["expected-commit"]),
     };

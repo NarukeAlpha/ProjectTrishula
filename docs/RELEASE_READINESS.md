@@ -6,10 +6,22 @@ and verify that the owner can test them through the website and Discord.
 ## Current checkpoint
 
 - Personality baseline: `9efca49`, committed locally; production still has the older chart release.
-- Market research: recovering the missing temporary worktree into a persistent repository worktree.
+- Market research: recovered in `0ef9711`; 63 changed files restored from successful historical patches.
 - Both feature agents use persistent worktrees and must commit recovery and implementation milestones.
 - The owner will select the newspaper forum. Do not create a forum automatically.
 - Automatic newspaper publishing stays off during initial testing.
+
+## Live checks on 2026-09-07
+
+- Existing Railway deployments are healthy. Web is sleeping under Serverless.
+- Pi and Discord owner binding, private routing, and all dedicated service credential pairs match.
+- Pi `/health` returns HTTP 200 with both execution and Discord agents ready.
+- Luna `gpt-5.6-luna` with `xhigh` and requested `priority` completed a synthetic `READY` call in 1,772 ms (29 total tokens).
+- Sol `gpt-5.6-sol` with wire effort `max` and requested `priority` completed the same test in 1,633 ms (25 total tokens).
+- The Codex endpoint rejects wire effort `ultra`; its accepted enum ends at `max`. The personality adapter must map the product's ultra preset to wire `max` before deployment.
+- These checks prove request acceptance, not a separately measured guarantee of priority scheduling.
+- Exa configuration is absent from the running Pi service. The owner was asked to add `EXA_API_KEY` through Railway.
+- Stardust has `testing-bot` but no forum. The owner chose to select the newspaper forum themselves.
 
 ## Remaining release work
 
@@ -27,12 +39,18 @@ and verify that the owner can test them through the website and Discord.
 ```sh
 node scripts/railway/readiness.mjs
 node scripts/railway/readiness.mjs --expected-commit FULL_GIT_COMMIT
+node scripts/railway/readiness.mjs --expected-source FULL_GIT_COMMIT
 ```
 
 The check reads linked Railway deployment and variable state. Its output contains
 service versions, pass/fail results, and feature flags. It never prints credentials,
 credential fingerprints, or owner IDs. A successful result does not replace a live
 model or Discord delivery test.
+
+Use `--expected-source` after a staged release. It verifies that each deployed
+service has the same Docker build inputs as the target commit. GitHub watch paths
+can leave services on different commit IDs even when their code is current. The
+check fails if a required Git object is not available locally.
 
 ## Activation gates
 

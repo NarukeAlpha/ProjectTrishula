@@ -14,6 +14,9 @@ for script in "$SCRIPT_DIR"/*.sh; do
   bash -n "$script"
 done
 
+node --check "$SCRIPT_DIR/readiness.mjs"
+node --test "$SCRIPT_DIR/deployment-source.test.mjs"
+
 for file in \
   .railway/railway.ts \
   apps/web/Dockerfile \

@@ -88,6 +88,8 @@ railway variable set \
   'CONVEX_INSTANCE_SECRET=${{convex-backend.INSTANCE_SECRET}}' \
   'CONVEX_SELF_HOSTED_URL=http://${{convex-backend.RAILWAY_PRIVATE_DOMAIN}}:3210' \
   'DISCORD_GATEWAY_SHARED_SECRET=${{convex-backend.DISCORD_GATEWAY_SHARED_SECRET}}' \
+  'EXECUTION_PRIVATE_DOMAIN_SUFFIX=${{convex-backend.EXECUTION_PRIVATE_DOMAIN_SUFFIX}}' \
+  'MARKET_RESEARCH_OWNER_ID=${{pi.BOUND_ACTOR_ID}}' \
   'SERVICE_SHARED_SECRET=${{convex-backend.SERVICE_SHARED_SECRET}}' \
   'WEB_APP_ORIGIN=https://${{web.RAILWAY_PUBLIC_DOMAIN}}' \
   'WORKOS_ALLOWED_USER_IDS=${{convex-backend.WORKOS_ALLOWED_USER_IDS}}' \
@@ -116,8 +118,12 @@ railway variable set \
   'PI_AUTH_PATH=/data/auth.json' \
   'BROKER_MODE=mock' \
   'LIVE_TRADING_ENABLED=false' \
-  'PI_LUNA_MODEL=gpt-5.6-luna' \
-  'PI_SOL_MODEL=gpt-5.6-sol' >/dev/null
+  'TRISHULA_LUNA_MODEL=gpt-5.6-luna' \
+  'TRISHULA_LUNA_REASONING_EFFORT=xhigh' \
+  'TRISHULA_LUNA_SERVICE_TIER=priority' \
+  'TRISHULA_SOL_MODEL=gpt-5.6-sol' \
+  'TRISHULA_SOL_REASONING_EFFORT=ultra' \
+  'TRISHULA_SOL_SERVICE_TIER=priority' >/dev/null
 
 railway variable set \
   --project "$PROJECT_ID" \
