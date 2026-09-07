@@ -93,6 +93,8 @@ function main() {
     : null;
   const configurationChecks = [
     check("Pi owner matches Discord owner", actor && actor === discord.DISCORD_OWNER_ID),
+    check("Market research deployer owner matches Pi owner", actor && actor === deployer.MARKET_RESEARCH_OWNER_ID),
+    check("Deployer private suffix matches backend", backend.EXECUTION_PRIVATE_DOMAIN_SUFFIX && backend.EXECUTION_PRIVATE_DOMAIN_SUFFIX === deployer.EXECUTION_PRIVATE_DOMAIN_SUFFIX),
     check("Owner is allowed by WorkOS", actor && backend.WORKOS_ALLOWED_USER_IDS?.split(",").map((id) => id.trim()).includes(actor)),
     check("Pi private hostname matches its owner", actorEndpoint && pi.RAILWAY_PRIVATE_DOMAIN?.startsWith(`${actorEndpoint}.`)),
     check("Discord bot credential is configured", credential(discord.DISCORD_BOT_TOKEN)),

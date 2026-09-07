@@ -52,8 +52,8 @@ export default defineRailway(() => {
       DISCORD_BOT_TOKEN: preserve(),
       DISCORD_OWNER_ID: preserve(),
       HOST: preserve(),
-      MARKET_RESEARCH_CHARTS_ENABLED: "false",
-      MARKET_RESEARCH_ENABLED: "false",
+      MARKET_RESEARCH_CHARTS_ENABLED: preserve(),
+      MARKET_RESEARCH_ENABLED: preserve(),
       MARKET_RESEARCH_POLL_INTERVAL_MS: "5000",
       NODE_ENV: preserve(),
       PI_DISCORD_SHARED_SECRET: preserve(),
@@ -101,32 +101,6 @@ export default defineRailway(() => {
       PUBLIC_ENVIRONMENT: preserve(),
       PUBLIC_WORKOS_CLIENT_ID: preserve(),
       PUBLIC_WORKOS_REDIRECT_URI: preserve(),
-    },
-  });
-  const convexFunctions = service("convex-functions", {
-    source: projectTrishula("/"),
-    build: {
-      builder: "DOCKERFILE",
-      dockerfilePath: "infra/railway/convex-functions/Dockerfile",
-      watchPatterns: ["/apps/convex/**", "/infra/railway/convex-functions/**"],
-    },
-    deploy: {
-      healthcheckPath: "/health",
-      healthcheckTimeout: 300,
-      restartPolicyMaxRetries: 3,
-    },
-    replicas: { "us-east4-eqdc4a": 1 },
-    env: {
-      CONVEX_INSTANCE_NAME: preserve(),
-      CONVEX_INSTANCE_SECRET: preserve(),
-      CONVEX_SELF_HOSTED_URL: preserve(),
-      DISCORD_GATEWAY_SHARED_SECRET: preserve(),
-      EXECUTION_PRIVATE_DOMAIN_SUFFIX: preserve(),
-      MARKET_RESEARCH_OWNER_ID: preserve(),
-      SERVICE_SHARED_SECRET: preserve(),
-      WEB_APP_ORIGIN: preserve(),
-      WORKOS_ALLOWED_USER_IDS: preserve(),
-      WORKOS_CLIENT_ID: preserve(),
     },
   });
   const convexBackend = service("convex-backend", {
@@ -203,7 +177,7 @@ export default defineRailway(() => {
       GLOBAL_CONCURRENCY: preserve(),
       HOST: preserve(),
       LIVE_TRADING_ENABLED: preserve(),
-      MARKET_RESEARCH_ENABLED: "false",
+      MARKET_RESEARCH_ENABLED: preserve(),
       NODE_ENV: preserve(),
       PI_AUTH_BOOTSTRAP: preserve(),
       PI_AUTH_PATH: preserve(),
@@ -243,6 +217,33 @@ export default defineRailway(() => {
       TRISHULA_SOL_PROFILE_VERSION: preserve(),
       TRISHULA_SOL_REASONING_EFFORT: preserve(),
       TRISHULA_SOL_SERVICE_TIER: preserve(),
+    },
+  });
+
+  const convexFunctions = service("convex-functions", {
+    source: projectTrishula("/"),
+    build: {
+      builder: "DOCKERFILE",
+      dockerfilePath: "infra/railway/convex-functions/Dockerfile",
+      watchPatterns: ["/apps/convex/**", "/infra/railway/convex-functions/**"],
+    },
+    deploy: {
+      healthcheckPath: "/health",
+      healthcheckTimeout: 300,
+      restartPolicyMaxRetries: 3,
+    },
+    replicas: { "us-east4-eqdc4a": 1 },
+    env: {
+      CONVEX_INSTANCE_NAME: preserve(),
+      CONVEX_INSTANCE_SECRET: preserve(),
+      CONVEX_SELF_HOSTED_URL: preserve(),
+      DISCORD_GATEWAY_SHARED_SECRET: preserve(),
+      EXECUTION_PRIVATE_DOMAIN_SUFFIX: convexBackend.env.EXECUTION_PRIVATE_DOMAIN_SUFFIX,
+      MARKET_RESEARCH_OWNER_ID: pi.env.BOUND_ACTOR_ID,
+      SERVICE_SHARED_SECRET: preserve(),
+      WEB_APP_ORIGIN: preserve(),
+      WORKOS_ALLOWED_USER_IDS: preserve(),
+      WORKOS_CLIENT_ID: preserve(),
     },
   });
 

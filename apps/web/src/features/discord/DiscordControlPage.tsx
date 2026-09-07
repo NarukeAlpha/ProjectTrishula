@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "convex/react";
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { publicApi } from "../../convex/functions";
 import type {
   DiscordActivityReadModel,
@@ -1392,29 +1392,15 @@ export function DiscordControlView({
 }
 
 export function DiscordControlPageContent({
-  applicationId,
   model,
   marketResearch,
-  onSetGuildRouting,
-  onSaveMarketResearch,
-  onMarketResearchAction,
-}: {
-  applicationId?: string;
+  ...viewProps
+}: Omit<
+  ComponentProps<typeof DiscordControlView>,
+  "model" | "marketResearch"
+> & {
   model: DiscordControlPlaneReadModel | undefined;
   marketResearch: MarketResearchControlStatusReadModel[] | undefined;
-  onSetGuildRouting: (
-    guildId: string,
-    conversationChannelId: string | null,
-    researchLogChannelId: string | null,
-  ) => Promise<void>;
-  onSaveMarketResearch: (
-    settings: SaveMarketResearchControlSettings,
-  ) => Promise<void>;
-  onMarketResearchAction: (
-    guildId: string,
-    action: MarketResearchAction,
-    editionId?: string,
-  ) => Promise<void>;
 }) {
   if (model === undefined || marketResearch === undefined) {
     return (
@@ -1429,12 +1415,9 @@ export function DiscordControlPageContent({
 
   return (
     <DiscordControlView
-      applicationId={applicationId}
+      {...viewProps}
       model={model}
       marketResearch={marketResearch}
-      onSetGuildRouting={onSetGuildRouting}
-      onSaveMarketResearch={onSaveMarketResearch}
-      onMarketResearchAction={onMarketResearchAction}
     />
   );
 }

@@ -10,6 +10,7 @@ and verify that the owner can test them through the website and Discord.
 - Both feature agents use persistent worktrees and must commit recovery and implementation milestones.
 - The owner will select the newspaper forum. Do not create a forum automatically.
 - Automatic newspaper publishing stays off during initial testing.
+- Runtime feature switches are not the same as the per-server schedule. The owner requested enabled, testable features; do not label a disabled research runtime ready for testing.
 
 ## Live checks on 2026-09-07
 
@@ -22,6 +23,9 @@ and verify that the owner can test them through the website and Discord.
 - These checks prove request acceptance, not a separately measured guarantee of priority scheduling.
 - Exa configuration is absent from the running Pi service. The owner was asked to add `EXA_API_KEY` through Railway.
 - Stardust has `testing-bot` but no forum. The owner chose to select the newspaper forum themselves.
+- Applied the owner's approved Railway model, request-limit, and Convex owner/private-host settings. The revised plan excluded all feature on/off switches and preserved current Serverless behavior.
+- The integrated Convex, Pi, and Discord suites passed 106, 236, and 65 tests at the compatibility checkpoint. Final feature commits still require the combined full gate.
+- Updated the MCP SDK to `1.26.0` and the existing transitive `fast-uri` and `qs` dependencies. The Pi package-manager audit reports zero vulnerabilities at this checkpoint.
 
 ## Remaining release work
 

@@ -154,6 +154,7 @@ describe("Discord control surface", () => {
       <DiscordControlPageContent
         model={controlPlane()}
         marketResearch={undefined}
+        onResetGuildConversation={vi.fn()}
         onSetGuildRouting={vi.fn()}
         onSaveMarketResearch={vi.fn()}
         onMarketResearchAction={vi.fn()}
@@ -170,6 +171,7 @@ describe("Discord control surface", () => {
 
   it("preserves a dirty setting when a hydrated query refreshes", () => {
     const callbacks = {
+      onResetGuildConversation: vi.fn(),
       onSetGuildRouting: vi.fn(),
       onSaveMarketResearch: vi.fn(),
       onMarketResearchAction: vi.fn(),
