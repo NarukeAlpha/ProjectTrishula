@@ -5,6 +5,7 @@ import type { Doc, Id } from "../convex/_generated/dataModel.js";
 import type { MutationCtx } from "../convex/_generated/server.js";
 import {
   canonicalCheckpointSlice, deleteGuildConversationPrivacyData, durableConversationContext,
+  claimLoop, heartbeat,
   expirePortableCheckpoints, invalidateNativeCheckpoint, nextPortableCheckpoint, resetGuildConversation,
   stagedCheckpointContext, storePortableCheckpoint,
 } from "../convex/discord.js";
@@ -17,6 +18,7 @@ import {
 import {
   projectLegacyClaimLoopResponse, projectLegacyNewestContextResponse,
   projectPreNativeContext, projectPreNativeCheckpointRequest,
+  discordGatewayRequestSchema,
   DISCORD_GATEWAY_PROTOCOL_HEADER,
 } from "../convex/lib/discord_contract.js";
 import {
@@ -58,6 +60,7 @@ function database() {
       let descending = false;
       const index = {
         eq(key: string, value: unknown) { filters.push((row) => row[key] === value); return index; },
+        gte(key: string, value: number) { filters.push((row) => Number(row[key]) >= value); return index; },
         lte(key: string, value: number) { filters.push((row) => Number(row[key]) <= value); return index; },
       };
       const found = () => {
@@ -500,6 +503,46 @@ describe("bounded staged compaction", () => {
     });
     expect(oldRequest.conversation).toEqual({ activeCheckpointId: activeArgs.checkpointId });
     expect(oldRequest).not.toHaveProperty("previousNativeCheckpoint");
+  });
+
+  it("renews the first real claim of a newly created conversation through the HTTP contract", async () => {
+    const db = database();
+    db.rows("discordChannels").push({
+      _id: "channel:456", ownerId, guildId: "123", channelId: "456", name: "testing-bot",
+      available: true, canSend: true, canView: true, canReadHistory: true,
+      roles: ["conversation_monitor", "reply_target"],
+    });
+    db.rows("discordChannelStates").push({
+      _id: "state:456", ownerId, guildId: "123", channelId: "456", generation: 0,
+      latestSequence: 1, triggerThroughSequence: 1, completedThroughSequence: 0,
+      recheckCount: 0, recheckPending: false, status: "idle",
+    });
+    db.rows("discordMessages").push({
+      _id: "message:789", ownerId, guildId: "123", channelId: "456", messageId: "789",
+      sequence: 1, authorId: "111", authorName: "Participant", content: "What is market capitalization?",
+      mentionsBot: true, isBot: false, createdAt: Date.now(),
+    });
+    const claim = z.object({
+      claimed: z.literal(true), runId: z.string(), generation: z.number(),
+      conversation: z.object({ conversationId: z.string(), epoch: z.number(), turnId: z.string() }),
+      conversationGeneration: z.number(), routingGeneration: z.number(), conversationLeaseToken: z.string(),
+    }).parse(await invoke(claimLoop, db.ctx, {
+      actorId: ownerId, guildId: "123", channelId: "456", workerId: "worker_1", claimId: "claim_1",
+    }));
+    expect(claim.conversation.epoch).toBe(0);
+    expect(claim.conversationGeneration).toBe(1);
+    const parsed = discordGatewayRequestSchema.parse({
+      operation: "heartbeat", actorId: ownerId, instanceId: "gateway_1", status: "online",
+      run: {
+        channelId: "456", runId: claim.runId, generation: claim.generation,
+        ...claim.conversation, conversationGeneration: claim.conversationGeneration,
+        routingGeneration: claim.routingGeneration, conversationLeaseToken: claim.conversationLeaseToken,
+        stage: "triaging",
+      },
+    });
+    const { operation, ...args } = parsed;
+    void operation;
+    expect(await invoke(heartbeat, db.ctx, args)).toMatchObject({ gatewayAccepted: true, loopAccepted: true });
   });
 
   it.each(["durable-v1", "native-v2"])("dispatches a fresh conversation heartbeat through %s", async (protocol) => {
