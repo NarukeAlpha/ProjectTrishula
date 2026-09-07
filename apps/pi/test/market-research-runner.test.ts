@@ -389,6 +389,12 @@ describe("full newspaper ranked output", () => {
 });
 
 describe("agent-led newspaper research", () => {
+  it("does not label an unknown-session research report as a data outage", async () => {
+    const { edition } = await rankedEditionFixture();
+    edition.editionLabel = "Data unavailable";
+    expect(materializeDeliveryParts(edition)[0]?.content.startsWith("Market Research - ")).toBe(true);
+  });
+
   it("continues a long summary in replies instead of rejecting a useful report", async () => {
     const { edition } = await rankedEditionFixture();
     edition.regimeLines = [{ text: "Verified context. ".repeat(100), sourceIds: edition.sourceIds }];

@@ -24,7 +24,7 @@ function starterContent(edition: MorningPaperEditionV1): string {
   const setups = edition.primaryBoard.slice(0, MARKET_RESEARCH_MAX_RANKED_SETUPS).map((setup) => `- ${setup.symbol}: ${setup.label} (${setup.score})`).join("\n") || "- No qualified setup";
   const dataWarning = edition.dataQuality[0]?.text;
   return [
-    `${edition.editionLabel} - ${edition.editionDate}`,
+    `${edition.editionLabel === "Data unavailable" ? "Market Research" : edition.editionLabel} - ${edition.editionDate}`,
     `Edition ID: MR-${edition.editionId}`,
     `As of ${edition.asOf} | ${edition.regime}`,
     ...edition.regimeLines.map((line) => line.text),

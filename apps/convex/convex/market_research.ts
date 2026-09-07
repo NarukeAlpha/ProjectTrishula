@@ -2528,7 +2528,8 @@ export const completeComposition = internalMutation({
         updatedAt: now,
       });
     }
-    const forumTitle = `${String(result.edition.editionLabel).slice(0, 48)} - ${String(result.edition.editionDate)} - ${String(result.edition.regime)}`.slice(0, 100);
+    const displayLabel = result.edition.editionLabel === "Data unavailable" ? "Market Research" : result.edition.editionLabel;
+    const forumTitle = `${displayLabel.slice(0, 48)} - ${result.edition.editionDate} - ${result.edition.regime}`.slice(0, 100);
     await ctx.db.patch(edition._id, {
       status: "ready_to_publish",
       stage: "ready_to_publish",
