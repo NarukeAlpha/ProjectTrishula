@@ -17,6 +17,10 @@ import type {
 import { formatAge } from "../../shared/formatting/values";
 import { discordInstallUrl } from "./discordInstall";
 import {
+  newspaperFailureMessage,
+  newspaperPreviewSummary,
+} from "./newspaperStatus";
+import {
   acknowledgeNewspaperTest,
   newspaperSettingsKey,
   newspaperTestRequestId,
@@ -331,23 +335,16 @@ function ChannelRouteField({
   );
 }
 
-type MarketResearchAction = "test" | "retry" | "reconcile" | "cancel";
-
 function MarketResearchSettings({
   guild,
   status,
   onSave,
-  onAction,
+  onTest,
 }: {
   guild: DiscordGuildReadModel;
   status: MarketResearchControlStatusReadModel | undefined;
   onSave: (settings: SaveMarketResearchControlSettings) => Promise<void>;
-  onAction: (
-    guildId: string,
-    action: MarketResearchAction,
-    editionId?: string,
-    requestId?: string,
-  ) => Promise<void>;
+  onTest: (guildId: string, requestId: string) => Promise<void>;
 }) {
   const preferences = status?.preferences;
   const [forumChannelId, setForumChannelId] = useState(
@@ -450,22 +447,16 @@ function MarketResearchSettings({
     }
   }
 
-  async function runAction(action: MarketResearchAction) {
+  async function runTest() {
     setBusy(true);
     setMessage(null);
     try {
-      if (action === "test") {
-        const requestId = newspaperTestRequestId(controlSettings(scheduled));
-        await persist(scheduled);
-        await onAction(guild.guildId, action, undefined, requestId);
-        acknowledgeNewspaperTest(guild.guildId, requestId);
-      } else {
-        await onAction(guild.guildId, action, status?.current?.editionId);
-      }
+      const requestId = newspaperTestRequestId(controlSettings(scheduled));
+      await persist(scheduled);
+      await onTest(guild.guildId, requestId);
+      acknowledgeNewspaperTest(guild.guildId, requestId);
       setMessage(
-        action === "test"
-          ? "Test queued. Research will post in the selected forum. The scheduled edition is separate."
-          : "Edition updated.",
+        "Test queued. Research will post in the selected forum. The scheduled edition is separate.",
       );
     } catch {
       setMessage(
@@ -630,7 +621,7 @@ function MarketResearchSettings({
         <button
           type="button"
           disabled={busy || !scheduleReady}
-          onClick={() => void runAction("test")}
+          onClick={() => void runTest()}
         >
           Test now
         </button>
@@ -641,39 +632,6 @@ function MarketResearchSettings({
         >
           {scheduled ? "Scheduled" : "Schedule now"}
         </button>
-        {status?.current?.status === "queued" && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void runAction("cancel")}
-          >
-            Cancel queued edition
-          </button>
-        )}
-        {status?.current?.lastErrorCode ===
-          "discord_thread_reconcile_ambiguous" && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void runAction("reconcile")}
-          >
-            Reconcile forum thread
-          </button>
-        )}
-        {status?.current &&
-          status.current.lastErrorCode !==
-            "discord_thread_reconcile_ambiguous" &&
-          ["failed", "partial", "retry_wait"].includes(
-            status.current.status,
-          ) && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void runAction("retry")}
-            >
-              Retry edition
-            </button>
-          )}
       </div>
       <p className="discord-fine-print">
         Test now saves these settings and posts a separate edition. Schedule now
@@ -683,8 +641,13 @@ function MarketResearchSettings({
         <details className="discord-fine-print" open>
           <summary>Latest preview: {status.preview.status}</summary>
           <p>{status.preview.previewId}</p>
-          {status.preview.safeFailure && <p>{status.preview.safeFailure}</p>}
-          {status.preview.qualitySummary.map((line, index) => (
+          {status.preview.safeFailure && (
+            <p>{newspaperFailureMessage(status.preview.safeFailure)}</p>
+          )}
+          {newspaperPreviewSummary(
+            status.preview.qualitySummary,
+            status.preview.safeFailure,
+          ).map((line, index) => (
             <p key={index}>{line}</p>
           ))}
         </details>
@@ -708,7 +671,7 @@ function MarketResearchSettings({
             </>
           )}
           {status.current.lastErrorCode && (
-            <> · {status.current.lastErrorCode}</>
+            <> · {newspaperFailureMessage(status.current.lastErrorCode)}</>
           )}
         </p>
       )}
@@ -723,7 +686,7 @@ function GuildCard({
   onSetPurpose,
   marketResearch,
   onSaveMarketResearch,
-  onMarketResearchAction,
+  onTestMarketResearch,
 }: {
   guild: DiscordGuildReadModel;
   busyPurpose: ServerChannelPurpose | null;
@@ -736,12 +699,7 @@ function GuildCard({
   onSaveMarketResearch: (
     settings: SaveMarketResearchControlSettings,
   ) => Promise<void>;
-  onMarketResearchAction: (
-    guildId: string,
-    action: MarketResearchAction,
-    editionId?: string,
-    requestId?: string,
-  ) => Promise<void>;
+  onTestMarketResearch: (guildId: string, requestId: string) => Promise<void>;
 }) {
   const conversationChannel = channelForPurpose("conversation", guild);
   const researchChannel = channelForPurpose("research", guild);
@@ -845,7 +803,7 @@ function GuildCard({
         guild={guild}
         status={marketResearch}
         onSave={onSaveMarketResearch}
-        onAction={onMarketResearchAction}
+        onTest={onTestMarketResearch}
       />
     </article>
   );
@@ -1265,7 +1223,7 @@ export function DiscordControlView({
   onDeleteGuildConversationPrivacyData,
   marketResearch = [],
   onSaveMarketResearch = async () => undefined,
-  onMarketResearchAction = async () => undefined,
+  onTestMarketResearch = async () => undefined,
 }: {
   applicationId?: string;
   model: DiscordControlPlaneReadModel;
@@ -1284,12 +1242,7 @@ export function DiscordControlView({
   onSaveMarketResearch?: (
     settings: SaveMarketResearchControlSettings,
   ) => Promise<void>;
-  onMarketResearchAction?: (
-    guildId: string,
-    action: MarketResearchAction,
-    editionId?: string,
-    requestId?: string,
-  ) => Promise<void>;
+  onTestMarketResearch?: (guildId: string, requestId: string) => Promise<void>;
 }) {
   const [busyPurpose, setBusyPurpose] = useState<ServerChannelPurpose | null>(
     null,
@@ -1408,7 +1361,7 @@ export function DiscordControlView({
                   (status) => status.guildId === selectedGuild.guildId,
                 )}
                 onSaveMarketResearch={onSaveMarketResearch}
-                onMarketResearchAction={onMarketResearchAction}
+                onTestMarketResearch={onTestMarketResearch}
               />
               <ConversationStatusCard
                 key={`${selectedGuild.guildId}-conversation`}
@@ -1481,15 +1434,6 @@ export function DiscordControlPage({
   const manualMarketResearch = useMutation(
     publicApi.marketResearch.manualTrigger,
   );
-  const retryMarketResearch = useMutation(
-    publicApi.marketResearch.retryEdition,
-  );
-  const reconcileMarketResearch = useMutation(
-    publicApi.marketResearch.requestReconciliation,
-  );
-  const cancelMarketResearch = useMutation(
-    publicApi.marketResearch.cancelUnstarted,
-  );
 
   return (
     <DiscordControlPageContent
@@ -1516,24 +1460,15 @@ export function DiscordControlPage({
       onSaveMarketResearch={(settings) =>
         saveMarketResearch(settings).then(() => undefined)
       }
-      onMarketResearchAction={(guildId, action, editionId, requestId) => {
-        if (action === "test") {
-          return manualMarketResearch({
-            guildId,
-            dryRun: false,
-            publish: true,
-            regeneratePublishedEdition: false,
-            requestId,
-          }).then(() => undefined);
-        }
-        if (!editionId)
-          return Promise.reject(new Error("Edition is unavailable."));
-        if (action === "retry")
-          return retryMarketResearch({ editionId }).then(() => undefined);
-        if (action === "reconcile")
-          return reconcileMarketResearch({ editionId }).then(() => undefined);
-        return cancelMarketResearch({ editionId }).then(() => undefined);
-      }}
+      onTestMarketResearch={(guildId, requestId) =>
+        manualMarketResearch({
+          guildId,
+          dryRun: false,
+          publish: true,
+          regeneratePublishedEdition: false,
+          requestId,
+        }).then(() => undefined)
+      }
     />
   );
 }

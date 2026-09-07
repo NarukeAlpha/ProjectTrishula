@@ -173,7 +173,7 @@ describe("Discord control surface", () => {
         onResetGuildConversation={vi.fn()}
         onSetGuildRouting={vi.fn()}
         onSaveMarketResearch={vi.fn()}
-        onMarketResearchAction={vi.fn()}
+        onTestMarketResearch={vi.fn()}
       />,
     );
 
@@ -190,7 +190,7 @@ describe("Discord control surface", () => {
       onResetGuildConversation: vi.fn(),
       onSetGuildRouting: vi.fn(),
       onSaveMarketResearch: vi.fn(),
-      onMarketResearchAction: vi.fn(),
+      onTestMarketResearch: vi.fn(),
     };
     const { rerender } = render(
       <DiscordControlPageContent
@@ -276,6 +276,118 @@ describe("Discord control surface", () => {
     expect(screen.getByRole("button", { name: "Schedule now" })).toBeDisabled();
   });
 
+  it.each([
+    { status: "failed", lastErrorCode: "market_research_disabled" },
+    { status: "partial", lastErrorCode: "discord_reply_failed" },
+    { status: "queued", lastErrorCode: undefined },
+    { status: "retry_wait", lastErrorCode: "discord_rate_limited" },
+    {
+      status: "partial",
+      lastErrorCode: "discord_thread_reconcile_ambiguous",
+    },
+  ] as const)(
+    "keeps exactly three newspaper actions for $status / $lastErrorCode",
+    ({ status: editionStatus, lastErrorCode }) => {
+      const status = readyNewspaperStatus();
+      status.current = {
+        editionId: "edition_1",
+        editionDate: "2026-09-07",
+        status: editionStatus,
+        stage: editionStatus,
+        lastErrorCode,
+        sourceCount: 0,
+        acceptedSourceCount: 0,
+        exaCostUsd: 0,
+        updatedAt: Date.now(),
+      };
+      render(
+        <DiscordControlView
+          model={controlPlane()}
+          marketResearch={[status]}
+          onSetGuildRouting={vi.fn()}
+          onResetGuildConversation={resetGuildConversation}
+        />,
+      );
+      const newspaper = within(
+        screen.getByRole("region", { name: "Morning newspaper" }),
+      );
+      expect(newspaper.getAllByRole("button")).toHaveLength(3);
+      expect(
+        newspaper.getByRole("button", { name: "Save morning newspaper" }),
+      ).toBeVisible();
+      expect(newspaper.getByRole("button", { name: "Test now" })).toBeVisible();
+      expect(
+        newspaper.getByRole("button", { name: "Schedule now" }),
+      ).toBeVisible();
+      for (const name of [
+        "Retry edition",
+        "Reconcile forum thread",
+        "Cancel queued edition",
+      ]) {
+        expect(
+          newspaper.queryByRole("button", { name }),
+        ).not.toBeInTheDocument();
+      }
+    },
+  );
+
+  it.each(["current", "preview"] as const)(
+    "explains disabled research workers in the %s status",
+    (location) => {
+      const status = readyNewspaperStatus();
+      if (location === "current") {
+        status.current = {
+          editionId: "edition_1",
+          editionDate: "2026-09-07",
+          status: "failed",
+          stage: "queued",
+          lastErrorCode: "market_research_disabled",
+          sourceCount: 0,
+          acceptedSourceCount: 0,
+          exaCostUsd: 0,
+          updatedAt: Date.now(),
+        };
+      } else {
+        status.preview = {
+          previewId: "preview_1",
+          status: "failed",
+          requestedAt: Date.now(),
+          qualitySummary: [
+            "Preview stopped with safe failure market_research_disabled.",
+            "Quotes were not retrieved. No ranked setups were generated.",
+            "No forum post was created.",
+          ],
+          safeFailure: "market_research_disabled",
+        };
+      }
+      render(
+        <DiscordControlView
+          model={controlPlane()}
+          marketResearch={[status]}
+          onSetGuildRouting={vi.fn()}
+          onResetGuildConversation={resetGuildConversation}
+        />,
+      );
+      const newspaper = screen.getByRole("region", {
+        name: "Morning newspaper",
+      });
+      expect(newspaper).toHaveTextContent(
+        "Research service setup is incomplete. Research workers must be enabled before an edition can run.",
+      );
+      expect(newspaper).not.toHaveTextContent("market_research_disabled");
+      expect(newspaper).not.toHaveTextContent(/Exa/i);
+      expect(newspaper).not.toHaveTextContent(
+        "Preview stopped with safe failure",
+      );
+      if (location === "preview") {
+        expect(newspaper).toHaveTextContent(
+          "Quotes were not retrieved. No ranked setups were generated.",
+        );
+        expect(newspaper).toHaveTextContent("No forum post was created.");
+      }
+    },
+  );
+
   it("saves the forum and fixed research policy without changing conversation routes", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const onRoute = vi.fn();
@@ -354,7 +466,7 @@ describe("Discord control surface", () => {
         marketResearch={[readyNewspaperStatus()]}
         onSetGuildRouting={vi.fn()}
         onSaveMarketResearch={onSave}
-        onMarketResearchAction={onAction}
+        onTestMarketResearch={onAction}
         onResetGuildConversation={resetGuildConversation}
       />,
     );
@@ -363,12 +475,7 @@ describe("Discord control surface", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Test now" }));
     await waitFor(() =>
-      expect(onAction).toHaveBeenCalledWith(
-        "guild_1",
-        "test",
-        undefined,
-        expect.any(String),
-      ),
+      expect(onAction).toHaveBeenCalledWith("guild_1", expect.any(String)),
     );
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -393,7 +500,7 @@ describe("Discord control surface", () => {
         marketResearch={[readyNewspaperStatus()]}
         onSetGuildRouting={vi.fn()}
         onSaveMarketResearch={vi.fn().mockRejectedValue(new Error("offline"))}
-        onMarketResearchAction={onAction}
+        onTestMarketResearch={onAction}
         onResetGuildConversation={resetGuildConversation}
       />,
     );
@@ -415,7 +522,7 @@ describe("Discord control surface", () => {
         marketResearch={[readyNewspaperStatus()]}
         onSetGuildRouting={vi.fn()}
         onSaveMarketResearch={vi.fn().mockResolvedValue(undefined)}
-        onMarketResearchAction={onAction}
+        onTestMarketResearch={onAction}
         onResetGuildConversation={resetGuildConversation}
       />,
     );
@@ -426,10 +533,10 @@ describe("Discord control surface", () => {
     );
     fireEvent.click(test);
     await waitFor(() => expect(screen.getByText(/Test queued/)).toBeVisible());
-    expect(onAction.mock.calls[0]![3]).toBe(onAction.mock.calls[1]![3]);
+    expect(onAction.mock.calls[0]![1]).toBe(onAction.mock.calls[1]![1]);
     fireEvent.click(test);
     await waitFor(() => expect(onAction).toHaveBeenCalledTimes(3));
-    expect(onAction.mock.calls[2]![3]).not.toBe(onAction.mock.calls[1]![3]);
+    expect(onAction.mock.calls[2]![1]).not.toBe(onAction.mock.calls[1]![1]);
   });
 
   it("preserves an uncertain test ID when the server card remounts", async () => {
@@ -443,7 +550,7 @@ describe("Discord control surface", () => {
         marketResearch={[readyNewspaperStatus()]}
         onSetGuildRouting={vi.fn()}
         onSaveMarketResearch={vi.fn().mockResolvedValue(undefined)}
-        onMarketResearchAction={onAction}
+        onTestMarketResearch={onAction}
         onResetGuildConversation={resetGuildConversation}
       />
     );
@@ -456,7 +563,7 @@ describe("Discord control surface", () => {
     render(view());
     fireEvent.click(screen.getByRole("button", { name: "Test now" }));
     await waitFor(() => expect(screen.getByText(/Test queued/)).toBeVisible());
-    expect(onAction.mock.calls[1]![3]).toBe(onAction.mock.calls[0]![3]);
+    expect(onAction.mock.calls[1]![1]).toBe(onAction.mock.calls[0]![1]);
   });
 
   it("shows Scheduled only after scheduling succeeds and re-enables it for changes", async () => {
