@@ -291,6 +291,7 @@ describe("Discord control surface", () => {
         onSetGuildRouting={onSetGuildRouting}
         onSaveMarketResearch={onSaveMarketResearch}
         onMarketResearchAction={onMarketResearchAction}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
     expect(screen.getByRole("button", { name: "Publish now" })).toBeDisabled();
@@ -316,6 +317,7 @@ describe("Discord control surface", () => {
         onSetGuildRouting={vi.fn()}
         marketResearch={[marketResearchStatus()]}
         onSaveMarketResearch={onSaveMarketResearch}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
     fireEvent.change(
@@ -373,6 +375,7 @@ describe("Discord control surface", () => {
         marketResearch={[status]}
         onSaveMarketResearch={onSaveMarketResearch}
         onMarketResearchAction={onMarketResearchAction}
+        onResetGuildConversation={resetGuildConversation}
       />,
     );
     expect(
