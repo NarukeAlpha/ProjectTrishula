@@ -91,6 +91,7 @@ function thread(
   id: string,
   starter: ReturnType<typeof message> | null,
   replies: Array<ReturnType<typeof message>> = [],
+  canAttachFiles = true,
 ) {
   return {
     id,
@@ -98,6 +99,7 @@ function thread(
     parentId: "200",
     createdTimestamp: Number(id),
     isThread: () => true,
+    permissionsFor: vi.fn(() => ({ has: () => canAttachFiles })),
     fetchStarterMessage: vi.fn(async () => starter),
     messages: {
       fetch: vi.fn(async () => new Collection(replies.map((reply) => [reply.id, reply]))),
@@ -126,6 +128,7 @@ function harness(options: {
     id: "200",
     guildId: "100",
     type: ChannelType.GuildForum,
+    permissionsFor: vi.fn(() => ({ has: () => true })),
     threads: {
       fetchActive: vi.fn(async () => ({
         threads: new Collection((options.active ?? []).map((item) => [item.id, item])),
@@ -342,7 +345,12 @@ describe("market-research forum publisher", () => {
     }]);
   });
 
-  it("attaches an approved in-process chart to its intended reply", async () => {
+  it.each([
+    { canAttachFiles: true, chartsEnabled: true, providerConfigured: true },
+    { canAttachFiles: false, chartsEnabled: true, providerConfigured: true },
+    { canAttachFiles: true, chartsEnabled: false, providerConfigured: true },
+    { canAttachFiles: true, chartsEnabled: true, providerConfigured: false },
+  ])("gates optional attachments without blocking text: %j", async (controls) => {
     const replyContent = "Part 1/1 - Sources\n- Evidence";
     const chartRequest = {
       chartRequestId: "chart_1",
@@ -375,7 +383,7 @@ describe("market-research forum publisher", () => {
         chartRequests: [chartRequest],
       },
     });
-    const existingThread = thread("700", message("701", claim().delivery.content));
+    const existingThread = thread("700", message("701", claim().delivery.content), [], controls.canAttachFiles);
     const render = vi.fn(async () => ({
       attachment: Buffer.from("trusted png"),
       name: "amd-chart.png",
@@ -385,21 +393,22 @@ describe("market-research forum publisher", () => {
     const { publisher } = harness({
       claim: publication,
       replyThread: existingThread,
-      chartImages: { render },
-      chartsEnabled: true,
+      ...(controls.providerConfigured ? { chartImages: { render } } : {}),
+      chartsEnabled: controls.chartsEnabled,
     });
 
     await publisher.poll();
 
-    expect(render).toHaveBeenCalledWith(expect.objectContaining({
-      symbol: "AMD",
-      tradingViewSymbol: "NASDAQ:AMD",
-      interval: "15m",
-    }));
-    expect(existingThread.send).toHaveBeenCalledWith(expect.objectContaining({
-      content: replyContent,
-      files: [expect.objectContaining({ name: "amd-chart.png" })],
-    }));
+    if (controls.canAttachFiles && controls.chartsEnabled && controls.providerConfigured) {
+      expect(render).toHaveBeenCalledWith(expect.objectContaining({ symbol: "AMD", tradingViewSymbol: "NASDAQ:AMD", interval: "15m" }));
+      expect(existingThread.send).toHaveBeenCalledWith(expect.objectContaining({
+        content: replyContent, files: [expect.objectContaining({ name: "amd-chart.png" })],
+      }));
+    } else {
+      expect(render).not.toHaveBeenCalled();
+      expect(existingThread.send).toHaveBeenCalledWith(expect.objectContaining({ content: replyContent }));
+      expect(existingThread.send).toHaveBeenCalledWith(expect.not.objectContaining({ files: expect.anything() }));
+    }
   });
 
   it("publishes complete text when chart rendering fails", async () => {

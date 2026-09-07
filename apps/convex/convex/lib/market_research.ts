@@ -1,4 +1,30 @@
 /* oxlint-disable anti-slop/no-unknown-parameters -- Serialized byte measurement is the I/O size boundary and intentionally accepts any JSON candidate. */
+import { z } from "zod";
+
+export const marketResearchControlOptionsSchema = z.object({
+  marketDataProviderId: z.literal("exa_financial_datasets").nullable().optional(),
+  includeCharts: z.boolean().optional(),
+  maximumCharts: z.number().int().min(0).max(3).optional(),
+}).strict();
+
+interface StoredResearchControlOptions {
+  marketDataProviderId: string | null;
+  includeCharts: boolean;
+  maximumCharts: number;
+}
+
+export function mergeMarketResearchControlOptions(
+  existing: StoredResearchControlOptions,
+  input: z.infer<typeof marketResearchControlOptionsSchema>,
+): StoredResearchControlOptions {
+  const options = marketResearchControlOptionsSchema.parse(input);
+  return {
+    marketDataProviderId: options.marketDataProviderId === undefined ? existing.marketDataProviderId : options.marketDataProviderId,
+    includeCharts: options.includeCharts ?? existing.includeCharts,
+    maximumCharts: options.maximumCharts ?? existing.maximumCharts,
+  };
+}
+
 export const MARKET_RESEARCH_LEASE_MS = 2 * 60 * 1_000;
 export const MARKET_RESEARCH_DELIVERY_LEASE_MS = 60 * 1_000;
 export const MARKET_RESEARCH_RECOVERY_BATCH_SIZE = 25;

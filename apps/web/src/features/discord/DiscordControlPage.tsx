@@ -374,6 +374,15 @@ function MarketResearchSettings({
     preferences?.maximumRankedSetups ?? 5,
   );
   const [enabled, setEnabled] = useState(preferences?.enabled ?? false);
+  const [marketDataProviderId, setMarketDataProviderId] = useState(
+    preferences?.marketDataProviderId ?? "",
+  );
+  const [includeCharts, setIncludeCharts] = useState(
+    preferences?.includeCharts ?? false,
+  );
+  const [maximumCharts, setMaximumCharts] = useState(
+    preferences?.maximumCharts ?? 3,
+  );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const forums = guild.channels.filter((channel) => channel.type === "forum");
@@ -391,24 +400,39 @@ function MarketResearchSettings({
     selectedForum.canReadThreadHistory &&
     (!selectedForum.requiresTag || forumTagId !== "");
 
-  async function save() {
+  function controlSettings(
+    scheduleEnabled: boolean,
+  ): SaveMarketResearchControlSettings {
     const [hourText, minuteText] = localTime.split(":");
+    const settings: SaveMarketResearchControlSettings = {
+      guildId: guild.guildId,
+      forumChannelId: forumChannelId || null,
+      forumTagIds: forumTagId ? [forumTagId] : [],
+      timezone,
+      timezoneConfirmed,
+      localHour: Number(hourText),
+      localMinute: Number(minuteText),
+      includeWeekends,
+      editionDepth,
+      maximumRankedSetups,
+      enabled: scheduleEnabled,
+      includeCharts,
+      maximumCharts,
+    };
+    if (
+      marketDataProviderId === "" ||
+      marketDataProviderId === "exa_financial_datasets"
+    ) {
+      settings.marketDataProviderId = marketDataProviderId || null;
+    }
+    return settings;
+  }
+
+  async function save() {
     setBusy(true);
     setMessage(null);
     try {
-      await onSave({
-        guildId: guild.guildId,
-        forumChannelId: forumChannelId || null,
-        forumTagIds: forumTagId ? [forumTagId] : [],
-        timezone,
-        timezoneConfirmed,
-        localHour: Number(hourText),
-        localMinute: Number(minuteText),
-        includeWeekends,
-        editionDepth,
-        maximumRankedSetups,
-        enabled,
-      });
+      await onSave(controlSettings(enabled));
       setMessage("Morning newspaper settings saved.");
     } catch {
       setMessage(
@@ -423,10 +447,14 @@ function MarketResearchSettings({
     setBusy(true);
     setMessage(null);
     try {
+      if (action === "preview" && preferences === undefined) {
+        // Initialize an unscheduled draft only. Preview never opts into publishing.
+        await onSave(controlSettings(false));
+      }
       await onAction(guild.guildId, action, status?.current?.editionId);
       setMessage(
         action === "preview"
-          ? "Preview request recorded."
+          ? "Preview queued using saved settings. No Discord post or scheduled publishing was enabled."
           : action === "publish"
             ? "Edition queued."
             : "Edition updated.",
@@ -561,6 +589,32 @@ function MarketResearchSettings({
           />
         </label>
       </div>
+      <label>
+        <span>Numerical data provider</span>
+        <select
+          aria-label="Numerical data provider"
+          value={marketDataProviderId}
+          disabled={busy}
+          onChange={(event) => setMarketDataProviderId(event.target.value)}
+        >
+          <option value="">No numerical provider</option>
+          <option value="exa_financial_datasets">
+            Exa Connect Financial Datasets
+          </option>
+          {marketDataProviderId !== "" &&
+            marketDataProviderId !== "exa_financial_datasets" && (
+              <option value={marketDataProviderId}>
+                Existing provider: {marketDataProviderId}
+              </option>
+            )}
+        </select>
+      </label>
+      <p className="discord-fine-print">
+        Selecting a provider does not approve it. Financial Datasets needs a
+        reviewed live evaluation, an approved owner decision, a service cost
+        cap, and runtime enablement. Until then, numerical data remains
+        unavailable. Preview does not need a forum or an enabled schedule.
+      </p>
       <div className="discord-newspaper-checks">
         <label>
           <input
@@ -584,7 +638,13 @@ function MarketResearchSettings({
           <input
             type="checkbox"
             checked={enabled}
-            disabled={busy || !forumReady || !timezoneConfirmed}
+            disabled={
+              busy ||
+              (!enabled &&
+                (!forumReady ||
+                  !timezoneConfirmed ||
+                  marketDataProviderId === ""))
+            }
             onChange={(event) => setEnabled(event.target.checked)}
           />
           Enable the scheduled newspaper.
@@ -592,12 +652,39 @@ function MarketResearchSettings({
         <label>
           <input
             type="checkbox"
-            checked={preferences?.includeCharts ?? false}
-            disabled
+            checked={includeCharts}
+            disabled={
+              busy ||
+              (!includeCharts &&
+                selectedForum !== undefined &&
+                !selectedForum.canAttachFiles)
+            }
+            onChange={(event) => setIncludeCharts(event.target.checked)}
           />
-          Charts stay disabled until MR-016 acceptance passes.
+          Include optional chart images for this server.
         </label>
       </div>
+      <label>
+        <span>Maximum chart images</span>
+        <input
+          aria-label="Maximum chart images"
+          type="number"
+          min={0}
+          max={3}
+          value={maximumCharts}
+          disabled={busy || !includeCharts}
+          onChange={(event) => setMaximumCharts(Number(event.target.value))}
+        />
+      </label>
+      <p className="discord-fine-print">
+        Chart delivery also requires the CHART-IMG service and its chart rollout
+        switch. Provider readiness is not verified by this page. Images are
+        optional context, not numerical evidence. Missing images do not block
+        the text edition.
+        {selectedForum &&
+          !selectedForum.canAttachFiles &&
+          " This forum is missing ATTACH_FILES."}
+      </p>
       {selectedForum && !forumReady && (
         <p className="discord-route-warning">
           This forum is missing a required permission or valid required tag.
@@ -609,7 +696,7 @@ function MarketResearchSettings({
         </button>
         <button
           type="button"
-          disabled={busy || !forumReady}
+          disabled={busy}
           onClick={() => void runAction("preview")}
         >
           Run preview
@@ -655,6 +742,16 @@ function MarketResearchSettings({
             </button>
           )}
       </div>
+      {status?.preview && (
+        <details className="discord-fine-print" open>
+          <summary>Latest preview: {status.preview.status}</summary>
+          <p>{status.preview.previewId}</p>
+          {status.preview.safeFailure && <p>{status.preview.safeFailure}</p>}
+          {status.preview.qualitySummary.map((line, index) => (
+            <p key={index}>{line}</p>
+          ))}
+        </details>
+      )}
       {status?.current && (
         <p className="discord-fine-print">
           Latest: {status.current.editionDate} · {status.current.status} ·{" "}

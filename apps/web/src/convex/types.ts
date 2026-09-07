@@ -450,6 +450,8 @@ export interface MarketResearchPreferencesReadModel {
   includeWeekends: boolean;
   includeCharts: boolean;
   chartsAcceptancePassed: boolean;
+  marketDataProviderId?: string | null;
+  maximumCharts?: number;
   editionDepth: "full" | "concise";
   maximumRankedSetups: number;
   revision: number;
@@ -473,6 +475,13 @@ export interface MarketResearchControlStatusReadModel {
   guildId: string;
   preferences: MarketResearchPreferencesReadModel;
   current: MarketResearchCurrentEditionReadModel | null;
+  preview?: {
+    previewId: string;
+    status: "queued" | "running" | "completed" | "failed";
+    requestedAt: number;
+    qualitySummary: string[];
+    safeFailure?: string;
+  } | null;
 }
 
 export type SaveMarketResearchControlSettings = {
@@ -487,4 +496,7 @@ export type SaveMarketResearchControlSettings = {
   editionDepth: "full" | "concise";
   maximumRankedSetups: number;
   enabled: boolean;
+  marketDataProviderId?: "exa_financial_datasets" | null;
+  includeCharts?: boolean;
+  maximumCharts?: number;
 };
