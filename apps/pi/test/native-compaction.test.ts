@@ -253,6 +253,9 @@ describe("native Discord compaction", () => {
       "data: [DONE]",
       "",
     ].join("\n");
+    const response = new Response(body, { status: 200 });
+    response.headers.delete("content-type");
+    expect(response.headers.get("content-type")).toBeNull();
     let evidence: NativeCompactionProbeEvidence | undefined;
 
     await expect(generateNativeCompaction({
@@ -260,7 +263,7 @@ describe("native Discord compaction", () => {
       model,
       request,
       instructions: "Synthetic compaction instructions.",
-      fetch: async () => new Response(body, { status: 200 }),
+      fetch: async () => response,
       onProbeEvidence: (value) => {
         evidence = value;
       },
@@ -285,6 +288,23 @@ describe("native Discord compaction", () => {
       result: "accepted",
     });
     expect(JSON.stringify(evidence)).not.toContain(secret);
+  });
+
+  it("keeps probe observer failure isolated from accepted compaction", async () => {
+    await expect(generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => sseResponse("observer-isolation"),
+      onProbeEvidence: () => {
+        throw new Error("observer-failure");
+      },
+    })).resolves.toMatchObject({
+      replacementHistory: expect.arrayContaining([
+        { type: "compaction", encrypted_content: "observer-isolation" },
+      ]),
+    });
   });
 
   it("reports a fixed parser failure category without provider content", async () => {
