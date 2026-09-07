@@ -5,7 +5,7 @@ and verify that the owner can test them through the website and Discord.
 
 ## Current checkpoint
 
-- Both feature baselines are integrated. Production still has the older chart release.
+- Both feature baselines are integrated and deployed through GitHub-connected Railway builds. Follow-up fixes and native compaction verification are still in progress.
 - Market research was recovered in `0ef9711`; 63 changed files were restored from successful historical patches.
 - Both feature agents use persistent worktrees and must commit recovery and implementation milestones.
 - The owner will select the newspaper forum. Do not create a forum automatically.
@@ -33,12 +33,18 @@ and verify that the owner can test them through the website and Discord.
 - The checkpoint-attribution fixes passed the complete gate at `247c933`: 482 app tests and four deployment-source tests. The numerical adapter and evaluation CLI then passed all 258 Pi tests, typechecking, and build after integration.
 - The provider adapter now requires a matching saved provider selection, an explicit runtime owner decision, and a cost cap. This is implemented but not live-evaluated; Exa access and the configured-time evaluation are still required.
 - A read-only Railway plan after the approved configuration apply reported no drift.
+- First staged release succeeded: Convex `67b45c5`, Pi `e0a3d21`, Discord `0bff563`, web `652fbb1`. Build-tree comparison verified each against the tested integration source. The Convex deployer emitted its explicit successful function-deployment marker.
+- The deployed Pi passed nine synthetic Luna naturalness checks through the existing Codex OAuth. All produced concise direct replies and passed deterministic surface checks. No Discord messages or Convex records were created.
+- Both the legacy and new deployed Discord clients successfully read context from the upgraded Convex backend. Only the message count was reported. The new gateway returned `/ready` HTTP 200, connected to two servers.
+- The first live portable-summary probe failed schema validation. The summary prompt omitted the schema for array items. A generated JSON Schema and regression test are implemented; live retry is pending deployment. Portable summaries have not been enabled in production.
+- The full gate passed at `1ac6215`: 521 app tests and four deployment-source tests. It includes durable Exa cost events and the summary-prompt fix. A subsequent Pi-only spending-cap fix requires the final combined gate.
+- A second owner question asks whether newspaper/chart runtimes should default on while per-server schedules stay off. The approval check rejected changing these defaults without explicit authorization. No such default change was committed or applied.
 
 ## Remaining release work
 
-1. Finish the real numerical-provider/evaluation path and newspaper chart controls.
-2. Close the concrete personality audit defects and run the live synthetic model probes.
-3. Integrate the final checkpoints without losing durable delivery, owner boundaries, or existing control-page actions.
+1. Finish the native compaction adapter, persistence, and synthetic continuation/restart verification.
+2. Deploy and rerun the portable-summary live probe; integrate the durable cost-ledger follow-up.
+3. Preserve durable delivery, owner boundaries, and existing control-page actions through the final checkpoints.
 4. Run the root `npm run check` gate and inspect the combined diff.
 5. Review the Railway plan and sync required runtime configuration without exposing secrets.
 6. Deploy Convex, Pi, Discord, then web. Verify the deployed commit and internal readiness at each step.
