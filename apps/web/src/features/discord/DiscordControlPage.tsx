@@ -1424,7 +1424,7 @@ export function DiscordControlPage({
     publicApi.marketResearch.cancelUnstarted,
   );
 
-  if (model === undefined) {
+  if (model === undefined || marketResearch === undefined) {
     return (
       <main className="discord-page">
         <div className="loading" role="status">
@@ -1439,7 +1439,7 @@ export function DiscordControlPage({
     <DiscordControlView
       applicationId={applicationId}
       model={model}
-      marketResearch={marketResearch ?? []}
+      marketResearch={marketResearch}
       onSetGuildRouting={(
         guildId,
         conversationChannelId,

@@ -152,12 +152,7 @@ export const publicApi = {
         publish: boolean;
         regeneratePublishedEdition: boolean;
       },
-      | {
-          kind: "preview";
-          previewId: string;
-          status: "failed";
-          safeFailure: "market_data_not_configured";
-        }
+      | { kind: "preview"; previewId: string; status: "queued" }
       | { kind: "edition"; editionId: string; duplicate: boolean }
     >("market_research:manualTrigger"),
     retryEdition: makeFunctionReference<

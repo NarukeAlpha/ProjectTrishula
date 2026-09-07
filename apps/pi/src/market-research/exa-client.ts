@@ -1,5 +1,5 @@
 /* oxlint-disable anti-slop/no-unknown-returns, anti-slop/no-unsafe-dictionary-type, anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-known-value-widening, anti-slop/no-conditional-empty-object-spread -- The official Exa SDK exposes version-dependent provider payloads; this adapter validates and bounds every value before domain use. */
-import { Exa } from "exa-js";
+import { AgentRunCancelledError, AgentRunFailedError, Exa } from "exa-js";
 import type { Logger } from "../runtime/logger.js";
 import type { ResearchPlanSlot } from "./research-plan.js";
 import { MarketResearchExaError, classifyExaError } from "./exa-errors.js";
@@ -212,6 +212,15 @@ export interface StructuredMarketEvidence {
   raw: unknown;
 }
 
+export interface ExaCostEvent {
+  operation: "search" | "contents" | "financial_datasets";
+  outcome: "settled" | "abandoned" | "failed";
+  costUsd: number | null;
+  late: boolean;
+  observedAt: string;
+  requestId?: string;
+}
+
 export interface ExaClientOptions {
   apiKey: string;
   searchConcurrency: number;
@@ -225,6 +234,7 @@ export interface ExaClientOptions {
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
   now?: () => Date;
+  onCostEvent?: (event: Readonly<ExaCostEvent>) => void | Promise<void>;
 }
 
 function rawResponse(value: unknown): RawExaResponse {
@@ -237,9 +247,9 @@ function rawResults(response: RawExaResponse): RawExaResult[] {
   return response.results.filter((value): value is RawExaResult => typeof value === "object" && value !== null);
 }
 
-function cost(response: RawExaResponse): number {
+function cost(response: RawExaResponse): number | null {
   const total = response.costDollars?.total;
-  return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : 0;
+  return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null;
 }
 
 function abortError(signal?: AbortSignal): Error {
@@ -284,6 +294,7 @@ export function resultUrlMatchesSlotPolicy(url: string, slot: ResearchPlanSlot):
 export class MarketResearchExaClient {
   private readonly searchSemaphore: Semaphore;
   private readonly contentsSemaphore: Semaphore;
+  private readonly evaluationSemaphore = new Semaphore(1);
   private readonly transport: ExaSdkTransport;
   private readonly sleep: NonNullable<ExaClientOptions["sleep"]>;
   private readonly random: NonNullable<ExaClientOptions["random"]>;
@@ -294,6 +305,7 @@ export class MarketResearchExaClient {
   private accruedCostUsd = 0;
   private budgetClosed = false;
   private costStatus: "known" | "unknown" = "known";
+  private readonly costEvents: ExaCostEvent[] = [];
 
   constructor(private readonly options: ExaClientOptions) {
     if (!options.apiKey.trim()) throw new Error("exa_not_configured");
@@ -320,6 +332,10 @@ export class MarketResearchExaClient {
       costStatus: this.costStatus,
       budgetClosed: this.budgetClosed,
     };
+  }
+
+  costLedger(): readonly ExaCostEvent[] {
+    return this.costEvents.map((event) => ({ ...event }));
   }
 
   async searchNews(slot: ResearchPlanSlot, signal?: AbortSignal): Promise<SearchEvidenceBatch> {
@@ -353,10 +369,8 @@ export class MarketResearchExaClient {
             });
             this.searchRequests += 1;
             markProviderStarted();
-            const parsed = rawResponse(await this.transport.search(slot.query, searchOptions, requestSignal));
-            const parsedCost = cost(parsed);
-            this.addCost(parsedCost);
-            return { raw: parsed, requestCost: parsedCost };
+            return this.paidRequest("search", requestSignal,
+              () => this.transport.search(slot.query, searchOptions, requestSignal));
           }, requestSignal),
           requestSignal,
         ),
@@ -449,10 +463,8 @@ export class MarketResearchExaClient {
                 });
                 this.contentPages += 1;
                 markProviderStarted();
-                const parsed = rawResponse(await this.transport.getContents(url, contentsOptions, requestSignal));
-                const parsedCost = cost(parsed);
-                this.addCost(parsedCost);
-                return { raw: parsed, requestCost: parsedCost };
+                return this.paidRequest("contents", requestSignal,
+                  () => this.transport.getContents(url, contentsOptions, requestSignal));
               }, requestSignal),
               requestSignal,
             ),
@@ -517,15 +529,16 @@ export class MarketResearchExaClient {
     this.assertCostAvailable();
     if (!this.transport.runFinancialDataset) throw new Error("exa_invalid_request");
     try {
-      const raw = await this.retry(
+      const { raw } = await this.retry(
         () => this.withTimeout(
           (requestSignal, markProviderStarted) => this.withCostGate(
-            () => {
+            () => this.evaluationSemaphore.use(() => {
               this.assertCostAvailable();
               markProviderStarted();
-              return this.transport.runFinancialDataset?.(request, requestSignal)
-                ?? Promise.reject(new Error("exa_invalid_request"));
-            },
+              return this.paidRequest("financial_datasets", requestSignal,
+                () => this.transport.runFinancialDataset?.(request, requestSignal)
+                  ?? Promise.reject(new Error("exa_invalid_request")));
+            }, requestSignal),
             requestSignal,
           ),
           signal,
@@ -560,6 +573,66 @@ export class MarketResearchExaClient {
     }
   }
 
+  private recordCostEvent(event: ExaCostEvent): void {
+    this.costEvents.push(event);
+    if (this.costEvents.length > 128) this.costEvents.shift();
+    const observer = this.options.onCostEvent;
+    if (observer) {
+      void Promise.resolve().then(() => observer({ ...event })).catch(() => {
+        this.options.logger.warn("market_research_exa_cost_observer_failed");
+      });
+    }
+  }
+
+  private async paidRequest(
+    operation: ExaCostEvent["operation"],
+    signal: AbortSignal,
+    invoke: () => Promise<unknown>,
+  ): Promise<{ raw: RawExaResponse; requestCost: number }> {
+    let providerResolved = false;
+    const abandoned = () => this.recordCostEvent({
+      operation, outcome: "abandoned", costUsd: null, late: false, observedAt: this.now().toISOString(),
+    });
+    signal.addEventListener("abort", abandoned, { once: true });
+    try {
+      const value = await invoke();
+      providerResolved = true;
+      const raw = rawResponse(value);
+      const requestCost = cost(raw);
+      this.accountCost(requestCost);
+      const requestId = stringField(raw.requestId, 256);
+      this.recordCostEvent({
+        operation, outcome: "settled", costUsd: requestCost, late: signal.aborted,
+        observedAt: this.now().toISOString(),
+        ...(requestId === undefined ? {} : { requestId }),
+      });
+      return { raw, requestCost: requestCost ?? 0 };
+    } catch (error) {
+      const failedRun = error instanceof AgentRunFailedError || error instanceof AgentRunCancelledError ? error.run : null;
+      if (failedRun || providerResolved || signal.aborted) {
+        const failedCost = failedRun === null ? null : cost(failedRun);
+        this.accountCost(failedCost);
+        const requestId = failedRun === null ? undefined : stringField(failedRun.id, 256);
+        this.recordCostEvent({
+          operation, outcome: "failed", costUsd: failedCost, late: signal.aborted, observedAt: this.now().toISOString(),
+          ...(requestId === undefined ? {} : { requestId }),
+        });
+      }
+      throw error;
+    } finally {
+      signal.removeEventListener("abort", abandoned);
+    }
+  }
+
+  private accountCost(value: number | null): void {
+    if (value === null) {
+      this.costStatus = "unknown";
+      if (this.options.maximumCostUsd !== undefined) this.budgetClosed = true;
+    } else {
+      this.addCost(value);
+    }
+  }
+
   private withCostGate<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     throwIfAborted(signal);
     return this.costGate === undefined ? operation() : this.costGate.use(operation, signal);
@@ -572,6 +645,7 @@ export class MarketResearchExaClient {
         throwIfAborted(signal);
         return await operation();
       } catch (error) {
+        if (error instanceof MarketResearchExaError) throw error;
         if (this.budgetClosed) {
           throw new MarketResearchExaError({
             code: "exa_budget_exhausted", retryable: false, maximumRetries: 0, scope: "request", finalForSource: true,
@@ -580,7 +654,6 @@ export class MarketResearchExaClient {
         if (error instanceof Error && ["composition_timeout", "edition_lease_lost"].includes(error.message)) {
           throw error;
         }
-        if (error instanceof MarketResearchExaError) throw error;
         const decision = classifyExaError(error);
         if (!decision.retryable || attempt >= decision.maximumRetries) throw new MarketResearchExaError(decision);
         const exponential = Math.min(30_000, 500 * 2 ** attempt);

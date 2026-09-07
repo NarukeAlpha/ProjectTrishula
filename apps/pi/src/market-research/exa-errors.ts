@@ -1,5 +1,5 @@
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-unsafe-dictionary-type, anti-slop/no-conditional-empty-object-spread -- Caught Exa errors have no stable SDK contract; this module reduces them to the bounded safe error domain. */
-import { ExaError } from "exa-js";
+import { AgentRunCancelledError, AgentRunFailedError, ExaError } from "exa-js";
 import type { MarketResearchSafeErrorCode } from "./contracts.js";
 
 export type ExaFailureScope = "request" | "url" | "capability" | "batch";
@@ -36,6 +36,14 @@ function detailRetryAfterMs(detail: unknown): number | undefined {
 }
 
 function safeError(error: unknown): ErrorLike {
+  if (error instanceof AgentRunFailedError || error instanceof AgentRunCancelledError) {
+    return {
+      name: error.name,
+      requestId: error.run.id,
+      ...(error.run.error?.code === undefined ? {} : { code: error.run.error.code }),
+      ...(error.run.error?.type === undefined ? {} : { type: error.run.error.type }),
+    };
+  }
   if (error instanceof ExaError) {
     return {
       statusCode: error.statusCode,
@@ -62,6 +70,7 @@ function detailTag(detail: unknown): string | undefined {
 }
 
 export function classifyExaError(error: unknown): ExaFailureDecision {
+  if (error instanceof MarketResearchExaError) return error.decision;
   const value = safeError(error);
   const status = value.statusCode ?? value.status;
   const tag = value.tag ?? value.code ?? value.type ?? detailTag(value.detail);
