@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { nativeCompactionArtifactSchema, type NativeCheckpointView } from "./discord_native_checkpoint.js";
 import {
   DISCORD_CONTEXT_SIZE,
   DISCORD_LOOP_LEASE_MS,
@@ -199,6 +200,33 @@ const discordReplyContent = z.string().trim().min(1).refine(
 
 export const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
 export const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+export const DISCORD_GATEWAY_NATIVE_PROTOCOL = "native-v2";
+
+interface NativeContextFields {
+  nativeCheckpoint?: NativeCheckpointView;
+  activeCheckpointSourceRevision?: number;
+  activeCheckpointSourceContextHash?: string;
+  activeCheckpointCompactedThroughOrdinal?: number;
+}
+
+export function projectPreNativeContext<T extends NativeContextFields>(context: T) {
+  const {
+    nativeCheckpoint, activeCheckpointSourceRevision, activeCheckpointSourceContextHash,
+    activeCheckpointCompactedThroughOrdinal, ...projected
+  } = context;
+  void nativeCheckpoint; void activeCheckpointSourceRevision; void activeCheckpointSourceContextHash;
+  void activeCheckpointCompactedThroughOrdinal;
+  return projected;
+}
+
+export function projectPreNativeCheckpointRequest<T extends {
+  conversation: NativeContextFields;
+  previousNativeCheckpoint?: NativeCheckpointView;
+}>(request: T) {
+  const { previousNativeCheckpoint, ...projected } = request;
+  void previousNativeCheckpoint;
+  return { ...projected, conversation: projectPreNativeContext(request.conversation) };
+}
 
 interface LegacyClaimLoopResult {
   claimed: true;
@@ -555,10 +583,23 @@ export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
     toolPolicyHash: z.string().regex(/^[a-f0-9]{64}$/),
     compactedThroughOrdinal: z.number().int().positive(),
     portableSummary: z.string().trim().min(2).max(512 * 1_024),
+    nativeCompaction: nativeCompactionArtifactSchema.optional(),
     retainedRecentEventIds: z.array(id).max(2_000),
     inputTokens: z.number().int().positive(),
     outputTokens: z.number().int().nonnegative(),
     estimatedSavedTokens: z.number().int(),
+  }).strict(),
+  z.object({
+    operation: z.literal("invalidateNativeCheckpoint"),
+    actorId: id,
+    guildId: id,
+    conversationId: id,
+    checkpointId: id,
+    epoch: z.number().int().nonnegative(),
+    expectedOwnerBindingVersion: z.number().int().positive(),
+    expectedRevision: z.number().int().positive(),
+    expectedGeneration: z.number().int().positive(),
+    expectedRoutingGeneration: z.number().int().positive(),
   }).strict(),
   z.object({
     operation: z.literal("enqueueReply"),

@@ -2,12 +2,14 @@ import { internal } from "./_generated/api.js";
 import { httpAction } from "./_generated/server.js";
 import {
   DISCORD_GATEWAY_DURABLE_PROTOCOL,
+  DISCORD_GATEWAY_NATIVE_PROTOCOL,
   DISCORD_GATEWAY_PROTOCOL_HEADER,
   discordGatewayRequestSchema,
   projectLegacyClaimLoopResponse,
   projectLegacyHeartbeatResponse,
   projectLegacyNewestContextResponse,
   projectLegacyRunnableResponse,
+  projectPreNativeContext,
   type DiscordGatewayOperation,
   type DiscordGatewayResponse,
 } from "./lib/discord_contract.js";
@@ -59,8 +61,9 @@ export const discordGateway = httpAction(async (ctx, request) => {
     return json({ ok: false, error: "Invalid Discord gateway request." }, 400);
   }
   const body = parsed.data;
-  const durableProtocol = request.headers.get(DISCORD_GATEWAY_PROTOCOL_HEADER)
-    === DISCORD_GATEWAY_DURABLE_PROTOCOL;
+  const protocol = request.headers.get(DISCORD_GATEWAY_PROTOCOL_HEADER);
+  const nativeProtocol = protocol === DISCORD_GATEWAY_NATIVE_PROTOCOL;
+  const durableProtocol = nativeProtocol || protocol === DISCORD_GATEWAY_DURABLE_PROTOCOL;
   try {
     switch (body.operation) {
       case "syncGuilds": {
@@ -79,7 +82,9 @@ export const discordGateway = httpAction(async (ctx, request) => {
         const result = await ctx.runMutation(internal.discord.claimLoop, args);
         return success(
           operation,
-          durableProtocol ? result : projectLegacyClaimLoopResponse(result),
+          nativeProtocol ? result : durableProtocol
+            ? result.claimed ? { ...result, durableContext: projectPreNativeContext(result.durableContext) } : result
+            : projectLegacyClaimLoopResponse(result),
         );
       }
       case "newestContext": {
@@ -160,15 +165,23 @@ export const discordGateway = httpAction(async (ctx, request) => {
         const { operation, ...args } = body;
         return success(operation, await ctx.runMutation(
           internal.discord.nextPortableCheckpoint,
-          args,
+          { ...args, nativeCompactionSupported: nativeProtocol },
         ));
       }
       case "storePortableCheckpoint": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(
           internal.discord.storePortableCheckpoint,
-          args,
+          { ...args, nativeCompactionSupported: nativeProtocol },
         );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
+      case "invalidateNativeCheckpoint": {
+        if (!nativeProtocol) return json({ ok: false, error: "Native checkpoint protocol required." }, 400);
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(internal.discord.invalidateNativeCheckpoint, args);
         return result.accepted
           ? success(operation, result)
           : json({ ok: false, operation, error: result.reason }, 409);
