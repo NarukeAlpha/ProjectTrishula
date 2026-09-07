@@ -493,7 +493,7 @@ describe("agent-led newspaper research", () => {
     vi.mocked(test.callbacks.appendEvidence).mockResolvedValue(false);
     await expect(test.runner.run(request([partial.evidenceId]))).rejects.toThrow("edition_lease_lost");
     expect(test.callbacks.complete).not.toHaveBeenCalled();
-    expect(test.callbacks.fail).toHaveBeenCalledWith(expect.anything(), "edition_lease_lost", false, undefined);
+    expect(test.callbacks.fail).toHaveBeenCalledWith(expect.anything(), "edition_lease_lost", false);
     await test.runner.dispose();
   });
 
@@ -502,6 +502,7 @@ describe("agent-led newspaper research", () => {
     const controller = new AbortController();
     controller.abort(new Error("composition_timeout"));
     await expect(test.runner.run(request(), controller.signal)).rejects.toThrow("composition_timeout");
+    expect(test.callbacks.fail).toHaveBeenCalledWith(expect.anything(), "composition_timeout", true);
     expect(test.search).not.toHaveBeenCalled();
     expect(test.composer.compose).not.toHaveBeenCalled();
     await test.runner.dispose();
@@ -527,6 +528,35 @@ describe("agent-led newspaper research", () => {
 });
 
 describe("market-research job timeout", () => {
+  it("allows agent research and writing beyond ten minutes but stops at the twenty-minute default", async () => {
+    vi.useFakeTimers();
+    const stuckRunner: MarketResearchRunner = {
+      initialize: vi.fn(async () => undefined),
+      readiness: () => ({ ready: true }),
+      run: vi.fn(async (_job, signal) => new Promise<MarketResearchJobResult>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })),
+      dispose: vi.fn(async () => undefined),
+    };
+    const registry = new MarketResearchJobRegistry({ runner: stuckRunner, logger });
+    const job = request();
+    try {
+      expect(registry.submit(job).type).toBe("accepted");
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
+      expect(registry.get(job.dispatchId, job.ownerId)?.status).toBe("running");
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1_000 - 1);
+      expect(registry.get(job.dispatchId, job.ownerId)?.status).toBe("running");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(registry.get(job.dispatchId, job.ownerId)).toMatchObject({
+        status: "failed", code: "composition_timeout", retryable: true,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await registry.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("aborts a stuck provider job with the fixed retryable timeout state", async () => {
     vi.useFakeTimers();
     const stuckRunner: MarketResearchRunner = {

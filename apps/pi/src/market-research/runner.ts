@@ -157,7 +157,9 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
     } catch (error) {
       const failure = safeFailure(error);
       leaseController.abort(error);
-      await this.options.callbacks.fail(request, failure.code, failure.retryable, signal).catch(() => undefined);
+      // A timeout has already aborted the work signal. The terminal record still
+      // needs its own bounded callback so the website does not stay "researching".
+      await this.options.callbacks.fail(request, failure.code, failure.retryable).catch(() => undefined);
       throw error;
     } finally {
       clearInterval(heartbeatTimer);

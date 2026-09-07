@@ -61,7 +61,7 @@ export class MarketResearchJobRegistry {
     this.maxActiveJobs = options.maxActiveJobs ?? 2;
     this.maxRetainedJobs = options.maxRetainedJobs ?? 64;
     this.terminalTtlMs = options.terminalTtlMs ?? 30 * 60 * 1_000;
-    this.maxRuntimeMs = options.maxRuntimeMs ?? 10 * 60 * 1_000;
+    this.maxRuntimeMs = options.maxRuntimeMs ?? 20 * 60 * 1_000;
     this.now = options.now ?? Date.now;
   }
 
