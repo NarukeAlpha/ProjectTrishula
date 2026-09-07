@@ -388,6 +388,77 @@ describe("Discord control surface", () => {
     },
   );
 
+  it.each(["queued", "researching", "published"] as const)(
+    "replaces a legacy failed preview with the current %s edition",
+    (editionStatus) => {
+      const status = readyNewspaperStatus();
+      status.preview = {
+        previewId: "legacy_preview_1",
+        status: "failed",
+        requestedAt: Date.now() - 60_000,
+        qualitySummary: [
+          "Preview stopped with safe failure market_research_disabled.",
+          "No forum post was created.",
+        ],
+        safeFailure: "market_research_disabled",
+      };
+      const callbacks = {
+        onSetGuildRouting: vi.fn(),
+        onResetGuildConversation: resetGuildConversation,
+      };
+      const { rerender } = render(
+        <DiscordControlView
+          model={controlPlane()}
+          marketResearch={[status]}
+          {...callbacks}
+        />,
+      );
+      expect(screen.getByText("Latest preview: failed")).toBeVisible();
+      expect(screen.getByText("legacy_preview_1")).toBeVisible();
+      expect(
+        screen.getByText(/Research service setup is incomplete/),
+      ).toBeVisible();
+
+      const updated: MarketResearchControlStatusReadModel = {
+        ...status,
+        current: {
+          editionId: "new_edition_1",
+          editionDate: "2026-09-07",
+          status: editionStatus,
+          stage: editionStatus,
+          sourceCount: 12,
+          acceptedSourceCount: 10,
+          exaCostUsd: 0.1,
+          updatedAt: Date.now(),
+        },
+      };
+      rerender(
+        <DiscordControlView
+          model={controlPlane()}
+          marketResearch={[updated]}
+          {...callbacks}
+        />,
+      );
+      const newspaper = screen.getByRole("region", {
+        name: "Morning newspaper",
+      });
+      expect(newspaper).toHaveTextContent(
+        `Latest: 2026-09-07 · ${editionStatus} · 10/12 accepted sources`,
+      );
+      expect(newspaper).not.toHaveTextContent("Latest preview");
+      expect(newspaper).not.toHaveTextContent("legacy_preview_1");
+      expect(newspaper).not.toHaveTextContent(
+        "Research service setup is incomplete",
+      );
+      expect(newspaper).not.toHaveTextContent("No forum post was created.");
+      expect(newspaper).not.toHaveTextContent("market_research_disabled");
+      expect(within(newspaper).getAllByRole("button")).toHaveLength(3);
+      expect(screen.getByLabelText("Morning newspaper forum")).toHaveValue(
+        "channel_3",
+      );
+    },
+  );
+
   it("saves the forum and fixed research policy without changing conversation routes", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const onRoute = vi.fn();

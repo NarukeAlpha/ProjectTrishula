@@ -637,7 +637,7 @@ function MarketResearchSettings({
         Test now saves these settings and posts a separate edition. Schedule now
         applies them to future editions at the selected time.
       </p>
-      {status?.preview && (
+      {status?.preview && !status.current && (
         <details className="discord-fine-print" open>
           <summary>Latest preview: {status.preview.status}</summary>
           <p>{status.preview.previewId}</p>
