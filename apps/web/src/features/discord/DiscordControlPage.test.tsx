@@ -14,15 +14,11 @@ import type {
   DiscordControlPlaneReadModel,
   MarketResearchControlStatusReadModel,
 } from "../../convex/types";
-import { DiscordControlPage, DiscordControlView } from "./DiscordControlPage";
+import {
+  DiscordControlPageContent,
+  DiscordControlView,
+} from "./DiscordControlPage";
 import { discordInstallUrl } from "./discordInstall";
-
-const convexReact = vi.hoisted(() => ({
-  useMutation: vi.fn(() => vi.fn()),
-  useQuery: vi.fn(),
-}));
-
-vi.mock("convex/react", () => convexReact);
 
 function controlPlane(
   overrides: Partial<DiscordControlPlaneReadModel> = {},
@@ -154,12 +150,15 @@ function marketResearchStatus(
 
 describe("Discord control surface", () => {
   it("waits for both control queries before it initializes editable settings", () => {
-    convexReact.useQuery
-      .mockReset()
-      .mockReturnValueOnce(controlPlane())
-      .mockReturnValueOnce(undefined);
-
-    render(<DiscordControlPage />);
+    render(
+      <DiscordControlPageContent
+        model={controlPlane()}
+        marketResearch={undefined}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi.fn()}
+        onMarketResearchAction={vi.fn()}
+      />,
+    );
 
     expect(screen.getByRole("status")).toHaveTextContent(
       "Loading Discord control…",
@@ -170,13 +169,18 @@ describe("Discord control surface", () => {
   });
 
   it("preserves a dirty setting when a hydrated query refreshes", () => {
-    let statuses = [marketResearchStatus()];
-    let queryNumber = 0;
-    convexReact.useQuery.mockReset().mockImplementation(() => {
-      queryNumber += 1;
-      return queryNumber % 2 === 1 ? controlPlane() : statuses;
-    });
-    const { rerender } = render(<DiscordControlPage />);
+    const callbacks = {
+      onSetGuildRouting: vi.fn(),
+      onSaveMarketResearch: vi.fn(),
+      onMarketResearchAction: vi.fn(),
+    };
+    const { rerender } = render(
+      <DiscordControlPageContent
+        model={controlPlane()}
+        marketResearch={[marketResearchStatus()]}
+        {...callbacks}
+      />,
+    );
     const timezone = screen.getByRole("combobox", {
       name: "Schedule timezone",
     });
@@ -184,8 +188,13 @@ describe("Discord control surface", () => {
       target: { value: "America/Puerto_Rico" },
     });
 
-    statuses = [marketResearchStatus("America/New_York")];
-    rerender(<DiscordControlPage />);
+    rerender(
+      <DiscordControlPageContent
+        model={controlPlane()}
+        marketResearch={[marketResearchStatus("America/New_York")]}
+        {...callbacks}
+      />,
+    );
 
     expect(
       screen.getByRole("combobox", { name: "Schedule timezone" }),

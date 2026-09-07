@@ -1391,6 +1391,54 @@ export function DiscordControlView({
   );
 }
 
+export function DiscordControlPageContent({
+  applicationId,
+  model,
+  marketResearch,
+  onSetGuildRouting,
+  onSaveMarketResearch,
+  onMarketResearchAction,
+}: {
+  applicationId?: string;
+  model: DiscordControlPlaneReadModel | undefined;
+  marketResearch: MarketResearchControlStatusReadModel[] | undefined;
+  onSetGuildRouting: (
+    guildId: string,
+    conversationChannelId: string | null,
+    researchLogChannelId: string | null,
+  ) => Promise<void>;
+  onSaveMarketResearch: (
+    settings: SaveMarketResearchControlSettings,
+  ) => Promise<void>;
+  onMarketResearchAction: (
+    guildId: string,
+    action: MarketResearchAction,
+    editionId?: string,
+  ) => Promise<void>;
+}) {
+  if (model === undefined || marketResearch === undefined) {
+    return (
+      <main className="discord-page">
+        <div className="loading" role="status">
+          <span aria-hidden="true" />
+          Loading Discord control…
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <DiscordControlView
+      applicationId={applicationId}
+      model={model}
+      marketResearch={marketResearch}
+      onSetGuildRouting={onSetGuildRouting}
+      onSaveMarketResearch={onSaveMarketResearch}
+      onMarketResearchAction={onMarketResearchAction}
+    />
+  );
+}
+
 export function DiscordControlPage({
   applicationId,
 }: {
@@ -1424,19 +1472,8 @@ export function DiscordControlPage({
     publicApi.marketResearch.cancelUnstarted,
   );
 
-  if (model === undefined || marketResearch === undefined) {
-    return (
-      <main className="discord-page">
-        <div className="loading" role="status">
-          <span aria-hidden="true" />
-          Loading Discord control…
-        </div>
-      </main>
-    );
-  }
-
   return (
-    <DiscordControlView
+    <DiscordControlPageContent
       applicationId={applicationId}
       model={model}
       marketResearch={marketResearch}
