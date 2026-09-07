@@ -48,8 +48,9 @@ import {
   validDiscordContent,
 } from "../content.js";
 
-const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
-const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+export const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
+export const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+export const DISCORD_GATEWAY_NATIVE_PROTOCOL = "native-v2";
 
 const operationSchema = z.enum([
   "syncGuilds",
@@ -1219,7 +1220,7 @@ export class ConvexDiscordClient {
       headers: {
         authorization: `Bearer ${this.config.convexSharedSecret}`,
         "content-type": "application/json",
-        [DISCORD_GATEWAY_PROTOCOL_HEADER]: DISCORD_GATEWAY_DURABLE_PROTOCOL,
+        [DISCORD_GATEWAY_PROTOCOL_HEADER]: DISCORD_GATEWAY_NATIVE_PROTOCOL,
       },
       body: JSON.stringify({ operation, ...payload }),
       signal: combined,

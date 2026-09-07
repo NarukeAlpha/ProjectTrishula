@@ -49,6 +49,7 @@ import { LunaConversationStore, type LunaConversationIdentity } from "./conversa
 import {
   generateNativeCompaction,
   injectNativeCheckpoint,
+  NativeCompactionError,
   type GenerateNativeCompactionOptions,
   type NativeCheckpointCompatibilityIdentity,
 } from "./native-compaction.js";
@@ -1242,6 +1243,10 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
       this.config.trishulaNativeCompactionEnabled
       && (request.profile === "frontman_plan" || request.profile === "frontman_resume")
       && request.conversation.activeCheckpointId !== undefined
+      && request.conversation.activeCheckpointId === request.durableContext.activeCheckpointId
+      && request.durableContext.activeCheckpointCompactedThroughOrdinal !== undefined
+      && request.durableContext.activeCheckpointSourceRevision !== undefined
+      && request.durableContext.activeCheckpointSourceContextHash !== undefined
       && request.durableContext.nativeCheckpoint !== undefined
     ) {
       nativeTurnState.enabled = true;
@@ -1253,7 +1258,10 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
         guildId: request.conversation.guildId,
         conversationId: request.conversation.conversationId,
         epoch: request.conversation.epoch,
-        sourceRevision: request.conversation.revision,
+        compactedThroughOrdinal:
+          request.durableContext.activeCheckpointCompactedThroughOrdinal,
+        sourceRevision: request.durableContext.activeCheckpointSourceRevision,
+        sourceContextHash: request.durableContext.activeCheckpointSourceContextHash,
         personalityVersion: request.conversation.personalityVersion,
         systemPromptHash: request.conversation.systemPromptHash,
         capabilityProfileHash: request.conversation.capabilityProfileHash,
@@ -1317,7 +1325,10 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
             });
             session.agent.reset();
             if (attempt === "repair") session.setActiveToolsByName([]);
-            return runPrompt();
+            const fallbackPromptOptions = { ...promptOptions };
+            if (images.length > 0) fallbackPromptOptions.images = images;
+            await session.prompt(prompt, fallbackPromptOptions);
+            return assistantText(session, signal);
           }
         },
         () => trustedResearchChart,
@@ -1337,8 +1348,20 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
             instructions: portableCheckpointSystemPrompt,
           };
           if (signal !== undefined) nativeOptions.signal = signal;
-          const nativeCompaction = await generateNativeCompaction(nativeOptions);
-          result = { ...result, nativeCompaction };
+          try {
+            const nativeCompaction = await generateNativeCompaction(nativeOptions);
+            result = { ...result, nativeCompaction };
+          } catch (error) {
+            if (
+              signal?.aborted
+              || (error instanceof NativeCompactionError && error.code === "aborted")
+            ) throw error;
+            this.logger?.warn("discord_native_compaction_generation_fallback", {
+              requestId: request.requestId,
+              checkpointId: request.conversation.activeCheckpointId ?? "none",
+              reason: "native_generation_failed",
+            });
+          }
         }
       }
       return result;
