@@ -14,8 +14,33 @@ import {
   type TriageRequest,
   type TriageResponse,
 } from "../contracts.js";
+import {
+  frontmanPlanRequestSchema,
+  frontmanPlanResponseSchema,
+  frontmanResumeRequestSchema,
+  frontmanResumeResponseSchema,
+  portableCheckpointRequestSchema,
+  portableCheckpointResponseSchema,
+  solResearchRequestSchema,
+  solResearchResponseSchema,
+  type FrontmanPlanRequest,
+  type FrontmanPlanResponse,
+  type FrontmanResumeRequest,
+  type FrontmanResumeResponse,
+  type PortableCheckpointRequest,
+  type PortableCheckpointResponse,
+  type SolResearchRequest,
+  type SolResearchResponse,
+} from "../personality-contracts.js";
 
-type AgentRequest = TriageRequest | ResearchRequest | ReplyRequest;
+type AgentRequest =
+  | TriageRequest
+  | ResearchRequest
+  | ReplyRequest
+  | FrontmanPlanRequest
+  | SolResearchRequest
+  | FrontmanResumeRequest
+  | PortableCheckpointRequest;
 
 const JOB_POLL_INTERVAL_MS = 1_000;
 const JOB_REQUEST_RETRY_DELAYS_MS = [250, 1_000, 2_500] as const;
@@ -138,6 +163,17 @@ export class PiAgentClient {
     );
   }
 
+  async frontmanPlan(
+    input: FrontmanPlanRequest,
+    signal?: AbortSignal,
+  ): Promise<FrontmanPlanResponse> {
+    return this.request(
+      frontmanPlanRequestSchema.parse(input),
+      frontmanPlanResponseSchema,
+      signal,
+    );
+  }
+
   async research(
     input: ResearchRequest,
     signal?: AbortSignal,
@@ -149,6 +185,17 @@ export class PiAgentClient {
     );
   }
 
+  async solResearch(
+    input: SolResearchRequest,
+    signal?: AbortSignal,
+  ): Promise<SolResearchResponse> {
+    return this.request(
+      solResearchRequestSchema.parse(input),
+      solResearchResponseSchema,
+      signal,
+    );
+  }
+
   async reply(
     input: ReplyRequest,
     signal?: AbortSignal,
@@ -156,6 +203,28 @@ export class PiAgentClient {
     return this.request(
       replyRequestSchema.parse(input),
       replyResponseSchema,
+      signal,
+    );
+  }
+
+  async frontmanResume(
+    input: FrontmanResumeRequest,
+    signal?: AbortSignal,
+  ): Promise<FrontmanResumeResponse> {
+    return this.request(
+      frontmanResumeRequestSchema.parse(input),
+      frontmanResumeResponseSchema,
+      signal,
+    );
+  }
+
+  async portableCheckpoint(
+    input: PortableCheckpointRequest,
+    signal?: AbortSignal,
+  ): Promise<PortableCheckpointResponse> {
+    return this.request(
+      portableCheckpointRequestSchema.parse(input),
+      portableCheckpointResponseSchema,
       signal,
     );
   }

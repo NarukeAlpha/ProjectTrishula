@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-conditional-empty-object-spread -- Exact optional properties require omission when Chart-img is not configured. */
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import express, { type Express } from "express";
@@ -8,7 +9,10 @@ import {
   type DiscordGatewayHealth,
 } from "./discord/gateway.js";
 import { ChartImgClient } from "./media/chart-img.js";
+import { ConvexMarketResearchPublicationClient } from "./market-research/convex-client.js";
+import { ForumPublisher } from "./market-research/forum-publisher.js";
 import { ChannelLoopOrchestrator } from "./orchestrator/channel-loop.js";
+import { PortableCheckpointCoordinator } from "./orchestrator/portable-checkpoints.js";
 import {
   OutboxDispatcher,
   type OutboxDispatcherDependencies,
@@ -21,18 +25,27 @@ export interface ServiceHealthResult {
   body: {
     status: "ok" | "starting" | "not_configured";
     discord: DiscordGatewayHealth;
+    marketResearch: { enabled: boolean; chartsEnabled: boolean };
   };
 }
 
 export function serviceHealth(
   health: DiscordGatewayHealth,
+  marketResearch: { enabled: boolean; chartsEnabled: boolean } = { enabled: false, chartsEnabled: false },
 ): ServiceHealthResult {
   const status = !health.configured
     ? ("not_configured" as const)
     : health.connected
       ? ("ok" as const)
       : ("starting" as const);
-  return { statusCode: 200, body: { status, discord: health } };
+  return { statusCode: 200, body: { status, discord: health, marketResearch } };
+}
+
+export function pollMarketResearchSafely(
+  poll: () => Promise<boolean>,
+  onFailure: () => void,
+): void {
+  void poll().catch(onFailure);
 }
 
 export class DiscordGatewayService {
@@ -41,7 +54,9 @@ export class DiscordGatewayService {
   private readonly convex: ConvexDiscordClient;
   private readonly orchestrator: ChannelLoopOrchestrator;
   private readonly gateway: DiscordGateway;
+  private readonly checkpoints: PortableCheckpointCoordinator;
   private readonly outbox: OutboxDispatcher;
+  private readonly marketResearchPublisher: ForumPublisher;
   private readonly app: Express;
   private readonly timers: NodeJS.Timeout[] = [];
   private server: Server | null = null;
@@ -50,11 +65,17 @@ export class DiscordGatewayService {
   constructor(private readonly config: DiscordGatewayConfig) {
     this.convex = new ConvexDiscordClient(config, this.instanceId);
     const pi = new PiAgentClient(config);
+    this.checkpoints = new PortableCheckpointCoordinator({
+      enabled: config.portableCheckpointsEnabled,
+      convex: this.convex,
+      pi,
+    });
     this.orchestrator = new ChannelLoopOrchestrator({
       convex: this.convex,
       pi,
       workerId: this.workerId,
       heartbeatIntervalMs: config.leaseHeartbeatIntervalMs,
+      durableConversationsEnabled: config.durableConversationsEnabled,
     });
     this.gateway = new DiscordGateway({
       config,
@@ -77,6 +98,13 @@ export class DiscordGatewayService {
       outboxDependencies.chartImages = chartImages;
     }
     this.outbox = new OutboxDispatcher(outboxDependencies);
+    this.marketResearchPublisher = new ForumPublisher({
+      client: this.gateway.client,
+      convex: new ConvexMarketResearchPublicationClient(config, config.discordOwnerId),
+      workerId: `${this.workerId}-market-research`,
+      chartsEnabled: config.marketResearchChartsEnabled,
+      ...(chartImages === undefined ? {} : { chartImages }),
+    });
     this.app = this.createHttpApp();
   }
 
@@ -106,6 +134,7 @@ export class DiscordGatewayService {
   async stop(): Promise<void> {
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
+    await this.checkpoints.dispose();
     await this.gateway.stop();
     if (this.server !== null) {
       const server = this.server;
@@ -139,6 +168,21 @@ export class DiscordGatewayService {
         });
     }, this.config.leaseHeartbeatIntervalMs);
     this.timers.push(loopPoller, outboxPoller, syncPoller, heartbeatPoller);
+    if (this.config.marketResearchEnabled) {
+      const pollMarketResearch = () => {
+        pollMarketResearchSafely(() => this.marketResearchPublisher.poll(), () => {
+          logger.error("Market-research publication polling failed.", {
+            code: "market_research_poll_failed",
+          });
+        });
+      };
+      const marketResearchPoller = setInterval(
+        pollMarketResearch,
+        this.config.marketResearchPollIntervalMs,
+      );
+      this.timers.push(marketResearchPoller);
+      pollMarketResearch();
+    }
     void this.pollWork();
   }
 
@@ -154,6 +198,7 @@ export class DiscordGatewayService {
         });
       }
       await this.outbox.dispatch(work.replies);
+      this.checkpoints.schedule();
     } catch {
       logger.error("Runnable Discord work polling failed.", {
         code: "work_poll_failed",
@@ -167,7 +212,10 @@ export class DiscordGatewayService {
     const app = express();
     app.disable("x-powered-by");
     app.get("/health", (_request, response) => {
-      const result = serviceHealth(this.gateway.health());
+      const result = serviceHealth(this.gateway.health(), {
+        enabled: this.config.marketResearchEnabled,
+        chartsEnabled: this.config.marketResearchChartsEnabled,
+      });
       response.status(result.statusCode).json(result.body);
     });
     app.get("/ready", (_request, response) => {

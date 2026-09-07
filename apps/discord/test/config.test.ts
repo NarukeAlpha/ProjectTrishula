@@ -19,12 +19,38 @@ describe("loadConfig", () => {
     expect(config.piServiceUrl).toBe("http://pi.railway.internal:8080");
     expect(config.discordBotToken).toBeUndefined();
     expect(config.chartImgApiKey).toBeUndefined();
+    expect(config.marketResearchEnabled).toBe(false);
+    expect(config.marketResearchChartsEnabled).toBe(false);
     expect(config.convexSharedSecret).toBe(
       baseEnvironment.CONVEX_DISCORD_SHARED_SECRET,
     );
     expect(config.piSharedSecret).toBe(
       baseEnvironment.PI_DISCORD_SHARED_SECRET,
     );
+    expect(config.durableConversationsEnabled).toBe(true);
+    expect(config.portableCheckpointsEnabled).toBe(false);
+  });
+
+  it("parses the portable-checkpoint rollout switch independently", () => {
+    expect(loadConfig({
+      ...baseEnvironment,
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
+    }).portableCheckpointsEnabled).toBe(true);
+    expect(() => loadConfig({
+      ...baseEnvironment,
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "1",
+    })).toThrow("TRISHULA_PORTABLE_CHECKPOINTS_ENABLED");
+  });
+
+  it("parses the durable-conversation rollback switch independently", () => {
+    expect(loadConfig({
+      ...baseEnvironment,
+      TRISHULA_DURABLE_CONVERSATIONS_ENABLED: "false",
+    }).durableConversationsEnabled).toBe(false);
+    expect(() => loadConfig({
+      ...baseEnvironment,
+      TRISHULA_DURABLE_CONVERSATIONS_ENABLED: "1",
+    })).toThrow("TRISHULA_DURABLE_CONVERSATIONS_ENABLED");
   });
 
   it("loads a CHART-IMG key without exposing it through an error", () => {

@@ -120,10 +120,33 @@ export const marketChartSpecSchema = z
     }
   });
 
+export const providerMarketChartSpecSchema = z
+  .object({
+    symbol: z.string().trim().min(1).max(20).regex(/^[A-Za-z0-9.^=-]+$/),
+    title: z.string().trim().min(1).max(64).optional(),
+    tradingViewSymbol: tradingViewSymbolSchema,
+    interval: marketChartIntervalSchema.optional(),
+    range: marketChartRangeSchema.optional(),
+    style: marketChartStyleSchema.optional(),
+    includeVolume: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((chart, context) => {
+    if (chart.interval !== undefined && chart.range !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["range"],
+        message: "Choose a chart interval or range, not both.",
+      });
+    }
+  });
+
 export type MarketChartInterval = z.infer<typeof marketChartIntervalSchema>;
 export type MarketChartRange = z.infer<typeof marketChartRangeSchema>;
 export type MarketChartStyle = z.infer<typeof marketChartStyleSchema>;
 export type MarketChartSpec = z.infer<typeof marketChartSpecSchema>;
+export type ProviderMarketChartSpec = z.infer<typeof providerMarketChartSpecSchema>;
+export type RenderableMarketChartSpec = MarketChartSpec | ProviderMarketChartSpec;
 
 export interface RenderedMarketChart {
   attachment: Buffer;
