@@ -535,9 +535,10 @@ export class MarketResearchExaClient {
           (requestSignal, markProviderStarted) => this.withCostGate(
             () => this.evaluationSemaphore.use(() => {
               this.assertCostAvailable();
+              const boundedRequest = this.financialDatasetRequestWithinBudget(request);
               markProviderStarted();
               return this.paidRequest("financial_datasets", requestSignal,
-                () => this.transport.runFinancialDataset?.(request, requestSignal)
+                () => this.transport.runFinancialDataset?.(boundedRequest, requestSignal)
                   ?? Promise.reject(new Error("exa_invalid_request")));
             }, requestSignal),
             requestSignal,
@@ -572,6 +573,20 @@ export class MarketResearchExaClient {
     if (this.options.maximumCostUsd !== undefined && this.accruedCostUsd > this.options.maximumCostUsd) {
       this.options.logger.warn("market_research_exa_cost_cap_reached", { code: "exa_budget_exhausted" });
     }
+  }
+
+  private financialDatasetRequestWithinBudget(
+    request: FinancialDatasetEvaluationRequest,
+  ): FinancialDatasetEvaluationRequest {
+    const editionMaximum = this.options.maximumCostUsd;
+    if (editionMaximum === undefined) return request;
+    return {
+      ...request,
+      maxCostDollars: Math.min(
+        request.maxCostDollars,
+        editionMaximum - this.accruedCostUsd,
+      ),
+    };
   }
 
   private recordCostEvent(event: ExaCostEvent): void {

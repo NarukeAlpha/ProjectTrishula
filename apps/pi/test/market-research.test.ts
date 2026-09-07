@@ -307,6 +307,37 @@ describe("official Exa SDK boundary", () => {
     expect(runFinancialDataset).toHaveBeenCalledOnce();
   });
 
+  it("limits Financial Datasets to the remaining edition cost budget", async () => {
+    const search = vi.fn().mockResolvedValue({
+      requestId: "search-before-financial-datasets",
+      costDollars: { total: 0.75 },
+      results: [],
+    });
+    const runFinancialDataset = vi.fn().mockResolvedValue({
+      id: "bounded-financial-datasets",
+      costDollars: { total: 0.25 },
+      output: {},
+    });
+    const exa = client(
+      { search, getContents: vi.fn(), runFinancialDataset },
+      { maximumCostUsd: 1 },
+    );
+    if (!slot) throw new Error("Missing plan slot.");
+    await exa.searchNews(slot);
+
+    await exa.runFinancialDatasetEvaluation({
+      evaluationId: "remaining-edition-budget",
+      query: "bounded evaluation",
+      outputSchema: {},
+      maxCostDollars: 1,
+    });
+
+    expect(runFinancialDataset.mock.calls[0]?.[0]).toMatchObject({
+      maxCostDollars: 0.25,
+    });
+    expect(exa.usage().costUsd).toBe(1);
+  });
+
   it("retains Financial Datasets permits and records late costs without retrying abandoned work", async () => {
     const provider = Promise.withResolvers<unknown>();
     const runFinancialDataset = vi.fn().mockReturnValue(provider.promise);
