@@ -58,17 +58,18 @@ const outputItemEventSchema = z.object({
   response_id: z.string().min(1).optional(),
   item: z.json(),
 }).passthrough();
+const terminalUsageSchema = z.object({
+  input_tokens: z.number().int().positive(),
+  output_tokens: z.number().int().nonnegative(),
+  total_tokens: z.number().int().positive(),
+}).passthrough();
 const terminalEventSchema = z.object({
   type: z.enum(["response.completed", "response.done"]),
   response: z.object({
     id: z.string().min(1).optional(),
     status: z.literal("completed"),
     output: z.array(z.json()).optional(),
-    usage: z.object({
-      input_tokens: z.number().int().positive(),
-      output_tokens: z.number().int().nonnegative(),
-      total_tokens: z.number().int().positive(),
-    }).passthrough(),
+    usage: terminalUsageSchema,
   }).passthrough(),
 }).passthrough();
 const failedEventSchema = z.object({
@@ -97,6 +98,111 @@ export type NativeCompactionErrorCode =
   | "provider_request_failed"
   | "response_incomplete"
   | "response_invalid";
+
+export type NativeCompactionProbeFailureCategory =
+  | "body_missing"
+  | "body_oversize"
+  | "body_read_failed"
+  | "created_event_invalid"
+  | "created_event_order_invalid"
+  | "event_after_done_marker"
+  | "event_after_terminal"
+  | "event_envelope_invalid"
+  | "output_event_duplicate"
+  | "output_event_invalid"
+  | "output_item_not_compaction"
+  | "output_response_id_mismatch"
+  | "provider_failure_event"
+  | "replacement_history_invalid"
+  | "sse_duplicate_done_marker"
+  | "sse_event_json_invalid"
+  | "terminal_before_output"
+  | "terminal_event_invalid"
+  | "terminal_missing"
+  | "terminal_output_mismatch"
+  | "terminal_response_id_mismatch"
+  | "terminal_status_invalid"
+  | "terminal_usage_inconsistent"
+  | "terminal_usage_invalid";
+
+export interface NativeCompactionProbeEvidence {
+  bodyRead: "complete" | "missing" | "oversize" | "read_failed";
+  dataEventCount: number;
+  doneMarkerCount: number;
+  createdEventCount: number;
+  outputItemDoneEventCount: number;
+  compactionOutputItemCount: number;
+  otherOutputItemCount: number;
+  completedEventCount: number;
+  doneEventCount: number;
+  failureEventCount: number;
+  otherEventCount: number;
+  result: "accepted" | "rejected";
+  failureCategory?: NativeCompactionProbeFailureCategory;
+}
+
+interface NativeCompactionProbeState {
+  bodyRead?: NativeCompactionProbeEvidence["bodyRead"];
+  dataEventCount: number;
+  doneMarkerCount: number;
+  createdEventCount: number;
+  outputItemDoneEventCount: number;
+  compactionOutputItemCount: number;
+  otherOutputItemCount: number;
+  completedEventCount: number;
+  doneEventCount: number;
+  failureEventCount: number;
+  otherEventCount: number;
+  failureCategory?: NativeCompactionProbeFailureCategory;
+}
+
+function nativeCompactionProbeState(): NativeCompactionProbeState {
+  return {
+    dataEventCount: 0,
+    doneMarkerCount: 0,
+    createdEventCount: 0,
+    outputItemDoneEventCount: 0,
+    compactionOutputItemCount: 0,
+    otherOutputItemCount: 0,
+    completedEventCount: 0,
+    doneEventCount: 0,
+    failureEventCount: 0,
+    otherEventCount: 0,
+  };
+}
+
+function rejectNativeCompactionResponse(
+  state: NativeCompactionProbeState,
+  failureCategory: NativeCompactionProbeFailureCategory,
+  code: NativeCompactionErrorCode = "response_invalid",
+): never {
+  state.failureCategory = failureCategory;
+  throw new NativeCompactionError(code);
+}
+
+function nativeCompactionProbeEvidence(
+  state: NativeCompactionProbeState,
+  result: NativeCompactionProbeEvidence["result"],
+): NativeCompactionProbeEvidence {
+  const evidence: NativeCompactionProbeEvidence = {
+    bodyRead: state.bodyRead ?? "read_failed",
+    dataEventCount: state.dataEventCount,
+    doneMarkerCount: state.doneMarkerCount,
+    createdEventCount: state.createdEventCount,
+    outputItemDoneEventCount: state.outputItemDoneEventCount,
+    compactionOutputItemCount: state.compactionOutputItemCount,
+    otherOutputItemCount: state.otherOutputItemCount,
+    completedEventCount: state.completedEventCount,
+    doneEventCount: state.doneEventCount,
+    failureEventCount: state.failureEventCount,
+    otherEventCount: state.otherEventCount,
+    result,
+  };
+  if (state.failureCategory !== undefined) {
+    evidence.failureCategory = state.failureCategory;
+  }
+  return evidence;
+}
 
 export class NativeCompactionError extends Error {
   constructor(readonly code: NativeCompactionErrorCode) {
@@ -269,7 +375,10 @@ function isPortableSummarySeed(
   }
 }
 
-function parseSseData(text: string): unknown[] {
+function parseSseData(
+  text: string,
+  state: NativeCompactionProbeState,
+): unknown[] {
   const events: unknown[] = [];
   let ended = false;
   for (const block of text.replaceAll("\r\n", "\n").split("\n\n")) {
@@ -280,78 +389,155 @@ function parseSseData(text: string): unknown[] {
       .trim();
     if (data === "") continue;
     if (data === "[DONE]") {
-      if (ended) throw new NativeCompactionError("response_invalid");
+      state.doneMarkerCount += 1;
+      if (ended) {
+        rejectNativeCompactionResponse(state, "sse_duplicate_done_marker");
+      }
       ended = true;
       continue;
     }
-    if (ended) throw new NativeCompactionError("response_invalid");
+    if (ended) rejectNativeCompactionResponse(state, "event_after_done_marker");
+    state.dataEventCount += 1;
     try {
       events.push(JSON.parse(data));
     } catch {
-      throw new NativeCompactionError("response_invalid");
+      rejectNativeCompactionResponse(state, "sse_event_json_invalid");
     }
   }
   return events;
 }
 
+function recordNativeCompactionEvent(
+  eventType: string,
+  event: z.infer<typeof sseEventSchema>,
+  state: NativeCompactionProbeState,
+): void {
+  switch (eventType) {
+    case "response.created":
+      state.createdEventCount += 1;
+      return;
+    case "response.output_item.done": {
+      state.outputItemDoneEventCount += 1;
+      const outputItem = z.object({
+        item: z.object({ type: z.string() }).passthrough(),
+      }).passthrough().safeParse(event);
+      if (outputItem.success && outputItem.data.item.type === "compaction") {
+        state.compactionOutputItemCount += 1;
+      } else {
+        state.otherOutputItemCount += 1;
+      }
+      return;
+    }
+    case "response.completed":
+      state.completedEventCount += 1;
+      return;
+    case "response.done":
+      state.doneEventCount += 1;
+      return;
+    case "error":
+    case "response.failed":
+    case "response.incomplete":
+      state.failureEventCount += 1;
+      return;
+    default:
+      state.otherEventCount += 1;
+  }
+}
+
 function responseArtifact(
   responseText: string,
   input: readonly JsonValue[],
+  state: NativeCompactionProbeState,
 ): Pick<DiscordNativeCompactionArtifact, "replacementHistory" | "usage"> {
   let createdResponseId: string | undefined;
   let compactionEvent: z.infer<typeof outputItemEventSchema> | undefined;
   let terminal: z.infer<typeof terminalEventSchema> | undefined;
-  for (const rawEvent of parseSseData(responseText)) {
-    if (terminal !== undefined) throw new NativeCompactionError("response_invalid");
+  for (const rawEvent of parseSseData(responseText, state)) {
+    if (terminal !== undefined) {
+      rejectNativeCompactionResponse(state, "event_after_terminal");
+    }
     const event = sseEventSchema.safeParse(rawEvent);
-    if (!event.success) throw new NativeCompactionError("response_invalid");
+    if (!event.success) {
+      rejectNativeCompactionResponse(state, "event_envelope_invalid");
+    }
+    recordNativeCompactionEvent(event.data.type, event.data, state);
     if (failedEventSchema.safeParse(rawEvent).success) {
-      throw new NativeCompactionError("provider_request_failed");
+      rejectNativeCompactionResponse(
+        state,
+        "provider_failure_event",
+        "provider_request_failed",
+      );
     }
     if (event.data.type === "response.created") {
       const created = createdEventSchema.safeParse(rawEvent);
-      if (!created.success) throw new NativeCompactionError("response_invalid");
+      if (!created.success) {
+        rejectNativeCompactionResponse(state, "created_event_invalid");
+      }
       if (createdResponseId !== undefined || compactionEvent !== undefined) {
-        throw new NativeCompactionError("response_invalid");
+        rejectNativeCompactionResponse(state, "created_event_order_invalid");
       }
       createdResponseId = created.data.response.id;
       continue;
     }
     if (event.data.type === "response.output_item.done") {
       const output = outputItemEventSchema.safeParse(rawEvent);
+      if (!output.success) {
+        rejectNativeCompactionResponse(state, "output_event_invalid");
+      }
+      if (compactionEvent !== undefined) {
+        rejectNativeCompactionResponse(state, "output_event_duplicate");
+      }
+      if (!compactionItemSchema.safeParse(output.data.item).success) {
+        rejectNativeCompactionResponse(state, "output_item_not_compaction");
+      }
       if (
-        !output.success
-        || compactionEvent !== undefined
-        || !compactionItemSchema.safeParse(output.data.item).success
-        || (
-          createdResponseId !== undefined
-          && output.data.response_id !== undefined
-          && output.data.response_id !== createdResponseId
-        )
+        createdResponseId !== undefined
+        && output.data.response_id !== undefined
+        && output.data.response_id !== createdResponseId
       ) {
-        throw new NativeCompactionError("response_invalid");
+        rejectNativeCompactionResponse(state, "output_response_id_mismatch");
       }
       compactionEvent = output.data;
       continue;
     }
     if (event.data.type === "response.completed" || event.data.type === "response.done") {
       const completion = terminalEventSchema.safeParse(rawEvent);
-      if (!completion.success) throw new NativeCompactionError("response_invalid");
-      if (compactionEvent === undefined) throw new NativeCompactionError("response_invalid");
+      if (!completion.success) {
+        const terminalStatus = z.object({
+          response: z.object({ status: z.unknown().optional() }).passthrough(),
+        }).passthrough().safeParse(rawEvent);
+        if (terminalStatus.success && terminalStatus.data.response.status !== "completed") {
+          rejectNativeCompactionResponse(state, "terminal_status_invalid");
+        }
+        const terminalUsage = z.object({
+          response: z.object({
+            usage: terminalUsageSchema,
+          }).passthrough(),
+        }).passthrough().safeParse(rawEvent);
+        if (!terminalUsage.success) {
+          rejectNativeCompactionResponse(state, "terminal_usage_invalid");
+        }
+        rejectNativeCompactionResponse(state, "terminal_event_invalid");
+      }
+      if (compactionEvent === undefined) {
+        rejectNativeCompactionResponse(state, "terminal_before_output");
+      }
       terminal = completion.data;
       continue;
     }
   }
-  if (terminal === undefined) throw new NativeCompactionError("response_incomplete");
+  if (terminal === undefined) {
+    rejectNativeCompactionResponse(state, "terminal_missing", "response_incomplete");
+  }
   if (
     createdResponseId !== undefined
     && terminal.response.id !== createdResponseId
-  ) throw new NativeCompactionError("response_invalid");
+  ) rejectNativeCompactionResponse(state, "terminal_response_id_mismatch");
   if (
     compactionEvent!.response_id !== undefined
     && terminal.response.id !== undefined
     && compactionEvent!.response_id !== terminal.response.id
-  ) throw new NativeCompactionError("response_invalid");
+  ) rejectNativeCompactionResponse(state, "terminal_response_id_mismatch");
   const terminalOutput = terminal.response.output;
   if (terminalOutput !== undefined) {
     const outputIndex = compactionEvent!.output_index;
@@ -365,16 +551,22 @@ function responseArtifact(
       || linkedItem.length !== 1
       || linkedItem[0] === undefined
       || !isDeepStrictEqual(linkedItem[0], compactionEvent!.item)
-    ) throw new NativeCompactionError("response_invalid");
+    ) rejectNativeCompactionResponse(state, "terminal_output_mismatch");
   }
   const usage = terminal.response.usage;
   if (usage.total_tokens !== usage.input_tokens + usage.output_tokens) {
-    throw new NativeCompactionError("response_invalid");
+    rejectNativeCompactionResponse(state, "terminal_usage_inconsistent");
   }
-  const replacementHistory = validateNativeReplacementHistory([
-    ...retainRecentUserMessages(input),
-    compactionEvent!.item,
-  ]);
+  let replacementHistory: ReturnType<typeof validateNativeReplacementHistory>;
+  try {
+    replacementHistory = validateNativeReplacementHistory([
+      ...retainRecentUserMessages(input),
+      compactionEvent!.item,
+    ]);
+  } catch (error) {
+    state.failureCategory = "replacement_history_invalid";
+    throw error;
+  }
   return {
     replacementHistory,
     usage: {
@@ -385,22 +577,37 @@ function responseArtifact(
   };
 }
 
-async function boundedResponseText(response: Response): Promise<string> {
-  if (response.body === null) throw new NativeCompactionError("response_invalid");
+async function boundedResponseText(
+  response: Response,
+  state: NativeCompactionProbeState,
+): Promise<string> {
+  if (response.body === null) {
+    state.bodyRead = "missing";
+    rejectNativeCompactionResponse(state, "body_missing");
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let bytes = 0;
   let text = "";
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    bytes += next.value.byteLength;
-    if (bytes > DISCORD_NATIVE_COMPACTION_SSE_MAX_BYTES) {
-      await reader.cancel();
-      throw new NativeCompactionError("artifact_oversize");
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > DISCORD_NATIVE_COMPACTION_SSE_MAX_BYTES) {
+        state.bodyRead = "oversize";
+        state.failureCategory = "body_oversize";
+        await reader.cancel();
+        throw new NativeCompactionError("artifact_oversize");
+      }
+      text += decoder.decode(next.value, { stream: true });
     }
-    text += decoder.decode(next.value, { stream: true });
+  } catch (error) {
+    if (error instanceof NativeCompactionError) throw error;
+    state.bodyRead = "read_failed";
+    rejectNativeCompactionResponse(state, "body_read_failed");
   }
+  state.bodyRead = "complete";
   return text + decoder.decode();
 }
 
@@ -410,8 +617,9 @@ type CapturedCompactionResponse =
 
 function captureCompactionResponse(
   response: Response,
+  state: NativeCompactionProbeState,
 ): Promise<CapturedCompactionResponse> {
-  return boundedResponseText(response).then(
+  return boundedResponseText(response, state).then(
     (text): CapturedCompactionResponse => ({ ok: true, text }),
     (error): CapturedCompactionResponse => ({
       ok: false,
@@ -441,6 +649,18 @@ export interface GenerateNativeCompactionOptions {
   instructions: string;
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
+  onProbeEvidence?: (evidence: NativeCompactionProbeEvidence) => void;
+}
+
+function emitNativeCompactionProbeEvidence(
+  observer: GenerateNativeCompactionOptions["onProbeEvidence"],
+  evidence: NativeCompactionProbeEvidence,
+): void {
+  try {
+    observer?.(evidence);
+  } catch {
+    // Probe diagnostics must not change the production compaction result.
+  }
 }
 
 export async function generateNativeCompaction(
@@ -454,6 +674,7 @@ export async function generateNativeCompaction(
     throw new NativeCompactionError("provider_contract_incompatible");
   }
   const input = nativeCompactionInput(options.request);
+  const probeState = nativeCompactionProbeState();
   let requestCaptured = false;
   let capturedResponse: Promise<CapturedCompactionResponse> | undefined;
   const upstreamFetch = options.fetch ?? globalThis.fetch;
@@ -484,7 +705,9 @@ export async function generateNativeCompaction(
       fetch: async (request, init) => {
         codexEndpoint(request);
         const response = await upstreamFetch(request, init);
-        if (response.ok) capturedResponse = captureCompactionResponse(response.clone());
+        if (response.ok) {
+          capturedResponse = captureCompactionResponse(response.clone(), probeState);
+        }
         return response;
       },
     };
@@ -510,8 +733,27 @@ export async function generateNativeCompaction(
       throw new NativeCompactionError("provider_contract_incompatible");
     }
     const captured = await capturedResponse;
-    if (!captured.ok) throw new NativeCompactionError(captured.code);
-    const parsed = responseArtifact(captured.text, input);
+    if (!captured.ok) {
+      emitNativeCompactionProbeEvidence(
+        options.onProbeEvidence,
+        nativeCompactionProbeEvidence(probeState, "rejected"),
+      );
+      throw new NativeCompactionError(captured.code);
+    }
+    let parsed: ReturnType<typeof responseArtifact>;
+    try {
+      parsed = responseArtifact(captured.text, input, probeState);
+    } catch (error) {
+      emitNativeCompactionProbeEvidence(
+        options.onProbeEvidence,
+        nativeCompactionProbeEvidence(probeState, "rejected"),
+      );
+      throw error;
+    }
+    emitNativeCompactionProbeEvidence(
+      options.onProbeEvidence,
+      nativeCompactionProbeEvidence(probeState, "accepted"),
+    );
     const historyBytes = serializedBytes(parsed.replacementHistory);
     return discordNativeCompactionArtifactSchema.parse({
       schemaVersion: 1,
