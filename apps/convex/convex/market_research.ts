@@ -15,6 +15,10 @@ import { actorFromIdentity } from "./lib/auth.js";
 import { normalizeDiscordForumCapabilities } from "./lib/discord_contract.js";
 import { canonicalJson, sha256Hex } from "./lib/canonical_json.js";
 import {
+  commitThesisUpdates, loadThesisMemory, thesisSnapshot, thesisUpdatesMatchContext, thesisUpdatesSchema,
+  type ThesisSnapshot,
+} from "./lib/market_research_theses.js";
+import {
   MARKET_RESEARCH_DELIVERY_LEASE_MS,
   MARKET_RESEARCH_DEFAULT_DATA_PROVIDER,
   MARKET_RESEARCH_EVIDENCE_RETENTION_MS,
@@ -700,6 +704,7 @@ async function createEdition(
     configurationRevision: preferences.revision,
     configurationSnapshotHash,
     configurationSnapshot: preferences,
+    thesisMemory: await loadThesisMemory(ctx, preferences),
     promptVersion: preferences.promptVersion,
     sourcePolicyVersion: preferences.sourcePolicyVersion,
     generation: 0,
@@ -771,6 +776,7 @@ function jobRequest(
       : "collecting" as const,
     configurationSnapshotHash: edition.configurationSnapshotHash,
     preferences: toPiPreferences(edition.configurationSnapshot),
+    thesisMemory: edition.thesisMemory ?? [],
     exaUsage,
     retainedEvidenceIds: [...new Set([...edition.sessionSourceIds, ...retainedEvidenceIds])].slice(0, 500),
     session: {
@@ -803,6 +809,7 @@ function previewJobRequest(preview: Doc<"marketResearchPreviews">, exaUsage: Exa
     resumeFrom: "collecting" as const,
     configurationSnapshotHash: preview.configurationSnapshotHash,
     preferences: toPiPreferences(preview.configurationSnapshot),
+    thesisMemory: preview.thesisMemory ?? [],
     exaUsage,
     retainedEvidenceIds: preview.sessionSourceIds,
     session: {
@@ -1153,6 +1160,18 @@ export const saveControlSettings = mutation({
   },
 });
 
+export const getThesisMemory = query({
+  args: { guildId: v.string() },
+  handler: async (ctx, args) => {
+    const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const guildId = requireId(args.guildId, "guildId");
+    const notes = await ctx.db.query("marketResearchTheses")
+      .withIndex("by_owner_guild_symbol", (index) => index.eq("ownerId", actor.id).eq("guildId", guildId))
+      .collect();
+    return notes.map((note) => ({ ...thesisSnapshot(note), history: note.history }));
+  },
+});
+
 export const getStatus = query({
   args: { guildId: v.string() },
   handler: async (ctx, args) => {
@@ -1267,6 +1286,7 @@ export const manualTrigger = mutation({
         guildId: args.guildId,
         configurationSnapshotHash: preferences.configurationSnapshotHash,
         configurationSnapshot: frozenPreferences,
+        thesisMemory: await loadThesisMemory(ctx, frozenPreferences),
         requestedAt: now,
         scheduledFor: decision.scheduledFor,
         sessionType: session.sessionType,
@@ -2184,6 +2204,7 @@ const piResultRecordSchema = z.object({
   exaRequestCount: z.number().int().nonnegative().max(100),
   exaCostUsd: z.number().finite().nonnegative().max(1_000),
   completedAt: strictIsoDateTime,
+  thesisUpdates: thesisUpdatesSchema.optional(),
 }).strict().superRefine((value, context) => {
   const operationalUnavailableEdition = value.edition.editionLabel === "Data unavailable"
     && value.evidence.evidence.some((item) =>
@@ -2235,6 +2256,7 @@ function validateResult(result: unknown): {
   chartRequests: PiChartRequest[];
   exaRequestCount: number;
   exaCostUsd: number;
+  thesisUpdates: z.infer<typeof thesisUpdatesSchema>;
 } {
   if (serializedUtf8Bytes(result) > MARKET_RESEARCH_MAX_RESULT_BYTES) throw new Error("composition_schema_invalid");
   const parsed = piResultRecordSchema.safeParse(result);
@@ -2252,12 +2274,14 @@ function validateResult(result: unknown): {
     chartRequests: parsed.data.edition.chartRequests,
     exaRequestCount: parsed.data.exaRequestCount,
     exaCostUsd: parsed.data.exaCostUsd,
+    thesisUpdates: parsed.data.thesisUpdates ?? [],
   };
 }
 
 function resultMatchesFrozenConfiguration(
   result: ReturnType<typeof validateResult>,
   configuration: Preferences,
+  thesisMemory: ThesisSnapshot[] = [],
 ): boolean {
   if (
     result.evidence.sourcePolicyVersion !== configuration.sourcePolicyVersion
@@ -2275,8 +2299,9 @@ function resultMatchesFrozenConfiguration(
     || result.chartRequests.length > configuration.maximumCharts
   ) return false;
   const durableThesisSymbols = new Set(configuration.durableTheses
-    .filter((thesis) => thesis.status === "active")
+    .filter((thesis) => thesis.status !== "expired")
     .map((thesis) => thesis.symbol));
+  for (const thesis of thesisMemory) durableThesisSymbols.add(thesis.symbol);
   if ([...result.edition.primaryBoard, ...result.edition.challengers, ...result.edition.tickerDossiers]
     .some((item) => !durableThesisSymbols.has(item.symbol) && item.thesisLabel !== "NO PRIOR THESIS")) {
     return false;
@@ -2321,7 +2346,7 @@ export const completeComposition = internalMutation({
         || result.evidence.session.previousSessionDate !== preview.previousSessionDate
         || result.evidence.session.previousSessionClose !== preview.previousSessionClose
         || result.evidence.session.nextSessionDate !== preview.nextSessionDate
-        || !resultMatchesFrozenConfiguration(result, preview.configurationSnapshot)
+        || !resultMatchesFrozenConfiguration(result, preview.configurationSnapshot, preview.thesisMemory)
       ) return { accepted: false as const };
       let storedEvidence: z.infer<typeof evidenceRecordSchema>[];
       try {
@@ -2389,7 +2414,7 @@ export const completeComposition = internalMutation({
       || result.evidence.session.previousSessionDate !== edition.previousSessionDate
       || result.evidence.session.previousSessionClose !== edition.previousSessionClose
       || result.evidence.session.nextSessionDate !== edition.nextSessionDate
-      || !resultMatchesFrozenConfiguration(result, edition.configurationSnapshot)
+      || !resultMatchesFrozenConfiguration(result, edition.configurationSnapshot, edition.thesisMemory)
     ) return { accepted: false as const };
     const resultFingerprint = await sha256Hex(canonicalJson(args.result));
     const existingDeliveries = await ctx.db
@@ -2507,6 +2532,11 @@ export const completeComposition = internalMutation({
     for (const delivery of orderedDeliveries) {
       if (await sha256Hex(delivery.content) !== delivery.contentHash) return { accepted: false as const };
     }
+    const validThesisUpdates = result.thesisUpdates.filter((update) => thesisUpdatesMatchContext(
+      [update], edition, result.evidence.evidence, result.evidence.allowedSourceIds,
+    ));
+    const thesisCommit = await commitThesisUpdates(ctx, edition, validThesisUpdates, result.evidence.evidence, now);
+    thesisCommit.skipped += result.thesisUpdates.length - validThesisUpdates.length;
     for (const section of normalizedSections) {
       const { chartRequests, ...storedSection } = section;
       await ctx.db.insert("marketResearchSections", {
@@ -2561,6 +2591,8 @@ export const completeComposition = internalMutation({
           value: `${result.edition.tickerDossiers.filter((dossier) => edition.configurationSnapshot.primarySymbols.includes(dossier.symbol)).length}/${edition.configurationSnapshot.primarySymbols.length}`,
         },
         { key: "exaCostUsd", value: result.exaCostUsd.toFixed(6) },
+        { key: "thesesUpdated", value: String(thesisCommit.applied) },
+        { key: "thesesSkipped", value: String(thesisCommit.skipped) },
       ],
     });
     return { accepted: true as const };

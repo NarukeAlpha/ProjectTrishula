@@ -803,11 +803,13 @@ Rules:
 - Do not include penny stocks or thin small caps.
 - Keep personalization independent from any brokerage account.
 
-### 10.2 Optional durable theses
+### 10.2 Durable stock theses
 
-A future durable thesis list can include thesis text, symbol, priority, key levels, invalidation, expiry, and status. It must not be inferred from the latest Discord conversation or another Codex task.
+`marketResearchTheses` stores one current note per owner, server, and stock, with ten prior revisions. New editions freeze the current notes in `thesisMemory`; retries keep that same input. Pi stages compact changes through `update_thesis`. Accepted, non-preview reports save the staged notes in the same transaction as the report. Revision checks and edition age stop old or concurrent work from replacing newer notes. The authenticated `market_research:getThesisMemory` query returns current notes and history for the requested server.
 
-Until this store exists, each ticker uses `NO PRIOR THESIS`.
+Notes carry the current view, catalysts, invalidation, open questions, assessment, latest change, source references, and review date. Missing evidence uses `not_rechecked`, which preserves the core thesis and does not make its review date look fresh. Temporary prices, volume, entries, and technical levels remain research inputs to refresh, not durable facts. Legacy configured `durableTheses` remain a fallback. New notes do not change preferences, their revision, or schedule activation. Conversation reset/deletion remains conversation-only, separate from newspaper state.
+
+Existing reports are not backfilled automatically. The next accepted research run can establish notes; later runs compare and update them. A stock without a prior note still uses `NO PRIOR THESIS` for the current report.
 
 ## 11. Convex data model
 

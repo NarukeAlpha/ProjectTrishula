@@ -13,6 +13,7 @@ import {
   marketResearchPreferencesSchema,
   morningPaperEvidenceSchema,
   type MarketResearchEvidenceItem,
+  type MarketResearchThesisMemoryV1,
   type MorningPaperEditionV1,
   type MorningPaperEvidenceV1,
 } from "../src/market-research/contracts.js";
@@ -130,14 +131,23 @@ function assistant(text: string): AssistantMessage {
   };
 }
 
+const priorThesis: MarketResearchThesisMemoryV1 = {
+  symbol: "AMD", revision: 2, text: "Data-center adoption supports the multiyear growth thesis.",
+  catalysts: ["Customer deployment announcements"], invalidation: "Sustained failure to translate design wins into revenue.",
+  openQuestions: ["How broad is customer adoption?"], status: "active", assessment: "unchanged",
+  changeSummary: "Prior research left the thesis intact.", sources: [{ sourceId: "prior-ir", url: "https://ir.amd.com/" }],
+  lastReviewedAt: "2026-09-04T12:00:00.000Z", lastEditionId: "prior-edition",
+};
+
 function harness(options: {
   output?: (packet: MorningPaperEvidenceV1, turn: number) => string;
   queuedCharts?: MorningPaperEditionV1["chartRequests"];
   activeTools?: string[];
+  thesisMemory?: MarketResearchThesisMemoryV1[];
 } = {}) {
   const initial = evidence();
   let current = initial;
-  const tools = ["exa_search", "exa_read", "request_chart"].map((name): ToolDefinition => ({
+  const tools = ["exa_search", "exa_read", "request_chart", "update_thesis"].map((name): ToolDefinition => ({
     name, label: name, description: "Local research tool double.", parameters: Type.Object({}),
     execute: vi.fn<ToolDefinition["execute"]>(async () => {
       if (name === "exa_search") current = evidence([source]);
@@ -146,6 +156,7 @@ function harness(options: {
   }));
   const research: MorningPaperResearchContext = {
     tools, getEvidence: () => current, getChartRequests: () => options.queuedCharts ?? [],
+    getThesisMemory: () => options.thesisMemory ?? [], getThesisUpdates: () => [],
   };
   const messages: AgentSession["messages"] = [];
   let turn = 0;
@@ -189,7 +200,7 @@ describe("agent-led morning newspaper composer", () => {
     expect(result.tickerDossiers[0]?.unavailableFields).toContain("price");
     expect(test.createSession).toHaveBeenCalledWith(expect.objectContaining({
       model: test.model, thinkingLevel: "xhigh", noTools: "all",
-      tools: ["exa_read", "exa_search", "request_chart"], customTools: test.research.tools,
+      tools: ["exa_read", "exa_search", "request_chart", "update_thesis"], customTools: test.research.tools,
     }));
     expect(test.runtime.requireModel).toHaveBeenCalledWith("gpt-5.6-sol");
     expect(test.session.dispose).toHaveBeenCalledOnce();
@@ -214,6 +225,32 @@ describe("agent-led morning newspaper composer", () => {
     await test.composer.compose(test.initial, preferences, undefined, test.research);
     test.session.agent.streamFunction(test.model, { messages: [] });
     expect(test.standardStream).toHaveBeenCalledWith(test.model, { messages: [] }, expect.objectContaining({ serviceTier: "priority" }));
+  });
+
+  it("loads historical thesis notes into the prompt and allows comparison without requiring staged updates", async () => {
+    const test = harness({
+      thesisMemory: [priorThesis],
+      output: (packet) => JSON.stringify({ ...usefulEdition(packet), tickerDossiers: [{ ...usefulEdition(packet).tickerDossiers[0], thesisLabel: "VALIDATED" }] }),
+    });
+    await test.composer.initialize();
+    const result = await test.composer.compose(test.initial, preferences, undefined, test.research);
+    expect(result.tickerDossiers[0]?.thesisLabel).toBe("VALIDATED");
+    expect(test.session.prompt).toHaveBeenCalledWith(expect.stringContaining(JSON.stringify([priorThesis])), { expandPromptTemplates: false });
+    expect(test.research.getThesisUpdates()).toEqual([]);
+    expect(morningPaperSystemPrompt).toContain("Missing data never invalidates a thesis by itself");
+    expect(morningPaperSystemPrompt).toContain("two to four sentences");
+    expect(morningPaperSystemPrompt).toContain("Prices, volume, entry triggers, and technical levels are temporary");
+  });
+
+  it("recognizes invalidated saved and legacy theses instead of erasing their comparison history", () => {
+    const packet = evidence([source]);
+    const edition = usefulEdition(packet);
+    edition.tickerDossiers[0]!.thesisLabel = "INVALIDATED";
+    expect(validateComposedEdition(edition, packet, preferences, [{ ...priorThesis, status: "invalidated", assessment: "invalidated" }])).toEqual(edition);
+    const legacy = { thesisId: "legacy-amd", symbol: "AMD", text: priorThesis.text, priority: 50, keyLevels: [], invalidation: priorThesis.invalidation, expiresAt: null, status: "invalidated" as const };
+    expect(validateComposedEdition(edition, packet, { ...preferences, durableTheses: [legacy] })).toEqual(edition);
+    expect(() => validateComposedEdition(edition, packet, { ...preferences, durableTheses: [{ ...legacy, status: "expired" }] })).toThrow("composition_schema_invalid");
+    expect(() => validateComposedEdition(edition, packet, preferences)).toThrow("composition_schema_invalid");
   });
 
   it("repairs one technical output error without making another paid tool call or discarding the report", async () => {
@@ -309,7 +346,7 @@ describe("agent-led morning newspaper composer", () => {
   });
 
   it("refuses a session exposing a built-in tool and disposes it", async () => {
-    const test = harness({ activeTools: ["exa_search", "exa_read", "request_chart", "read"] });
+    const test = harness({ activeTools: ["exa_search", "exa_read", "request_chart", "update_thesis", "read"] });
     await test.composer.initialize();
     await expect(test.composer.compose(test.initial, preferences, undefined, test.research)).rejects.toThrow("composition_provider_not_ready");
     expect(test.session.prompt).not.toHaveBeenCalled();

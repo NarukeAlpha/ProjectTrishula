@@ -199,7 +199,7 @@ async function integrationFixture(
     return composedResearch(research.getEvidence(), longSummary);
   });
   const runner = createMarketResearchRunner({
-    callbacks, logger, now: () => new Date(now),
+    callbacks, logger, now: () => new Date(),
     exaClient: (request, initialUsage) => new MarketResearchExaClient({
       apiKey: "unit-test-provider-key", searchConcurrency: 1, contentsConcurrency: 1,
       requestTimeoutMs: 1_000, maximumSearchRequests: 12, maximumContentPages: 24,
@@ -235,6 +235,89 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 describe("Convex claim through real Pi runner and Convex persistence", () => {
+  it("carries a tool-written thesis through later reports without changing schedule settings", async () => {
+    const test = await integrationFixture("OPEN");
+    const originalSettings = structuredClone(test.db.rows("marketResearchPreferences"));
+    let assessment: "new" | "weakened" | "not_rechecked" = "new";
+    const seenRevisions: number[] = [];
+    test.compose.mockImplementation(async (packet, preferences, signal, research) => {
+      if (!research) throw new Error("Missing research tools.");
+      const prior = research.getThesisMemory().find((note) => note.symbol === "AAPL");
+      seenRevisions.push(prior?.revision ?? 0);
+      const tool = research.tools.find((item) => item.name === "update_thesis");
+      if (!tool) throw new Error("Missing thesis tool.");
+      // SAFETY: The registered tool uses its parameters and injected research context only.
+      await tool.execute("remember-aapl", {
+        symbol: "AAPL", assessment,
+        text: assessment === "new" ? "Sustained product demand supports the long-term thesis." : "Demand remains relevant, but execution risk has increased.",
+        catalysts: ["Next product update"], invalidation: "Repeated demand deterioration would invalidate the view.",
+        openQuestions: ["Does demand remain durable?"],
+        changeSummary: assessment === "not_rechecked" ? "No new issuer evidence was available." : "The research changed our assessment of execution risk.",
+        sourceIds: assessment === "not_rechecked" ? [] : [researchSourceId],
+      }, signal, undefined, {} as ResearchToolContext);
+      const report = composedResearch(packet);
+      if (prior) report.tickerDossiers[0]!.thesisLabel = "AT RISK";
+      return validateComposedEdition(report, packet, preferences, research.getThesisMemory());
+    });
+    const first = await test.runner.run(test.job);
+    expect(first.thesisUpdates?.[0]).toMatchObject({ symbol: "AAPL", baseRevision: 0, assessment: "new" });
+    expect(test.db.rows("marketResearchTheses")[0]).toMatchObject({
+      ownerId: "owner_1", guildId: "guild_1", symbol: "AAPL", revision: 1,
+      text: "Sustained product demand supports the long-term thesis.", status: "active",
+    });
+    const nextJob = async (requestId: string) => {
+      vi.setSystemTime(Date.now() + 60_000);
+      const created = await invokeMutation(manualTrigger, test.db.ctx, {
+        guildId: "guild_1", dryRun: false, publish: true, regeneratePublishedEdition: false, requestId,
+      });
+      const job = marketResearchJobRequestSchema.parse(await invokeMutation(claimResearch, test.db.ctx, {
+        editionId: created.editionId, workerId: "next-edition-worker",
+      }));
+      await test.callbacks.appendEvidence(job, 900, retainedEvidence(Date.now()));
+      return job;
+    };
+    assessment = "weakened";
+    const secondJob = await nextJob("thesis-second-edition");
+    expect(secondJob.thesisMemory?.[0]).toMatchObject({ symbol: "AAPL", revision: 1, lastEditionId: first.editionId });
+    await test.runner.run(secondJob);
+    const second = structuredClone(test.db.rows("marketResearchTheses")[0]!);
+    expect(second).toMatchObject({ revision: 2, assessment: "weakened", text: "Demand remains relevant, but execution risk has increased." });
+    expect(second.history).toHaveLength(1);
+    assessment = "not_rechecked";
+    await test.runner.run(await nextJob("thesis-third-edition"));
+    expect(test.db.rows("marketResearchTheses")[0]).toMatchObject({
+      revision: 3, assessment: "not_rechecked", text: second.text,
+      status: second.status, sources: second.sources, lastReviewedAt: second.lastReviewedAt,
+    });
+    expect(test.db.rows("marketResearchTheses")[0]!.history).toHaveLength(2);
+    expect(seenRevisions).toEqual([0, 1, 2]);
+    expect(test.db.rows("marketResearchPreferences")).toEqual(originalSettings);
+    expect(test.wire.every((callback) => callback.status === 200)).toBe(true);
+    expect(test.providerCall).not.toHaveBeenCalled();
+    await test.runner.dispose();
+  });
+
+  it("does not save staged thesis updates when the real completion handler rejects the report", async () => {
+    const test = await integrationFixture("OPEN", (result) => {
+      result.deliveries[0]!.contentHash = "0".repeat(64);
+    });
+    test.compose.mockImplementation(async (packet, _preferences, signal, research) => {
+      const tool = research?.tools.find((item) => item.name === "update_thesis");
+      if (!tool) throw new Error("Missing thesis tool.");
+      // SAFETY: The registered tool does not use extension operations in this fixture.
+      await tool.execute("remember-rejected", {
+        symbol: "AAPL", text: "A sourced durable thesis.", invalidation: "Demand deterioration.",
+        assessment: "new", changeSummary: "New evidence was assessed.", sourceIds: [researchSourceId],
+      }, signal, undefined, {} as ResearchToolContext);
+      return composedResearch(packet);
+    });
+    await expect(test.runner.run(test.job)).rejects.toThrow("composition_schema_invalid");
+    expect(test.completionCandidates[0]?.thesisUpdates).toHaveLength(1);
+    expect(test.db.rows("marketResearchTheses")).toHaveLength(0);
+    expect(test.db.rows("marketResearchDeliveries")).toHaveLength(0);
+    await test.runner.dispose();
+  });
+
   it("persists a long summary with its edition identity in the first Discord delivery", async () => {
     const test = await integrationFixture("OPEN", undefined, false, true);
     const result = await test.runner.run(test.job);

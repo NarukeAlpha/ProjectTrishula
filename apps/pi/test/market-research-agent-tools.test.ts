@@ -1,4 +1,4 @@
-/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- Tool tests provide an unused extension context; the three tools do not read runtime UI APIs. */
+/* oxlint-disable anti-slop/require-safety-comment-for-type-assertion -- Tool tests provide an unused extension context; the research tools do not read runtime UI APIs. */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createMorningPaperResearchTools, type MorningPaperResearchToolsOptions } from "../src/market-research/agent-tools.js";
@@ -9,6 +9,7 @@ import {
   marketResearchPreferencesSchema,
   morningPaperEvidenceSchema,
   type MarketResearchEvidenceItem,
+  type MarketResearchThesisMemoryV1,
 } from "../src/market-research/contracts.js";
 import { initialExaUsageFromEvidence, MarketResearchExaClient, type ExaClientOptions, type ExaSdkTransport } from "../src/market-research/exa-client.js";
 import { buildResearchPlan } from "../src/market-research/research-plan.js";
@@ -34,6 +35,14 @@ const source = marketResearchEvidenceItemSchema.parse({
   evidenceId: "calendar-1", kind: "calendar", provider: "official", sourcePolicy: "approved", title: "Market calendar",
   retrievedAt: now, freshness: "fresh", contentStatus: "available", highlights: ["Labor Day market closure."], normalizedClaims: [], contentHash: sha256("calendar-1"),
 });
+const priorThesis: MarketResearchThesisMemoryV1 = {
+  symbol: "AAPL", revision: 3, text: "Services growth supports recurring revenue.",
+  catalysts: ["Services adoption"], invalidation: "Sustained deterioration in services demand.",
+  openQuestions: ["Can services margins hold?"], status: "active", assessment: "unchanged",
+  changeSummary: "Prior research left the view intact.",
+  sources: [{ sourceId: "prior-aapl-ir", url: "https://investor.apple.com/", title: "Prior company report" }],
+  lastReviewedAt: "2026-09-04T12:00:00.000Z", lastEditionId: "edition-prior",
+};
 function evidence(items: MarketResearchEvidenceItem[] = [source]) {
   return morningPaperEvidenceSchema.parse({
     schemaVersion: 1, editionId: "edition-1", generatedAt: now,
@@ -72,8 +81,8 @@ function fixture(overrides: Partial<MorningPaperResearchToolsOptions> = {}, clie
 }
 
 describe("dynamic newspaper research tools", () => {
-  it("exposes only Exa search/read and queued CHART-IMG without brokerage, file, or shell tools", () => {
-    expect(fixture().tools.tools.map((item) => item.name)).toEqual(["exa_search", "exa_read", "request_chart"]);
+  it("exposes only Exa search/read, queued CHART-IMG, and staged thesis updates without brokerage, file, or shell tools", () => {
+    expect(fixture().tools.tools.map((item) => item.name)).toEqual(["exa_search", "exa_read", "request_chart", "update_thesis"]);
   });
 
   it("accepts agent queries and registers durable public sources before returning citations", async () => {
@@ -213,6 +222,84 @@ describe("dynamic newspaper research tools", () => {
     const f = fixture({ now: () => new Date("2026-09-07T12:05:00.000Z") });
     expect(f.tools.getEvidence().generatedAt).toBe("2026-09-07T12:05:00.000Z");
     expect(f.tools.getEvidence().session).toEqual(evidence().session);
+  });
+
+  it("stages a cited new thesis without a database write or a model-selected revision", async () => {
+    const f = fixture();
+    await f.call("exa_search", { query: "AAPL business outlook" });
+    const sourceId = f.tools.getEvidence().evidence.find((item) => item.kind === "news")!.evidenceId;
+    f.onEvidence.mockClear();
+    const result = await f.call("update_thesis", {
+      symbol: "AAPL", baseRevision: 999, text: "Recurring services demand supports the outlook.",
+      invalidation: "A sustained fall in services demand.", assessment: "new",
+      changeSummary: "Established a company-level view from its guidance.", sourceIds: [sourceId],
+    });
+    expect(result.details).toEqual({ ok: true });
+    expect(f.tools.getThesisUpdates()).toEqual([expect.objectContaining({ symbol: "AAPL", baseRevision: 0, assessment: "new", sourceIds: [sourceId], catalysts: [], openQuestions: [] })]);
+    expect(f.onEvidence).not.toHaveBeenCalled();
+    expect(f.tools.getThesisMemory()).toEqual([]);
+  });
+
+  it("requires configured symbols, a real prior for review, and stock-relevant registered citations for material changes", async () => {
+    const f = fixture();
+    const params = { symbol: "AAPL", text: "Company-level view.", invalidation: "Demand weakens.", assessment: "new", changeSummary: "Initial view.", sourceIds: [] };
+    for (const invalid of [
+      params, { ...params, symbol: "UNLISTED" }, { ...params, assessment: "not_rechecked" },
+      { ...params, assessment: "unchanged" }, { ...params, sourceIds: [source.evidenceId] },
+      { ...params, sourceIds: ["invented"] },
+    ]) expect((await f.call("update_thesis", invalid)).details).toEqual({ ok: false });
+    expect(f.tools.getThesisUpdates()).toEqual([]);
+  });
+
+  it.each(["unchanged", "not_rechecked"])("preserves the prior thesis for %s instead of accepting rewritten facts", async (assessment) => {
+    const f = fixture({ initialThesisMemory: [priorThesis] });
+    const result = await f.call("update_thesis", {
+      symbol: "AAPL", baseRevision: 50, text: "Invented replacement.", catalysts: [], invalidation: "No quote was available.", openQuestions: [],
+      assessment, changeSummary: "Current demand figures were not rechecked.", sourceIds: [],
+    });
+    expect(result.details).toEqual({ ok: true });
+    expect(f.tools.getThesisUpdates()).toEqual([expect.objectContaining({
+      baseRevision: 3, text: priorThesis.text, catalysts: priorThesis.catalysts,
+      invalidation: priorThesis.invalidation, openQuestions: priorThesis.openQuestions, assessment, sourceIds: [],
+    })]);
+    expect(f.tools.getThesisMemory()).toEqual([priorThesis]);
+    expect(f.search).not.toHaveBeenCalled();
+    expect(f.getContents).not.toHaveBeenCalled();
+    expect(f.onEvidence).not.toHaveBeenCalled();
+  });
+
+  it("keeps the last staged update per stock while taking the revision and omitted fields from the initial snapshot", async () => {
+    const f = fixture({ initialThesisMemory: [priorThesis] });
+    await f.call("exa_search", { query: "AAPL services earnings" });
+    const sourceId = f.tools.getEvidence().evidence.find((item) => item.kind === "news")!.evidenceId;
+    const update = { symbol: "AAPL", assessment: "strengthened", changeSummary: "Guidance supports recurring demand.", sourceIds: [sourceId] };
+    expect((await f.call("update_thesis", update)).details).toEqual({ ok: true });
+    expect((await f.call("update_thesis", { ...update, assessment: "weakened", text: "New guidance weakens the services outlook.", changeSummary: "The follow-up source contradicts the original assessment." })).details).toEqual({ ok: true });
+    expect(f.tools.getThesisUpdates()).toEqual([expect.objectContaining({ baseRevision: 3, assessment: "weakened", text: "New guidance weakens the services outlook.", invalidation: priorThesis.invalidation })]);
+    const detached = f.tools.getThesisMemory();
+    detached[0]!.catalysts.push("Caller mutation");
+    expect(f.tools.getThesisMemory()).toEqual([priorThesis]);
+    expect((await f.call("update_thesis", { ...update, assessment: "new" })).details).toEqual({ ok: false });
+  });
+
+  it("retains invalidated historical notes and treats legacy notes as revision-zero fallback", async () => {
+    const invalidated = { ...priorThesis, status: "invalidated" as const, assessment: "invalidated" as const };
+    const current = fixture({ initialThesisMemory: [invalidated] });
+    expect((await current.call("update_thesis", { symbol: "AAPL", assessment: "not_rechecked", changeSummary: "No new verification was possible.", sourceIds: [] })).details).toEqual({ ok: true });
+    expect(current.tools.getThesisMemory()[0]?.status).toBe("invalidated");
+    const legacy = fixture({ preferences: {
+      ...preferences, durableTheses: [{ thesisId: "legacy-aapl", symbol: "AAPL", text: priorThesis.text, priority: 50, keyLevels: [], invalidation: priorThesis.invalidation, expiresAt: null, status: "active" }],
+    } });
+    expect((await legacy.call("update_thesis", { symbol: "AAPL", assessment: "unchanged", changeSummary: "The legacy view holds.", sourceIds: [] })).details).toEqual({ ok: true });
+    expect(legacy.tools.getThesisUpdates()[0]).toMatchObject({ baseRevision: 0, text: priorThesis.text, catalysts: [], openQuestions: [] });
+  });
+
+  it("rejects refused sources and canceled thesis staging without corrupting prior memory", async () => {
+    const blocked = { ...source, evidenceId: "blocked-news", kind: "news" as const, sourcePolicy: "blocked" as const };
+    const f = fixture({ initialEvidence: evidence([source, blocked]), initialThesisMemory: [priorThesis] });
+    expect((await f.call("update_thesis", { symbol: "AAPL", assessment: "invalidated", changeSummary: "A blocked excerpt cannot establish invalidation.", sourceIds: [blocked.evidenceId] })).details).toEqual({ ok: false });
+    await expect(f.call("update_thesis", { symbol: "AAPL", assessment: "unchanged", changeSummary: "Canceled review.", sourceIds: [] }, AbortSignal.abort(new Error("edition_lease_lost")))).rejects.toThrow("edition_lease_lost");
+    expect(f.tools.getThesisUpdates()).toEqual([]);
   });
 });
 

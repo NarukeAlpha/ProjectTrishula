@@ -226,6 +226,42 @@ export type MarketResearchPreferencesV1 = z.infer<
   typeof marketResearchPreferencesSchema
 >;
 
+export const marketResearchThesisAssessmentSchema = z.enum([
+  "new", "unchanged", "strengthened", "weakened", "invalidated", "not_rechecked",
+]);
+
+const thesisCore = {
+  symbol,
+  text: boundedText(2_000),
+  catalysts: z.array(boundedText(500)).max(8),
+  invalidation: boundedText(2_000),
+  openQuestions: z.array(boundedText(500)).max(8),
+  assessment: marketResearchThesisAssessmentSchema,
+  changeSummary: boundedText(1_000),
+};
+
+export const marketResearchThesisMemorySchema = z.object({
+  ...thesisCore,
+  revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  status: z.enum(["active", "invalidated"]),
+  sources: z.array(z.object({
+    sourceId: id,
+    url: httpsUrl.optional(),
+    title: boundedText(500).optional(),
+  }).strict()).max(10),
+  lastReviewedAt: isoDateTime,
+  lastEditionId: id,
+}).strict();
+
+export const marketResearchThesisUpdateSchema = z.object({
+  ...thesisCore,
+  baseRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  sourceIds: z.array(id).max(10).refine((values) => new Set(values).size === values.length),
+}).strict();
+
+export type MarketResearchThesisMemoryV1 = z.infer<typeof marketResearchThesisMemorySchema>;
+export type MarketResearchThesisUpdateV1 = z.infer<typeof marketResearchThesisUpdateSchema>;
+
 export const marketResearchJobRequestSchema = z.object({
   schemaVersion: z.literal(MARKET_RESEARCH_SCHEMA_VERSION),
   dispatchId: id,
@@ -243,6 +279,8 @@ export const marketResearchJobRequestSchema = z.object({
   ]),
   configurationSnapshotHash: hash,
   preferences: marketResearchPreferencesSchema,
+  thesisMemory: z.array(marketResearchThesisMemorySchema).max(50)
+    .refine((values) => new Set(values.map((item) => item.symbol)).size === values.length).optional(),
   exaUsage: z.object({
     searchRequests: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     contentPages: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -689,6 +727,8 @@ export const marketResearchJobResultSchema = z.object({
   claimToken: id,
   evidence: morningPaperEvidenceSchema,
   edition: morningPaperEditionSchema,
+  thesisUpdates: z.array(marketResearchThesisUpdateSchema).max(50)
+    .refine((values) => new Set(values.map((item) => item.symbol)).size === values.length).optional(),
   deliveries: z.array(deliveryPartSchema).min(1).max(500),
   exaRequestCount: z.number().int().nonnegative().max(100),
   exaCostUsd: z.number().finite().nonnegative().max(1_000),

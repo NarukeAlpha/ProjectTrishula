@@ -34,6 +34,8 @@ const schemaFields = new Set([
   "timeframe", "start", "end", "overlays", "annotations", "reason", "priority",
   "sourceEvidenceIds", "dataAsOf", "deliveries", "deliveryId", "idempotencyKey",
   "content", "chartAttachmentIds", "nonce", "exaRequestCount", "exaCostUsd", "completedAt",
+  "thesisMemory", "thesisUpdates", "baseRevision", "revision", "catalysts",
+  "openQuestions", "assessment", "changeSummary", "sources", "sourceId", "lastReviewedAt", "lastEditionId",
 ]);
 
 function safePathComponent(component: PropertyKey): string | number {

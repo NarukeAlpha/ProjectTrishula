@@ -6,6 +6,8 @@ Discord is public-research only. It does not place trades or read a brokerage ac
 
 The morning market newspaper runs independently from Discord conversations. Convex schedules an isolated Pi research session. The agent uses Exa search/read tools, saves cited sources, and queues optional CHART-IMG images for positive ranked setups. The Discord gateway publishes the report in one forum thread.
 
+Newspaper research also carries a compact thesis for each stock within each server. Pi reads prior notes, stages changes with `update_thesis`, and Convex saves them with an accepted report. Each note keeps its reasoning, catalysts, invalidation, open questions, sources, review date, and ten prior versions. Missing data preserves the earlier thesis. Older retries cannot overwrite newer notes, and memory updates do not change schedule settings. Existing reports are not backfilled automatically; the next completed research run can establish the first notes.
+
 Pi uses the pinned official `exa-js` `2.19.0` client and the existing Codex OAuth session. A dedicated numerical feed is optional, not a requirement for research or publication. Missing or unverified values are disclosed; available news and risk analysis still belong in the report. Existing runtime enablement and per-server schedules remain separate. See [release readiness](docs/RELEASE_READINESS.md) for verified deployment status; older structured-provider evaluation gates apply only to that optional adapter.
 
 ## Services

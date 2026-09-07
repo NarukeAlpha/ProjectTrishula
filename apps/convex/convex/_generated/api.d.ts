@@ -25,6 +25,7 @@ import type * as lib_discord_state from "../lib/discord_state.js";
 import type * as lib_execution from "../lib/execution.js";
 import type * as lib_invariants from "../lib/invariants.js";
 import type * as lib_market_research from "../lib/market_research.js";
+import type * as lib_market_research_theses from "../lib/market_research_theses.js";
 import type * as lib_robinhood_oauth from "../lib/robinhood_oauth.js";
 import type * as lib_service_auth from "../lib/service_auth.js";
 import type * as lib_trade_approval from "../lib/trade_approval.js";
@@ -63,6 +64,7 @@ declare const fullApi: ApiFromModules<{
   "lib/execution": typeof lib_execution;
   "lib/invariants": typeof lib_invariants;
   "lib/market_research": typeof lib_market_research;
+  "lib/market_research_theses": typeof lib_market_research_theses;
   "lib/robinhood_oauth": typeof lib_robinhood_oauth;
   "lib/service_auth": typeof lib_service_auth;
   "lib/trade_approval": typeof lib_trade_approval;

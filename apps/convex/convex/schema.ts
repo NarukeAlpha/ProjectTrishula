@@ -323,6 +323,26 @@ export const marketResearchPreferencesValidator = v.object({
   updatedAt: v.string(),
 });
 
+export const marketResearchThesisAssessmentValidator = v.union(
+  v.literal("new"), v.literal("unchanged"), v.literal("strengthened"),
+  v.literal("weakened"), v.literal("invalidated"), v.literal("not_rechecked"),
+);
+
+export const marketResearchThesisSnapshotValidator = v.object({
+  symbol: v.string(),
+  revision: v.number(),
+  text: v.string(),
+  catalysts: v.array(v.string()),
+  invalidation: v.string(),
+  openQuestions: v.array(v.string()),
+  status: v.union(v.literal("active"), v.literal("invalidated")),
+  assessment: marketResearchThesisAssessmentValidator,
+  changeSummary: v.string(),
+  sources: v.array(v.object({ sourceId: v.string(), url: v.optional(v.string()), title: v.optional(v.string()) })),
+  lastReviewedAt: v.string(),
+  lastEditionId: v.string(),
+});
+
 export const marketResearchEditionStatusValidator = v.union(
   v.literal("queued"),
   v.literal("collecting"),
@@ -1073,6 +1093,16 @@ export default defineSchema({
     .index("by_owner_guild", ["ownerId", "guildId"])
     .index("by_enabled_updatedAt", ["enabled", "updatedAt"]),
 
+  marketResearchTheses: defineTable({
+    ownerId: v.string(),
+    guildId: v.string(),
+    ...marketResearchThesisSnapshotValidator.fields,
+    history: v.array(marketResearchThesisSnapshotValidator),
+    lastEditionCreatedAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_owner_guild_symbol", ["ownerId", "guildId", "symbol"]),
+
   marketResearchEditions: defineTable({
     ownerId: v.string(),
     guildId: v.string(),
@@ -1114,6 +1144,7 @@ export default defineSchema({
     configurationSnapshotHash: v.string(),
     resultFingerprint: v.optional(v.string()),
     configurationSnapshot: marketResearchPreferencesValidator,
+    thesisMemory: v.optional(v.array(marketResearchThesisSnapshotValidator)),
     promptVersion: v.string(),
     sourcePolicyVersion: v.string(),
     workerId: v.optional(v.string()),
@@ -1292,6 +1323,7 @@ export default defineSchema({
     guildId: v.string(),
     configurationSnapshotHash: v.string(),
     configurationSnapshot: marketResearchPreferencesValidator,
+    thesisMemory: v.optional(v.array(marketResearchThesisSnapshotValidator)),
     requestedAt: v.number(),
     scheduledFor: v.number(),
     sessionType: v.union(

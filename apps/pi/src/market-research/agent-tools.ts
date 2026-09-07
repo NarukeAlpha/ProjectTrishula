@@ -6,9 +6,13 @@ import {
   chartRequestSchema,
   jsonByteLength,
   marketResearchEvidenceItemSchema,
+  marketResearchThesisMemorySchema,
+  marketResearchThesisUpdateSchema,
   morningPaperEvidenceSchema,
   type MarketResearchEvidenceItem,
   type MarketResearchPreferencesV1,
+  type MarketResearchThesisMemoryV1,
+  type MarketResearchThesisUpdateV1,
   type MorningPaperEditionV1,
   type MorningPaperEvidenceV1,
 } from "./contracts.js";
@@ -24,6 +28,7 @@ type ChartRequest = MorningPaperEditionV1["chartRequests"][number];
 export interface MorningPaperResearchToolsOptions {
   initialEvidence: MorningPaperEvidenceV1;
   preferences: MarketResearchPreferencesV1;
+  initialThesisMemory?: MarketResearchThesisMemoryV1[];
   exaClient: MarketResearchExaClient;
   logger: Logger;
   onEvidence: (items: MarketResearchEvidenceItem[]) => Promise<void>;
@@ -35,6 +40,8 @@ export interface MorningPaperResearchTools {
   tools: ToolDefinition[];
   getEvidence(): MorningPaperEvidenceV1;
   getChartRequests(): ChartRequest[];
+  getThesisMemory(): MarketResearchThesisMemoryV1[];
+  getThesisUpdates(): MarketResearchThesisUpdateV1[];
 }
 
 function response(text: string, ok = true) {
@@ -110,6 +117,8 @@ export function createMorningPaperResearchTools(options: MorningPaperResearchToo
   let packet = morningPaperEvidenceSchema.parse(options.initialEvidence);
   if (jsonByteLength(packet) > MARKET_RESEARCH_MAX_EVIDENCE_BYTES) throw new Error("evidence_below_minimum");
   const charts = new Map<string, ChartRequest>();
+  const thesisMemory = (options.initialThesisMemory ?? []).map((item) => marketResearchThesisMemorySchema.parse(item));
+  const thesisUpdates = new Map<string, MarketResearchThesisUpdateV1>();
   const researchTime = (options.now?.() ?? new Date()).toISOString();
   let queue = Promise.resolve();
   const budget = () => {
@@ -254,9 +263,51 @@ export function createMorningPaperResearchTools(options: MorningPaperResearchToo
       return response(JSON.stringify({ queued: true, chartRequestId: item.chartRequestId, instruction: "Include this symbol as a positive ranked setup only when evidence supports it. Final board eligibility controls delivery." }));
     }),
   });
+  const updateThesis = defineTool({
+    name: "update_thesis", label: "Remember a stock thesis",
+    description: "Stage a server-scoped long-term stock thesis for the next research run. Nothing is saved until this report is accepted. Use current registered stock-relevant citations for new, strengthened, weakened, or invalidated theses. Use unchanged when reviewed evidence leaves the thesis intact; use not_rechecked for missing evidence, never automatic invalidation. Those two assessments preserve the prior thesis and its sources. Omitted fields retain prior values; a new thesis needs text and invalidation. Do not store today's price, entry setup, or technical levels as lasting facts. Repeated calls replace this run's staged update for that symbol; the service supplies its trusted revision.",
+    parameters: Type.Object({
+      symbol: Type.String({ minLength: 1, maxLength: 20 }),
+      text: Type.Optional(Type.String({ minLength: 1, maxLength: 2_000 })),
+      catalysts: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 8 })),
+      invalidation: Type.Optional(Type.String({ minLength: 1, maxLength: 2_000 })),
+      openQuestions: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 8 })),
+      assessment: Type.Union([Type.Literal("new"), Type.Literal("unchanged"), Type.Literal("strengthened"), Type.Literal("weakened"), Type.Literal("invalidated"), Type.Literal("not_rechecked")]),
+      changeSummary: Type.String({ minLength: 1, maxLength: 1_000 }),
+      sourceIds: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 10 }),
+    }, { additionalProperties: false }),
+    execute: async (_id, parameters, signal) => serial(signal, async () => {
+      if (![...options.preferences.primarySymbols, ...options.preferences.discoverySymbols].includes(parameters.symbol)) return errorResponse("thesis_symbol_not_configured");
+      const stored = thesisMemory.find((item) => item.symbol === parameters.symbol);
+      const legacy = options.preferences.durableTheses.find((item) => item.symbol === parameters.symbol && item.status !== "expired");
+      const prior = stored ?? (legacy === undefined ? undefined : { ...legacy, catalysts: [], openQuestions: [] });
+      const preserve = parameters.assessment === "unchanged" || parameters.assessment === "not_rechecked";
+      if ((prior === undefined && parameters.assessment !== "new") || (prior !== undefined && parameters.assessment === "new")) return errorResponse("thesis_assessment_invalid");
+      const usableSources = new Set(packet.evidence.filter((item) => item.sourcePolicy === "approved"
+        && (item.contentStatus === "available" || item.contentStatus === "cached")
+        && item.kind !== "source_status" && item.kind !== "calendar").map((item) => item.evidenceId));
+      if ((!preserve && parameters.sourceIds.length === 0) || parameters.sourceIds.some((id) => !usableSources.has(id))) return errorResponse("thesis_citation_invalid");
+      const parsed = marketResearchThesisUpdateSchema.safeParse({
+        symbol: parameters.symbol,
+        baseRevision: stored?.revision ?? 0,
+        text: preserve ? prior?.text : parameters.text ?? prior?.text,
+        catalysts: preserve ? prior?.catalysts : parameters.catalysts ?? prior?.catalysts ?? [],
+        invalidation: preserve ? prior?.invalidation : parameters.invalidation ?? prior?.invalidation,
+        openQuestions: preserve ? prior?.openQuestions : parameters.openQuestions ?? prior?.openQuestions ?? [],
+        assessment: parameters.assessment,
+        changeSummary: parameters.changeSummary,
+        sourceIds: [...new Set(parameters.sourceIds)],
+      });
+      if (!parsed.success) return errorResponse("thesis_update_invalid");
+      thesisUpdates.set(parameters.symbol, parsed.data);
+      return response(JSON.stringify({ staged: true, symbol: parsed.data.symbol, baseRevision: parsed.data.baseRevision, assessment: parsed.data.assessment, instruction: "This update will be saved only with the accepted report. Describe the comparison in the ticker dossier; it is not a trading instruction." }));
+    }),
+  });
   return {
-    tools: [search, read, chart],
+    tools: [search, read, chart, updateThesis],
     getEvidence: () => morningPaperEvidenceSchema.parse({ ...packet, generatedAt: (options.now?.() ?? new Date()).toISOString(), requestedSourceStatus: requestedSources(packet) }),
     getChartRequests: () => [...charts.values()].map((item) => chartRequestSchema.parse(item)),
+    getThesisMemory: () => thesisMemory.map((item) => marketResearchThesisMemorySchema.parse(item)),
+    getThesisUpdates: () => [...thesisUpdates.values()].map((item) => marketResearchThesisUpdateSchema.parse(item)),
   };
 }

@@ -122,6 +122,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
       const initialUsage = initialExaUsageFromEvidence(retained, request.exaUsage);
       const research = createMorningPaperResearchTools({
         initialEvidence: packet, preferences: request.preferences,
+        initialThesisMemory: request.thesisMemory ?? [],
         exaClient: this.options.exaClient(request, initialUsage), logger: this.options.logger,
         onEvidence: persist, signal: leaseSignal, now: this.now,
       });
@@ -143,6 +144,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
       const result = marketResearchJobResultSchema.parse({
         schemaVersion: 1, dispatchId: request.dispatchId, editionId: request.editionId,
         generation: request.generation, claimToken: request.claimToken, evidence, edition,
+        thesisUpdates: research.getThesisUpdates(),
         deliveries: materializeDeliveryParts(edition),
         exaRequestCount: evidence.evidence.filter((item) => item.evidenceId.startsWith("exa-search-slot-")).length,
         exaCostUsd: evidence.evidence.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
