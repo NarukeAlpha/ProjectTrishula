@@ -43,8 +43,21 @@ Convex, Pi, and Discord were deployed before the web client. The approved Convex
 source-analysis/typecheck passed, and its generated API inventory is committed.
 Pi and Discord both returned HTTP 200 from their readiness endpoints.
 
-Live research/publication was not tested. Pi's Railway secret store still lacks
-the Exa key already supplied in the feature document. Both research runtimes use
-their disabled default. A two-flag enablement plan and secure key provisioning
-await approval; no key value belongs in the infrastructure source. Deployment
-did not change the owner's forum, timezone, time, or inactive schedule.
+Live research/publication was not tested. The Exa credential already existed
+in Pi's Railway secret store as `EXA_AI_KEY`, but the application expects
+`EXA_API_KEY`. The existing value was copied securely through standard input
+to the expected variable. The original variable remains preserved. No key value
+belongs in source or documentation.
+
+Activation is verified. The owner-approved Railway plan enabled
+`MARKET_RESEARCH_ENABLED` on Pi and Discord with zero additions, two service
+changes, and zero deletions. Both deployments succeeded at source commit
+`81e66088a79f339fa3fb7f0483a9b4fe46ef38dc`. Live Pi `/health` returned HTTP 200
+with research enabled, Exa configured, and the runner ready. A boolean-only
+runtime check confirmed the expected key is present. Discord `/health` showed
+research enabled and a connected gateway; `/ready` returned HTTP 200 and ready.
+
+No Exa provider request or new forum edition was made. These checks do not prove
+key validity or end-to-end research/publication. The owner's forum, timezone,
+time, and inactive schedule remain unchanged. Numerical-provider approvals and
+chart runtime access were not changed.

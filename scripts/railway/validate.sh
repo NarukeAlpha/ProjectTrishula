@@ -160,8 +160,8 @@ if grep -Eq 'EXA_API_KEY:[[:space:]]*["'"'"']' "$iac"; then
   exit 1
 fi
 
-[ "$(grep -c 'MARKET_RESEARCH_ENABLED: preserve()' "$iac")" -eq 2 ] || {
-  printf 'Pi and Discord market research must preserve their operator-controlled runtime switches.\n' >&2
+[ "$(grep -c 'MARKET_RESEARCH_ENABLED: "true"' "$iac")" -eq 2 ] || {
+  printf 'Pi and Discord market research must be enabled in the deployment configuration.\n' >&2
   exit 1
 }
 

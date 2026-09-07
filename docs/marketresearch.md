@@ -42,24 +42,38 @@ This feature is a scheduled publishing pipeline. It is not an extension of the c
 10. **Publish limitations instead of filling gaps.** Missing, stale, delayed, rights-blocked, or conflicting evidence must remain visible.
 11. **Require the owner to confirm the schedule timezone before enablement.** `America/New_York` is the proposed market-time default. `America/Puerto_Rico` is also displayed and has different daylight-saving behavior.
 
-## 3. Plaintext Exa credential
+## 3. Exa credential provisioning
 
-The project owner explicitly requested that the supplied API key remain in this document.
+The original specification records the expected credential location, not a key:
 
 ```text
 EXA_API_KEY (already as a variable in the pi deployment in railway)
 ```
 
-This is a plaintext production-sensitive credential. The runtime must still read `EXA_API_KEY` from a Pi Railway secret. It must not parse this Markdown file at runtime.
+The production check on 2026-09-07 found the existing key under `EXA_AI_KEY`,
+while the application expects `EXA_API_KEY`. Earlier reports that no Exa key
+existed were incorrect: the problem was the variable name. The existing value
+was copied securely through standard input to `EXA_API_KEY`. The original
+`EXA_AI_KEY` variable was retained and is preserved in Railway infrastructure
+code. The runtime must read its environment, not this Markdown file.
 
-Security consequences:
+The owner-approved Railway plan then enabled `MARKET_RESEARCH_ENABLED` on Pi
+and Discord: zero additions, two service changes, and zero deletions. Both
+deployments succeeded at source commit
+`81e66088a79f339fa3fb7f0483a9b4fe46ef38dc`. Live Pi `/health` returned HTTP 200
+with research enabled, Exa configured, and its runner ready. A boolean-only
+runtime check confirmed `EXA_API_KEY` is present. Discord `/health` reported
+research enabled and a connected gateway, and `/ready` returned HTTP 200 and
+ready. This verifies activation, not key validity or end-to-end publication:
+no Exa provider request or new forum edition was made. Forum selection and
+scheduling were not changed.
 
-- Anyone who can read this repository or its history can use the key.
-- If this file is pushed to any remote, copied into an issue, or included in a log bundle, treat the key as exposed.
+Credential handling:
+
 - Never copy the key into Convex, Discord, a browser variable, a model prompt, an HTTP response, a health payload, a source record, or a log field.
 - Add `EXA_API_KEY: preserve()` to the Pi service in `.railway/railway.ts`. Do not place the literal value in Railway infrastructure code.
 - Configure the literal value directly in Railway's secret store.
-- When the owner rotates the key, update both Railway and this owner-requested credential block.
+- When the owner rotates the key, update the Pi Railway secret, not this document.
 
 ## 4. Existing system baseline
 
