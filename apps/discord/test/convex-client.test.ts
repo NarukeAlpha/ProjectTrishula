@@ -39,13 +39,15 @@ afterEach(() => {
 });
 
 describe("Convex Discord heartbeats", () => {
-  it("sends only fields accepted by the strict nested run contract", async () => {
+  it("negotiates durable responses and sends only strict nested run fields", async () => {
     const requests: unknown[] = [];
+    const protocolHeaders: Array<string | null> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
         const request: unknown = JSON.parse(String(init?.body));
         requests.push(request);
+        protocolHeaders.push(new Headers(init?.headers).get("x-trishula-discord-protocol"));
         return new Response(
           JSON.stringify({
             ok: true,
@@ -91,5 +93,6 @@ describe("Convex Discord heartbeats", () => {
         },
       },
     ]);
+    expect(protocolHeaders).toEqual(["durable-v1", "durable-v1"]);
   });
 });
