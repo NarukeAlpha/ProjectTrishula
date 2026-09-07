@@ -1,5 +1,7 @@
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-runtime-typeof -- Convex HTTP JSON is untrusted and is reduced to named callback results at this transport boundary. */
 import type { Logger } from "../runtime/logger.js";
+import { randomUUID } from "node:crypto";
+import type { ExaCostEvent } from "./exa-client.js";
 import {
   marketResearchEvidenceItemSchema,
   type MarketResearchEvidenceItem,
@@ -31,6 +33,59 @@ export class ConvexMarketResearchClient implements MarketResearchCallbacks {
   constructor(private readonly options: ConvexMarketResearchClientOptions) {
     this.endpoint = `${options.siteUrl}/market-research/pi`;
     this.fetchImpl = options.fetch ?? fetch;
+  }
+
+  costObserver(
+    request: Pick<MarketResearchJobRequest, "ownerId" | "editionId" | "generation" | "claimToken">,
+  ): (event: Readonly<ExaCostEvent>) => Promise<void> {
+    // Capture the original accounting capability; later work leases must not replace it.
+    const target = {
+      ownerId: request.ownerId,
+      editionId: request.editionId,
+      generation: request.generation,
+      claimToken: request.claimToken,
+    };
+    const streamId = randomUUID();
+    let sequence = 0;
+    let pending = Promise.resolve();
+    return (event) => {
+      sequence += 1;
+      if (sequence > 1_024) {
+        return Promise.reject(new Error("market_research_cost_event_limit"));
+      }
+      const safeEvent: Omit<ExaCostEvent, "requestId"> & { eventId: string; requestId?: string } = {
+        eventId: `${streamId}:${sequence}`,
+        operation: event.operation,
+        outcome: event.outcome,
+        costUsd: event.costUsd,
+        late: event.late,
+        observedAt: event.observedAt,
+      };
+      if (event.requestId !== undefined && /^[A-Za-z0-9:._-]{1,256}$/.test(event.requestId)) {
+        safeEvent.requestId = event.requestId;
+      }
+      const body = {
+        operation: "recordExaCostEvent",
+        ...target,
+        event: safeEvent,
+      };
+      // Bound callback concurrency and retry the same event ID. Do not use the cancelled
+      // research signal: SDK work can settle and incur cost after that signal is aborted.
+      const delivery = pending.then(async () => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const response = await this.request(body);
+            if (response.accepted !== true) throw new Error("market_research_cost_event_rejected");
+            return;
+          } catch {
+            if (attempt === 2) throw new Error("market_research_cost_event_delivery_failed");
+            await new Promise<void>((resolve) => setTimeout(resolve, (attempt + 1) * 100));
+          }
+        }
+      });
+      pending = delivery.catch(() => undefined);
+      return delivery;
+    };
   }
 
   async heartbeat(
