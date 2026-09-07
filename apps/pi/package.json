@@ -10,6 +10,7 @@
     "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "auth:codex": "node dist/auth/codex-cli.js",
+    "probe:personality": "node dist/probes/personality.js",
     "start": "node dist/start.js",
     "test": "vitest run",
     "test:personality": "vitest run test/personality-shadow.test.ts test/discord-compaction.test.ts test/discord-conversations.test.ts test/discord-contracts.test.ts test/discord-runner.test.ts",

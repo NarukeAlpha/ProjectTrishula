@@ -513,7 +513,7 @@ describe("Discord control surface", () => {
       within(status).getByText("gpt-5.6-luna · xhigh · priority"),
     ).toBeVisible();
     expect(
-      within(status).getByText("gpt-5.6-sol · ultra · priority"),
+      within(status).getByText("gpt-5.6-sol · max · priority"),
     ).toBeVisible();
     expect(
       within(status).queryByText("discord:guild_1"),

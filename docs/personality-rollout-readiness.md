@@ -32,6 +32,15 @@ The owner ran these synthetic OAuth probes against the deployed Pi service on 20
 
 The probes used a 512-token output cap and only synthetic `READY` input. They prove OAuth and transport compatibility. They do not prove research quality, naturalness, checkpoint continuity, or production latency.
 
+After building the Pi package, run these commands inside the Pi service shell. They use the service-owned OAuth file. They do not require a user login and do not call Discord.
+
+```sh
+PERSONALITY_PROBE_MODE=naturalness PERSONALITY_PROBE_REPETITIONS=3 npm run probe:personality
+TRISHULA_PORTABLE_CHECKPOINTS_ENABLED=true PERSONALITY_PROBE_MODE=checkpoint npm run probe:personality
+```
+
+The first command makes nine pinned Luna calls across simple, informal, and correction fixtures. It prints only synthetic replies and deterministic surface findings. The second starts a transient probe process with the portable flag enabled; it does not change the running service configuration or write a Convex checkpoint.
+
 ## Required gates before portable activation
 
 Keep `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED=false` in Pi and the Discord gateway until every row passes.
