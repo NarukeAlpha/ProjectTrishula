@@ -336,4 +336,31 @@ describe("native Discord compaction", () => {
       expect(error).not.toHaveProperty("message", expect.stringContaining(secret));
     }
   });
+
+  it("settles an early cloned response-stream failure without leaking its cause", async () => {
+    const secret = "early-clone-secret-that-must-not-leak";
+    const failingResponse = () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error(secret));
+      },
+    }), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+
+    try {
+      await generateNativeCompaction({
+        runtime: fakeRuntime({}),
+        model,
+        request,
+        instructions: "Synthetic compaction instructions.",
+        fetch: async () => failingResponse(),
+      });
+      throw new Error("Expected the failing response stream to reject.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(NativeCompactionError);
+      expect(error).toHaveProperty("code", "response_invalid");
+      expect(error).not.toHaveProperty("message", expect.stringContaining(secret));
+    }
+  });
 });
