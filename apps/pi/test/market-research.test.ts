@@ -758,7 +758,13 @@ describe("Financial Datasets evaluation gate", () => {
         evaluationId: "evaluation-2",
         status: "completed",
         raw: {
-          output: { structured: { snapshots: FINANCIAL_DATASET_EVALUATION_SYMBOLS.map((symbol) => ({ symbol, fields })) } },
+          output: {
+            structured: { snapshots: FINANCIAL_DATASET_EVALUATION_SYMBOLS.map((symbol) => ({ symbol, fields })) },
+            grounding: FINANCIAL_DATASET_EVALUATION_SYMBOLS.map((_symbol, index) => ({
+              field: `snapshots[${index}].fields.currentPrice.value`,
+              citations: [{ title: "Provider citation", url: "https://example.com/quote" }],
+            })),
+          },
           costDollars: { total: 0.25 },
           secretRawPayload: "must-not-survive",
         },
