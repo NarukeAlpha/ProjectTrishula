@@ -89,7 +89,10 @@ function textFromHistory(message: ConversationHistoryMessage): string {
 
 function safeError(error: Error): SafeError {
   const raw = error.message;
-  const message = raw.replace(/sk-[A-Za-z0-9_-]+/g, "[redacted]").slice(0, 2_000);
+  const redacted = raw.replace(/sk-[A-Za-z0-9_-]+/g, "[redacted]");
+  const message = redacted.length <= 2_000
+    ? redacted
+    : "The model provider returned an internal error that exceeded the safe reporting limit.";
   const normalized = message.toLowerCase();
   if (normalized.includes("rate") || normalized.includes("429")) {
     return { code: "provider_rate_limit", message: "The model provider is busy. Try again.", retryable: true };

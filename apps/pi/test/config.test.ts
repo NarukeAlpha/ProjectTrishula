@@ -19,6 +19,72 @@ describe("loadConfig", () => {
     expect(config.robinhoodOAuthRedirectUri).toBe("http://convex.internal/http/broker/robinhood/callback");
     expect(config.piCredentialKeyVersion).toBe(1);
     expect(config.discordSharedSecret).toBe(base.PI_DISCORD_SHARED_SECRET);
+    expect(config.marketResearchEnabled).toBe(false);
+    expect(config.exaApiKey).toBeUndefined();
+    expect(config.exaSearchConcurrency).toBe(2);
+    expect(config.exaContentsConcurrency).toBe(5);
+    expect(config.exaMaxSearchRequestsPerEdition).toBe(12);
+    expect(config.exaMaxContentPagesPerEdition).toBe(24);
+    expect(config.marketDataProviderId).toBe("disabled");
+    expect(config.financialDatasetsOwnerDecision).toBe("pending");
+    expect(config.financialDatasetsMaxCostUsdPerRequest).toBeUndefined();
+    expect(config).toMatchObject({
+      trishulaLunaModel: "gpt-5.6-luna",
+      trishulaLunaReasoningEffort: "xhigh",
+      trishulaLunaServiceTier: "priority",
+      trishulaSolModel: "gpt-5.6-sol",
+      trishulaSolReasoningEffort: "max",
+      trishulaSolServiceTier: "priority",
+      trishulaPersonalityVersion: "trishula-discord-v1",
+      trishulaLunaProfileVersion: "luna-frontman-v1",
+      trishulaSolProfileVersion: "sol-research-v1",
+      trishulaModelContextWindow: 272_000,
+      trishulaLunaMaxOutputTokens: 8_000,
+      trishulaSolMaxOutputTokens: 16_000,
+      trishulaResearchPacketTokenTarget: 2_500,
+      trishulaResearchPacketMaxBytes: 16_384,
+      trishulaRecentTailTokenBudget: 20_000,
+      trishulaMaxAutonomousRechecks: 2,
+      trishulaAmbientMinConfidence: 0.85,
+      trishulaAmbientMinAdditiveValue: 0.9,
+      trishulaCompactionReserve: 32_000,
+      trishulaCompactionThreshold: 190_400,
+      trishulaDurableConversationsEnabled: true,
+      trishulaHotSessionReuseEnabled: true,
+      trishulaPortableCheckpointsEnabled: false,
+      trishulaNativeCompactionEnabled: false,
+    });
+  });
+
+  it("rejects model drift and keeps only opaque compaction locked off", () => {
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_LUNA_MODEL: "gpt-5.6-terra",
+    })).toThrow(/TRISHULA_LUNA_MODEL/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_SOL_REASONING_EFFORT: "ultra",
+    })).toThrow(/TRISHULA_SOL_REASONING_EFFORT/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_NATIVE_COMPACTION_ENABLED: "true",
+    })).toThrow(/TRISHULA_NATIVE_COMPACTION_ENABLED/);
+    expect(loadConfig({
+      ...base,
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
+    }).trishulaPortableCheckpointsEnabled).toBe(true);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_MODEL_CONTEXT_WINDOW: "400000",
+    })).toThrow(/TRISHULA_MODEL_CONTEXT_WINDOW/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_PERSONALITY_VERSION: "unreviewed-v2",
+    })).toThrow(/TRISHULA_PERSONALITY_VERSION/);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_RESEARCH_PACKET_MAX_BYTES: "20000",
+    })).toThrow(/TRISHULA_RESEARCH_PACKET_MAX_BYTES/);
   });
 
   it("requires HTTPS for the production Convex endpoint", () => {
@@ -83,5 +149,36 @@ describe("loadConfig", () => {
 
   it("rejects batching windows above 100 milliseconds", () => {
     expect(() => loadConfig({ ...base, RESULT_BATCH_WINDOW_MS: "101" })).toThrow(/configuration/);
+  });
+
+  it("starts without an Exa key while market research is disabled", () => {
+    expect(loadConfig(base).marketResearchEnabled).toBe(false);
+  });
+
+  it("requires an Exa key only when market research is enabled", () => {
+    expect(() => loadConfig({ ...base, MARKET_RESEARCH_ENABLED: "true" })).toThrow(/EXA_API_KEY/);
+    const config = loadConfig({
+      ...base,
+      MARKET_RESEARCH_ENABLED: "true",
+      EXA_API_KEY: "test-exa-key-not-a-production-secret",
+    });
+    expect(config.marketResearchEnabled).toBe(true);
+    expect(config.exaApiKey).toBe("test-exa-key-not-a-production-secret");
+  });
+
+  it("requires explicit approval and a cost cap for Financial Datasets", () => {
+    expect(() => loadConfig({
+      ...base,
+      MARKET_DATA_PROVIDER_ID: "exa_financial_datasets",
+    })).toThrow(/approved owner decision/);
+    const config = loadConfig({
+      ...base,
+      MARKET_DATA_PROVIDER_ID: "exa_financial_datasets",
+      EXA_FINANCIAL_DATASETS_OWNER_DECISION: "approved",
+      EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST: "0.25",
+    });
+    expect(config.marketDataProviderId).toBe("exa_financial_datasets");
+    expect(config.financialDatasetsOwnerDecision).toBe("approved");
+    expect(config.financialDatasetsMaxCostUsdPerRequest).toBe(0.25);
   });
 });

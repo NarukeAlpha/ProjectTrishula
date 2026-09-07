@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   discordAgentRequestSchema,
+  discordFrontmanPlanRequestSchema,
+  discordFrontmanPlanResponseSchema,
+  discordPortableCheckpointRequestSchema,
+  discordSolResearchResponseSchema,
+  discordSolResearchRequestSchema,
   discordReplyResponseSchema,
   discordResearchResponseSchema,
   discordTriageResponseSchema,
@@ -27,6 +32,181 @@ export const discordChannel = {
 const targetMessageId = "123456789012345678";
 
 describe("Discord agent contracts", () => {
+  const conversation = {
+    ownerId: "owner_1",
+    ownerBindingVersion: 1,
+    guildId: discordChannel.guildId,
+    conversationId: `discord:${discordChannel.guildId}`,
+    epoch: 1,
+    turnId: "turn_1",
+    runId: "run_1",
+    generation: 1,
+    routingGeneration: 1,
+    revision: 2,
+    humanRevision: 1,
+    personalityVersion: "trishula-discord-v1",
+    systemPromptHash: "a".repeat(64),
+    capabilityProfileHash: "b".repeat(64),
+  };
+  const durableContext = {
+    sourceRevision: 2,
+    sourceHumanRevision: 1,
+    recentEvents: [],
+    tail: {
+      estimatorVersion: "utf8-bytes-div-3-plus-message-overhead:v1" as const,
+      tokenBudget: 20_000,
+      estimatedTokens: 0,
+      compactedThroughOrdinal: 0,
+      omittedEventCount: 0,
+      complete: true,
+    },
+  };
+
+  it("accepts the durable frontman identity and keeps portable memory out of Sol", () => {
+    const common = {
+      requestId: "durable_1",
+      channel: discordChannel,
+      messages: discordMessages,
+      conversation,
+    };
+    expect(discordFrontmanPlanRequestSchema.safeParse({
+      ...common,
+      profile: "frontman_plan",
+      triggerKind: "mention",
+      durableContext,
+    }).success).toBe(true);
+    const sol = {
+      ...common,
+      requestId: "sol_1",
+      profile: "research",
+      researchRequest: {
+        question: "Why did AMD move?",
+        decisionContext: "Current market move",
+        requiredFacts: ["Current catalyst"],
+        freshnessRequirement: "Current session",
+        preferredPrimarySources: ["Issuer"],
+      },
+      pass: 1,
+    };
+    expect(discordSolResearchRequestSchema.safeParse(sol).success).toBe(true);
+    expect(discordSolResearchRequestSchema.safeParse({
+      ...sol,
+      durableContext,
+    }).success).toBe(false);
+  });
+
+  it("accepts only ordered, non-overlapping portable checkpoint evidence", () => {
+    const checkpoint = {
+      profile: "portable_checkpoint",
+      requestId: "checkpoint:1",
+      conversation: {
+        ownerId: conversation.ownerId,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        guildId: conversation.guildId,
+        conversationId: conversation.conversationId,
+        epoch: conversation.epoch,
+        generation: conversation.generation,
+        routingGeneration: conversation.routingGeneration,
+        revision: conversation.revision,
+        personalityVersion: conversation.personalityVersion,
+        systemPromptHash: conversation.systemPromptHash,
+        capabilityProfileHash: conversation.capabilityProfileHash,
+      },
+      sourceContextHash: "c".repeat(64),
+      compactedThroughOrdinal: 2,
+      sourceEvents: [{
+        eventId: "event:2",
+        ordinal: 2,
+        role: "human",
+        authorId: discordMessages[0]?.authorId,
+        content: "Keep this attributed.",
+        createdAt: "2026-09-07T12:00:00.000Z",
+      }],
+      retainedRecentEventIds: ["event:3"],
+      inputEstimatedTokens: 100,
+    };
+    expect(discordPortableCheckpointRequestSchema.safeParse(checkpoint).success).toBe(true);
+    expect(discordAgentRequestSchema.safeParse(checkpoint).success).toBe(true);
+    expect(discordPortableCheckpointRequestSchema.safeParse({
+      ...checkpoint,
+      retainedRecentEventIds: ["event:2"],
+    }).success).toBe(false);
+  });
+
+  it("uses the exact Unicode boundary for all frontman visible output", () => {
+    const response = {
+      profile: "frontman_plan",
+      action: "reply",
+      targetMessageId,
+      confidence: 1,
+      additiveValue: 1,
+      reasonCode: "explicit_stable",
+      reply: "😀".repeat(2_000),
+    } as const;
+    expect(discordFrontmanPlanResponseSchema.safeParse(response).success).toBe(true);
+    expect(discordFrontmanPlanResponseSchema.safeParse({
+      ...response,
+      reply: "😀".repeat(2_001),
+    }).success).toBe(false);
+    expect(discordFrontmanPlanResponseSchema.parse({
+      ...response,
+      reply: `  ${"😀".repeat(2_000)}  `,
+    }).reply).toBe("😀".repeat(2_000));
+    const researchPlan = {
+      profile: "frontman_plan",
+      action: "research",
+      targetMessageId,
+      confidence: 1,
+      additiveValue: 1,
+      reasonCode: "explicit_needs_freshness",
+      acknowledgement: "😀".repeat(320),
+      researchRequest: {
+        question: "Why did AMD move?",
+        decisionContext: "Current market move",
+        requiredFacts: ["Current catalyst"],
+        freshnessRequirement: "Current session",
+        preferredPrimarySources: ["Issuer"],
+      },
+    } as const;
+    expect(discordFrontmanPlanResponseSchema.safeParse(researchPlan).success).toBe(true);
+    expect(discordFrontmanPlanResponseSchema.safeParse({
+      ...researchPlan,
+      acknowledgement: "😀".repeat(321),
+    }).success).toBe(false);
+  });
+
+  it("rejects a current Sol packet without declared evidence", () => {
+    const response = {
+      profile: "research",
+      packet: {
+        schemaVersion: 1,
+        requestId: "packet_1",
+        question: "Why did AMD move?",
+        asOf: "2026-08-30T12:00:00.000Z",
+        freshness: { status: "current", detail: "Current through the close." },
+        summary: "An issuer filing preceded the move.",
+        findings: [{
+          claim: "The filing preceded the move.",
+          evidence: "The filing timestamp was earlier.",
+          sourceIds: ["source_1"],
+          kind: "fact",
+        }],
+        sources: [],
+        uncertainties: [],
+      },
+      estimator: {
+        package: "js-tiktoken",
+        packageVersion: "1.0.21",
+        encoding: "o200k_base",
+        modelMapping: "gpt-5.6-sol-estimate",
+        exact: false,
+        version: "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1",
+        estimatedTokens: 100,
+        serializedBytes: 500,
+      },
+    } as const;
+    expect(discordSolResearchResponseSchema.safeParse(response).success).toBe(false);
+  });
   it("accepts the three strict request profiles", () => {
     expect(
       discordAgentRequestSchema.parse({
@@ -186,7 +366,7 @@ describe("Discord agent contracts", () => {
       discordReplyResponseSchema.safeParse({
         profile: "reply",
         action: "send",
-        reply: "x".repeat(1_201),
+        reply: "x".repeat(2_001),
         reason: "Too long.",
       }).success,
     ).toBe(false);

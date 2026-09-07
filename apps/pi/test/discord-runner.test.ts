@@ -7,6 +7,7 @@ import {
   parseDiscordAgentOutput,
 } from "../src/discord/runner.js";
 import { DiscordAgentOutputError } from "../src/discord/errors.js";
+import { validateLockedDiscordProviderTransport } from "../src/assistant/profiles.js";
 import type { DiscordAgentRequest } from "../src/discord/contracts.js";
 import { discordChannel, discordMessages } from "./discord-contracts.test.js";
 
@@ -31,32 +32,50 @@ const validTriageOutput = JSON.stringify({
 });
 
 describe("Discord Pi agent profiles", () => {
-  it("pins Luna, Sol, xhigh, priority service, and the approved tool boundaries", () => {
-    expect(DISCORD_AGENT_PROFILES).toEqual({
-      triage: {
-        modelId: "gpt-5.6-luna",
-        thinkingLevel: "xhigh",
-        serviceTier: "priority",
-        toolNames: [],
-      },
-      research: {
-        modelId: "gpt-5.6-sol",
-        thinkingLevel: "xhigh",
-        serviceTier: "priority",
-        toolNames: [
-          "public_web_search",
-          "public_web_fetch",
-          "public_market_data",
-          "generate_market_chart",
-        ],
-      },
-      reply: {
-        modelId: "gpt-5.6-luna",
-        thinkingLevel: "xhigh",
-        serviceTier: "priority",
-        toolNames: [],
-      },
+  it("pins Luna xhigh and Sol max to priority with the approved tool boundaries", () => {
+    expect(DISCORD_AGENT_PROFILES.frontman_plan).toMatchObject({
+      modelId: "gpt-5.6-luna",
+      thinkingLevel: "xhigh",
+      serviceTier: "priority",
+      toolNames: [],
     });
+    expect(DISCORD_AGENT_PROFILES.frontman_resume).toMatchObject({
+      modelId: "gpt-5.6-luna",
+      thinkingLevel: "xhigh",
+      serviceTier: "priority",
+      toolNames: [],
+    });
+    expect(DISCORD_AGENT_PROFILES.research).toMatchObject({
+      modelId: "gpt-5.6-sol",
+      thinkingLevel: "max",
+      serviceTier: "priority",
+      toolNames: [
+        "public_web_search",
+        "public_web_fetch",
+        "public_market_data",
+        "generate_market_chart",
+      ],
+    });
+  });
+
+  it("locks the provider payload mapping to the live-accepted Sol max value", () => {
+    const models = {
+      luna: {
+        id: "gpt-5.6-luna",
+        contextWindow: 272_000,
+        thinkingLevelMap: { xhigh: "xhigh" },
+      },
+      sol: {
+        id: "gpt-5.6-sol",
+        contextWindow: 272_000,
+        thinkingLevelMap: { max: "max" },
+      },
+    };
+    expect(() => validateLockedDiscordProviderTransport(models, 272_000)).not.toThrow();
+    expect(() => validateLockedDiscordProviderTransport({
+      ...models,
+      sol: { ...models.sol, thinkingLevelMap: { max: "ultra" } },
+    }, 272_000)).toThrow(/provider catalog/);
   });
 
   it("separates market evidence from dynamic chart generation", async () => {
@@ -181,6 +200,30 @@ describe("Discord Pi agent profiles", () => {
     expect(generate.mock.calls).toEqual([
       ["initial"],
       ["repair", "invalid_json"],
+    ]);
+  });
+
+  it("repairs measured Unicode overflow instead of truncating it", async () => {
+    const oversize = JSON.stringify({
+      profile: "triage",
+      decision: "direct",
+      targetMessageId: discordMessages[0]?.messageId,
+      question: "What is a semiconductor?",
+      directReply: "😀".repeat(2_001),
+      acknowledgement: null,
+      reason: "Stable question.",
+      confidence: 0.99,
+      additiveValue: 0.99,
+    });
+    const outputs = [oversize, validTriageOutput];
+    const generate = vi.fn(async () => outputs.shift() ?? "");
+
+    await expect(
+      generateDiscordAgentOutput(triageRequest, new Set(), generate),
+    ).resolves.toMatchObject({ decision: "research" });
+    expect(generate.mock.calls).toEqual([
+      ["initial"],
+      ["repair", "discord_content_too_long"],
     ]);
   });
 
@@ -331,6 +374,111 @@ describe("Discord Pi agent profiles", () => {
     expect(`${failure.message}\n${failure.stack ?? ""}`).not.toContain(
       privateUrl,
     );
+    expect(generate.mock.calls).toEqual([
+      ["initial"],
+      ["repair", "unverified_source_url"],
+    ]);
+  });
+
+  it("PERS-063 repairs a researched Luna answer that omits its grounded source", async () => {
+    const sourceUrl = "https://example.com/issuer-filing";
+    const request: DiscordAgentRequest = {
+      requestId: "frontman_resume_sources_1",
+      profile: "frontman_resume",
+      triggerKind: "mention",
+      conversation: {
+        ownerId: "owner_1",
+        ownerBindingVersion: 1,
+        guildId: discordChannel.guildId,
+        conversationId: `discord:${discordChannel.guildId}`,
+        epoch: 1,
+        turnId: "turn_1",
+        runId: "run_1",
+        generation: 1,
+        routingGeneration: 1,
+        revision: 2,
+        humanRevision: 1,
+        personalityVersion: "trishula-discord-v1",
+        systemPromptHash: "a".repeat(64),
+        capabilityProfileHash: "b".repeat(64),
+      },
+      durableContext: {
+        sourceRevision: 2,
+        sourceHumanRevision: 1,
+        recentEvents: [],
+        tail: {
+          estimatorVersion: "utf8-bytes-div-3-plus-message-overhead:v1",
+          tokenBudget: 20_000,
+          estimatedTokens: 0,
+          compactedThroughOrdinal: 0,
+          omittedEventCount: 0,
+          complete: true,
+        },
+      },
+      channel: discordChannel,
+      messages: discordMessages,
+      targetMessageId: discordMessages[0]?.messageId ?? "",
+      originalAuthorId: discordMessages[0]?.authorId ?? "",
+      acknowledgementDelivery: "sent",
+      research: {
+        profile: "research",
+        packet: {
+          schemaVersion: 1,
+          requestId: "packet_1",
+          question: "Why did AMD move?",
+          asOf: "2026-08-30T12:02:00.000Z",
+          freshness: { status: "current", detail: "Current through the close." },
+          summary: "The issuer filing preceded the move.",
+          findings: [{
+            claim: "The filing preceded the move.",
+            evidence: "The filing timestamp was earlier.",
+            sourceIds: ["source_1"],
+            kind: "fact",
+          }],
+          sources: [{
+            id: "source_1",
+            title: "Issuer filing",
+            url: sourceUrl,
+            accessedAt: "2026-08-30T12:02:00.000Z",
+            primary: true,
+          }],
+          uncertainties: [],
+        },
+        estimator: {
+          package: "js-tiktoken",
+          packageVersion: "1.0.21",
+          encoding: "o200k_base",
+          modelMapping: "gpt-5.6-sol-estimate",
+          exact: false,
+          version: "js-tiktoken@1.0.21:o200k_base:gpt-5.6-sol-estimate:v1",
+          estimatedTokens: 100,
+          serializedBytes: 500,
+        },
+      },
+      catchUpMessages: [],
+      eligibleThroughSequence: 1,
+      eligibleHumanRevision: 1,
+      eligibleContextHash: "eligible-context",
+      autonomousPass: 1,
+    };
+    const outputs = [
+      JSON.stringify({
+        profile: "frontman_resume",
+        action: "send",
+        reasonCode: "answer_ready",
+        reply: "The issuer filing preceded the move.",
+      }),
+      JSON.stringify({
+        profile: "frontman_resume",
+        action: "send",
+        reasonCode: "answer_ready",
+        reply: `The issuer filing preceded the move. ${sourceUrl}`,
+      }),
+    ];
+    const generate = vi.fn(async () => outputs.shift() ?? "");
+
+    await expect(generateDiscordAgentOutput(request, new Set([sourceUrl]), generate))
+      .resolves.toMatchObject({ reply: expect.stringContaining(sourceUrl) });
     expect(generate.mock.calls).toEqual([
       ["initial"],
       ["repair", "unverified_source_url"],
