@@ -163,18 +163,32 @@ async function consumeNativeCheckpointRejection(
   ) throw new Error("Pi rejected a native checkpoint outside the active conversation fence.");
   const invalidate = dependencies.convex.invalidateNativeCheckpoint;
   if (invalidate === undefined) {
-    throw new Error("Native checkpoint invalidation is unavailable.");
+    logger.warn("Discord native checkpoint invalidation was deferred.", {
+      guildId: conversation.guildId,
+      checkpointId: rejection.checkpointId,
+      reason: "gateway_operation_unavailable",
+    });
+  } else {
+    try {
+      await invalidate.call(dependencies.convex, {
+        guildId: conversation.guildId,
+        conversationId: conversation.conversationId,
+        checkpointId: rejection.checkpointId,
+        epoch: conversation.epoch,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        revision: conversation.revision,
+        generation: conversation.generation,
+        routingGeneration: conversation.routingGeneration,
+      }, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      logger.warn("Discord native checkpoint invalidation was deferred.", {
+        guildId: conversation.guildId,
+        checkpointId: rejection.checkpointId,
+        reason: "gateway_write_failed",
+      });
+    }
   }
-  await invalidate.call(dependencies.convex, {
-    guildId: conversation.guildId,
-    conversationId: conversation.conversationId,
-    checkpointId: rejection.checkpointId,
-    epoch: conversation.epoch,
-    ownerBindingVersion: conversation.ownerBindingVersion,
-    revision: conversation.revision,
-    generation: conversation.generation,
-    routingGeneration: conversation.routingGeneration,
-  }, signal);
   const { nativeCheckpoint: _invalidated, ...portableContext } = durableContext;
   return portableContext;
 }

@@ -365,7 +365,18 @@ export async function runPersonalityProbe(
     stdout.write(`${JSON.stringify({
       ok: true,
       mode,
-      repetitions,
+      naturalnessRepetitions:
+        mode === "naturalness" || mode === "all" ? repetitions : 0,
+      attempts: {
+        naturalnessRuns:
+          mode === "naturalness" || mode === "all" ? repetitions * 3 : 0,
+        portableCheckpointRuns:
+          mode === "checkpoint" || mode === "all" ? 1 : 0,
+        nativeCompactionRuns:
+          mode === "native_compaction" || mode === "all" ? 1 : 0,
+        nativeContinuationRuns:
+          mode === "native_compaction" || mode === "all" ? 2 : 0,
+      },
       modelProfiles: {
         luna: [config.trishulaLunaModel, config.trishulaLunaReasoningEffort, config.trishulaLunaServiceTier],
         sol: [config.trishulaSolModel, config.trishulaSolReasoningEffort, config.trishulaSolServiceTier],
