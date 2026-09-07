@@ -145,6 +145,21 @@ describe("personality probe transport diagnostics", () => {
         providerErrorCode: "feature_not_enabled",
         providerErrorType: "invalid_request_error",
       }],
+      nativeResponse: {
+        bodyRead: "complete" as const,
+        dataEventCount: 2,
+        doneMarkerCount: 1,
+        createdEventCount: 0,
+        outputItemDoneEventCount: 1,
+        compactionOutputItemCount: 1,
+        otherOutputItemCount: 0,
+        completedEventCount: 1,
+        doneEventCount: 0,
+        failureEventCount: 0,
+        otherEventCount: 0,
+        result: "rejected" as const,
+        failureCategory: "terminal_status_invalid" as const,
+      },
     };
     expect(JSON.parse(personalityProbeFailureOutput(
       new PersonalityNativeProbeError(report),

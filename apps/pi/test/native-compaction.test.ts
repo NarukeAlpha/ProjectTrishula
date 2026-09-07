@@ -21,6 +21,7 @@ import {
   injectNativeCheckpoint,
   nativeCompactionInput,
   NativeCompactionError,
+  type NativeCompactionProbeEvidence,
   validateNativeReplacementHistory,
 } from "../src/discord/native-compaction.js";
 
@@ -231,6 +232,123 @@ function compatibilityIdentity(checkpoint: DiscordNativeCheckpoint) {
 }
 
 describe("native Discord compaction", () => {
+  it("accepts headerless SSE and reports only fixed parser evidence", async () => {
+    const secret = "opaque-value-that-must-not-be-reported";
+    const body = [
+      `data: ${JSON.stringify({
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 1,
+        item: { type: "compaction", encrypted_content: secret },
+      })}`,
+      "",
+      `data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          status: "completed",
+          usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 },
+        },
+      })}`,
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    const response = new Response(body, { status: 200 });
+    response.headers.delete("content-type");
+    expect(response.headers.get("content-type")).toBeNull();
+    let evidence: NativeCompactionProbeEvidence | undefined;
+
+    await expect(generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => response,
+      onProbeEvidence: (value) => {
+        evidence = value;
+      },
+    })).resolves.toMatchObject({
+      replacementHistory: expect.arrayContaining([
+        { type: "compaction", encrypted_content: secret },
+      ]),
+    });
+
+    expect(evidence).toEqual({
+      bodyRead: "complete",
+      dataEventCount: 2,
+      doneMarkerCount: 1,
+      createdEventCount: 0,
+      outputItemDoneEventCount: 1,
+      compactionOutputItemCount: 1,
+      otherOutputItemCount: 0,
+      completedEventCount: 1,
+      doneEventCount: 0,
+      failureEventCount: 0,
+      otherEventCount: 0,
+      result: "accepted",
+    });
+    expect(JSON.stringify(evidence)).not.toContain(secret);
+  });
+
+  it("keeps probe observer failure isolated from accepted compaction", async () => {
+    await expect(generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => sseResponse("observer-isolation"),
+      onProbeEvidence: () => {
+        throw new Error("observer-failure");
+      },
+    })).resolves.toMatchObject({
+      replacementHistory: expect.arrayContaining([
+        { type: "compaction", encrypted_content: "observer-isolation" },
+      ]),
+    });
+  });
+
+  it("reports a fixed parser failure category without provider content", async () => {
+    const secret = "provider-detail-that-must-not-be-reported";
+    let evidence: NativeCompactionProbeEvidence | undefined;
+
+    await expect(generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => customSseResponse([
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          sequence_number: 1,
+          item: { type: "compaction", encrypted_content: secret },
+        },
+        {
+          type: "response.completed",
+          response: {
+            status: "incomplete",
+            error: { message: secret },
+            usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 },
+          },
+        },
+      ]),
+      onProbeEvidence: (value) => {
+        evidence = value;
+      },
+    })).rejects.toBeInstanceOf(NativeCompactionError);
+
+    expect(evidence).toMatchObject({
+      bodyRead: "complete",
+      dataEventCount: 2,
+      outputItemDoneEventCount: 1,
+      compactionOutputItemCount: 1,
+      completedEventCount: 1,
+      result: "rejected",
+      failureCategory: "terminal_status_invalid",
+    });
+    expect(JSON.stringify(evidence)).not.toContain(secret);
+  });
+
   it("accepts the pinned Pi payload before JSON serialization", async () => {
     const upstreamFetch = vi.fn(async () => sseResponse("pinned-provider-opaque"));
 
