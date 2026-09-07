@@ -12,6 +12,7 @@ import {
   type QueryCtx,
 } from "./_generated/server.js";
 import { actorFromIdentity } from "./lib/auth.js";
+import { normalizeDiscordForumCapabilities } from "./lib/discord_contract.js";
 import { canonicalJson, sha256Hex } from "./lib/canonical_json.js";
 import {
   MARKET_RESEARCH_DELIVERY_LEASE_MS,
@@ -290,19 +291,20 @@ async function validateForum(
     .unique();
   if (!channel?.available) throw new Error("forum_not_configured");
   if (channel.type !== "forum") throw new Error("forum_wrong_channel_type");
+  const capabilities = normalizeDiscordForumCapabilities(channel);
   if (
     !channel.canView
-    || !channel.canCreateForumPost
-    || !channel.canSendInThreads
-    || !channel.canReadThreadHistory
-    || (preferences.includeCharts && !channel.canAttachFiles)
+    || !capabilities.canCreateForumPost
+    || !capabilities.canSendInThreads
+    || !capabilities.canReadThreadHistory
+    || (preferences.includeCharts && !capabilities.canAttachFiles)
   ) throw new Error("forum_permissions_incomplete");
-  const tags = new Map(channel.availableTags.map((tag) => [tag.id, tag]));
+  const tags = new Map(capabilities.availableTags.map((tag) => [tag.id, tag]));
   for (const tagId of preferences.forumTagIds) {
     const tag = tags.get(tagId);
     if (!tag || tag.moderated) throw new Error("forum_permissions_incomplete");
   }
-  if (channel.requiresTag && preferences.forumTagIds.length === 0) throw new Error("forum_permissions_incomplete");
+  if (capabilities.requiresTag && preferences.forumTagIds.length === 0) throw new Error("forum_permissions_incomplete");
 }
 
 async function preferenceByOwnerGuild(

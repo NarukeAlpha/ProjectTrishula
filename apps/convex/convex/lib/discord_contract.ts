@@ -105,24 +105,52 @@ const permissions = z.object({
   readMessageHistory: z.boolean(),
   messageContent: z.boolean(),
 }).strict();
-const channel = z.object({
+// Older inventories cannot authorize forum publishing until capabilities and tag policy are refreshed.
+const forumCapabilities = z.object({
+  canCreateForumPost: z.boolean().default(false),
+  canSendInThreads: z.boolean().default(false),
+  canReadThreadHistory: z.boolean().default(false),
+  canAttachFiles: z.boolean().default(false),
+  requiresTag: z.boolean().default(true),
+  availableTags: z.array(z.object({
+    id,
+    name: z.string().trim().min(1).max(100),
+    moderated: z.boolean(),
+    emoji: z.string().trim().min(1).max(100).optional(),
+  }).strict()).max(20).default([]),
+}).strict();
+
+interface DiscordForumTag {
+  id: string;
+  name: string;
+  moderated: boolean;
+  emoji?: string;
+}
+
+export function normalizeDiscordForumCapabilities(
+  channel: z.input<typeof forumCapabilities>,
+): Omit<z.output<typeof forumCapabilities>, "availableTags"> & { availableTags: DiscordForumTag[] } {
+  return {
+    canCreateForumPost: channel.canCreateForumPost ?? false,
+    canSendInThreads: channel.canSendInThreads ?? false,
+    canReadThreadHistory: channel.canReadThreadHistory ?? false,
+    canAttachFiles: channel.canAttachFiles ?? false,
+    requiresTag: channel.requiresTag ?? true,
+    availableTags: (channel.availableTags ?? []).map((tag) => {
+      const result: DiscordForumTag = { id: tag.id, name: tag.name, moderated: tag.moderated };
+      if (tag.emoji !== undefined) result.emoji = tag.emoji;
+      return result;
+    }),
+  };
+}
+
+const channel = forumCapabilities.extend({
   channelId: id,
   name: z.string().trim().min(1).max(200),
   type: z.enum(["text", "announcement", "forum", "other"]),
   canView: z.boolean(),
   canSend: z.boolean(),
   canReadHistory: z.boolean(),
-  canCreateForumPost: z.boolean(),
-  canSendInThreads: z.boolean(),
-  canReadThreadHistory: z.boolean(),
-  canAttachFiles: z.boolean(),
-  requiresTag: z.boolean(),
-  availableTags: z.array(z.object({
-    id,
-    name: z.string().trim().min(1).max(100),
-    moderated: z.boolean(),
-    emoji: z.string().trim().min(1).max(100).optional(),
-  }).strict()).max(20),
 }).strict();
 const guild = z.object({
   guildId: id,

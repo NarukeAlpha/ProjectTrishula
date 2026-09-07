@@ -3,7 +3,7 @@ import { discoveredChannelSchema } from "../src/contracts.js";
 import { publicationClaimSchema } from "../src/market-research/contracts.js";
 
 describe("market-research Discord contracts", () => {
-  it("requires synchronized forum capabilities and tag metadata", () => {
+  it("preserves synchronized forum metadata and defaults omitted permissions to false", () => {
     const forum = {
       channelId: "123",
       name: "morning-paper",
@@ -21,7 +21,18 @@ describe("market-research Discord contracts", () => {
 
     expect(discoveredChannelSchema.safeParse(forum).success).toBe(true);
     const { canCreateForumPost: _, ...incomplete } = forum;
-    expect(discoveredChannelSchema.safeParse(incomplete).success).toBe(false);
+    expect(discoveredChannelSchema.parse(incomplete)).toEqual({ ...forum, canCreateForumPost: false });
+  });
+
+  it("accepts older channel inventory without granting forum publication", () => {
+    expect(discoveredChannelSchema.parse({
+      channelId: "123", name: "existing-conversation", type: "text",
+      canView: true, canSend: true, canReadHistory: true,
+    })).toMatchObject({
+      canView: true, canSend: true, canReadHistory: true,
+      canCreateForumPost: false, canSendInThreads: false, canReadThreadHistory: false,
+      canAttachFiles: false, requiresTag: true, availableTags: [],
+    });
   });
 
   it("rejects unknown publication fields and oversized immutable parts", () => {

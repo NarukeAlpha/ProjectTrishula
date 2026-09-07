@@ -1,7 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { discordGatewayRequestSchema } from "../convex/lib/discord_contract.js";
+import type { Infer } from "convex/values";
+import { discordGatewayRequestSchema, normalizeDiscordForumCapabilities } from "../convex/lib/discord_contract.js";
+import schema from "../convex/schema.js";
 
 describe("Discord gateway HTTP contract", () => {
+  it("accepts existing gateway inventory with fail-closed forum defaults", () => {
+    const request = discordGatewayRequestSchema.parse({
+      operation: "syncGuilds", actorId: "user_01HWORKOSALLOWED", instanceId: "gateway_1", status: "online",
+      guilds: [{
+        guildId: "123", name: "Existing server",
+        permissions: { viewChannels: true, sendMessages: true, readMessageHistory: true, messageContent: true },
+        channels: [{ channelId: "456", name: "conversation", type: "text", canView: true, canSend: true, canReadHistory: true }],
+      }],
+    });
+    if (request.operation !== "syncGuilds") throw new Error("Expected inventory operation.");
+    expect(request.actorId).toBe("user_01HWORKOSALLOWED");
+    expect(request.guilds[0]?.channels[0]).toMatchObject({
+      canView: true, canSend: true, canReadHistory: true,
+      canCreateForumPost: false, canSendInThreads: false, canReadThreadHistory: false,
+      canAttachFiles: false, requiresTag: true, availableTags: [],
+    });
+  });
+
+  it("keeps existing channel rows valid and preserves conversation roles", () => {
+    const legacyChannel: Infer<typeof schema.tables.discordChannels.validator> = {
+      ownerId: "user_01HWORKOSALLOWED", guildId: "123", channelId: "456", name: "conversation", type: "text",
+      canView: true, canSend: true, canReadHistory: true,
+      roles: ["conversation_monitor", "reply_target", "research_log"],
+      available: true, lastSeenAt: 1, createdAt: 1, updatedAt: 1,
+    };
+    expect(normalizeDiscordForumCapabilities(legacyChannel)).toEqual({
+      canCreateForumPost: false, canSendInThreads: false, canReadThreadHistory: false,
+      canAttachFiles: false, requiresTag: true, availableTags: [],
+    });
+    expect(legacyChannel.roles).toEqual(["conversation_monitor", "reply_target", "research_log"]);
+    expect(legacyChannel).not.toHaveProperty("canCreateForumPost");
+  });
+
+  it("preserves refreshed forum capabilities and requires known tag metadata", () => {
+    const refreshed = {
+      canCreateForumPost: true, canSendInThreads: true, canReadThreadHistory: true,
+      canAttachFiles: true, requiresTag: false,
+      availableTags: [{ id: "123", name: "Morning", moderated: false }],
+    };
+    expect(normalizeDiscordForumCapabilities(refreshed)).toEqual(refreshed);
+    expect(normalizeDiscordForumCapabilities({ canCreateForumPost: true, canSendInThreads: true })).toMatchObject({
+      canReadThreadHistory: false, requiresTag: true, availableTags: [],
+    });
+  });
+
   it("requires an allowlist-compatible actor and worker on runnable polling", () => {
     expect(discordGatewayRequestSchema.safeParse({
       operation: "listRunnable",
