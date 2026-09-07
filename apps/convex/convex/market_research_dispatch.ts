@@ -9,6 +9,7 @@ const DISPATCH_WORKER_ID = "convex-market-research-dispatch";
 const MAX_RECOVERY_BATCHES_PER_ACTION = 4;
 const MAX_RECOVERY_CONTINUATIONS = 25;
 const MAX_DISPATCH_ERROR_BODY_BYTES = 1_024;
+const MARKET_RESEARCH_DISPATCH_TIMEOUT_MS = 15_000;
 const dispatchErrorResponseSchema = z.strictObject({ error: z.string().max(100) });
 
 interface ResearchJobRequest {
@@ -67,7 +68,12 @@ async function sendJob(
 ): Promise<boolean> {
   let failure: ReturnType<typeof classifyResearchDispatchFailure> | undefined;
   try {
-    const response = await executionRequest(request.ownerId, "/market-research/jobs", request);
+    const response = await executionRequest(
+      request.ownerId,
+      "/market-research/jobs",
+      request,
+      { timeoutMs: MARKET_RESEARCH_DISPATCH_TIMEOUT_MS },
+    );
     if (response.status === 200 || response.status === 202) return true;
     const errorCode = await boundedErrorCode(response);
     failure = errorCode === undefined

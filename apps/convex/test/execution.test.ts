@@ -1,10 +1,15 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { executionServiceName, executionUrl } from "../convex/lib/execution.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  executionRequest,
+  executionServiceName,
+  executionUrl,
+} from "../convex/lib/execution.js";
 
 const originalDomainSuffix = process.env.EXECUTION_PRIVATE_DOMAIN_SUFFIX;
 const originalSharedSecret = process.env.SERVICE_SHARED_SECRET;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (originalDomainSuffix === undefined) delete process.env.EXECUTION_PRIVATE_DOMAIN_SUFFIX;
   else process.env.EXECUTION_PRIVATE_DOMAIN_SUFFIX = originalDomainSuffix;
   if (originalSharedSecret === undefined) delete process.env.SERVICE_SHARED_SECRET;
@@ -29,5 +34,25 @@ describe("actor-derived Pi routing", () => {
       "http://pi-u-f5bd51748dab9767072f.railway.internal:8080/runs",
     );
     expect(second).not.toBe(first);
+  });
+
+  it("passes an explicit deadline signal to bounded execution requests", async () => {
+    process.env.EXECUTION_PRIVATE_DOMAIN_SUFFIX = "railway.internal:8080";
+    process.env.SERVICE_SHARED_SECRET = "test-only-secret";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 202 }),
+    );
+
+    await executionRequest(
+      "user_01HWORKOSALLOWED",
+      "/market-research/jobs",
+      { editionId: "MR-2026-09-07" },
+      { timeoutMs: 15_000 },
+    );
+
+    const request = fetchMock.mock.calls[0];
+    const init = request?.[1];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
   });
 });

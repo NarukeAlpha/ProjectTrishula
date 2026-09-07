@@ -34,6 +34,7 @@ import {
   marketEditionLabel,
   mayDeleteRetainedEvidence,
   nextRetryAt,
+  publicationCandidateDisposition,
   resolveCalendarWindow,
   researchDispatchId,
   scheduleDayEnabled,
@@ -59,6 +60,7 @@ const MARKET_RESEARCH_MAX_CALENDAR_BYTES = 512 * 1_024;
 const MARKET_RESEARCH_MAX_CALENDAR_SESSIONS = 800;
 const MARKET_RESEARCH_MAX_DELIVERY_PARTS = 500;
 const MARKET_RESEARCH_RETENTION_DEFER_MS = 7 * 24 * 60 * 60 * 1_000;
+const MARKET_RESEARCH_PUBLICATION_QUEUE_DEFER_MS = 5_000;
 const MARKET_RESEARCH_CALENDAR_MAX_AGE_MS = 45 * 24 * 60 * 60 * 1_000;
 const OFFICIAL_CALENDAR_HOSTS = new Set([
   "nyse.com", "www.nyse.com", "sec.gov", "www.sec.gov",
@@ -2440,10 +2442,50 @@ export const claimPublication = internalMutation({
         continue;
       }
       const ordered = await boundedEditionDeliveries(ctx, edition.editionId);
-      if (firstMissingDeliverySequence(ordered) !== delivery.sequence) continue;
-      if (delivery.sequence > 0 && (!edition.threadId || !edition.starterMessageId)) continue;
+      const disposition = publicationCandidateDisposition({
+        deliverySequence: delivery.sequence,
+        deliveryKind: delivery.kind,
+        firstMissingSequence: firstMissingDeliverySequence(ordered),
+        threadId: edition.threadId,
+        starterMessageId: edition.starterMessageId,
+      });
+      if (disposition === "defer_until_prior_delivery") {
+        await ctx.db.patch(delivery._id, {
+          nextAttemptAt: now + MARKET_RESEARCH_PUBLICATION_QUEUE_DEFER_MS,
+          updatedAt: now,
+        });
+        continue;
+      }
+      if (disposition === "terminal_invalid_state") {
+        const code = "discord_thread_reconcile_failed" as const;
+        await terminalizeUnsentDeliveries(ctx, edition.editionId, code, now);
+        await ctx.db.patch(edition._id, {
+          status: "failed",
+          publicationWorkerId: undefined,
+          publicationToken: undefined,
+          publicationLeaseExpiresAt: undefined,
+          nextAttemptAt: undefined,
+          lastErrorCode: code,
+          lastErrorMessage: code,
+          completedAt: now,
+          updatedAt: now,
+        });
+        await recordEvent(ctx, edition, "publication_failed", now, {
+          safeCode: code,
+        });
+        continue;
+      }
       const active = edition.publicationLeaseExpiresAt !== undefined && edition.publicationLeaseExpiresAt > now;
-      if (active && edition.publicationWorkerId !== workerId) continue;
+      if (active && edition.publicationWorkerId !== workerId) {
+        await ctx.db.patch(delivery._id, {
+          nextAttemptAt: Math.max(
+            now + MARKET_RESEARCH_PUBLICATION_QUEUE_DEFER_MS,
+            edition.publicationLeaseExpiresAt ?? now,
+          ),
+          updatedAt: now,
+        });
+        continue;
+      }
       const generation = active ? edition.publicationGeneration : edition.publicationGeneration + 1;
       const token = active && edition.publicationToken
         ? edition.publicationToken

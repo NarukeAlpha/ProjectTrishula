@@ -443,6 +443,7 @@ export function isNonGlobalIpHostname(value: string): boolean {
   return unspecifiedOrLoopback
     || ipv4Compatible
     || ipv4Mapped
+    || (first & 0xe000) !== 0x2000
     || (first & 0xfe00) === 0xfc00
     || (first & 0xffc0) === 0xfe80
     || (first & 0xffc0) === 0xfec0
@@ -617,4 +618,34 @@ export function firstMissingDeliverySequence(
     .sort((left, right) => left.sequence - right.sequence)
     .find((delivery) => delivery.status !== "sent")
     ?.sequence;
+}
+
+export type PublicationCandidateDisposition =
+  | "ready"
+  | "defer_until_prior_delivery"
+  | "terminal_invalid_state";
+
+export function publicationCandidateDisposition(candidate: {
+  deliverySequence: number;
+  deliveryKind: string;
+  firstMissingSequence: number | undefined;
+  threadId: string | undefined;
+  starterMessageId: string | undefined;
+}): PublicationCandidateDisposition {
+  if (candidate.firstMissingSequence !== candidate.deliverySequence) {
+    return "defer_until_prior_delivery";
+  }
+  const kindMatchesSequence = candidate.deliverySequence === 0
+    ? candidate.deliveryKind === "starter"
+    : candidate.deliveryKind === "reply";
+  if (
+    !kindMatchesSequence
+    || (
+      candidate.deliverySequence > 0
+      && (!candidate.threadId || !candidate.starterMessageId)
+    )
+  ) {
+    return "terminal_invalid_state";
+  }
+  return "ready";
 }
