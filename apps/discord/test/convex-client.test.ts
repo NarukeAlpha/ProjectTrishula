@@ -104,6 +104,43 @@ describe("Convex Discord heartbeats", () => {
   });
 });
 
+describe("Convex outbox conversation epochs", () => {
+  function mockReply(epoch: number | undefined, conversationGeneration = 1) {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      operation: "listRunnable",
+      result: {
+        channels: [],
+        replies: [{
+          outboxId: "outbox_1", sourceGuildId: "123", sourceChannelId: "456", guildId: "123", channelId: "456",
+          runId: "run_1", generation: 1, conversationId: "discord:123", epoch, conversationGeneration,
+          routingGeneration: 1, turnId: "turn_1", conversationLeaseToken: "lease_1", replyKind: "final",
+          status: "pending", content: "Done.", deliveryState: "pending", recheckRequested: false,
+          finalizesLoop: true, deliveryToken: "delivery_1", nonce: "123456789", payloadHash: "a".repeat(64),
+          attempts: 0, createdAt: 1,
+        }],
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+    return new ConvexDiscordClient(config, "discord-instance-1");
+  }
+
+  it.each([0, 1])("restores a reply fence at epoch %s", async (epoch) => {
+    const result = await mockReply(epoch).listRunnable("outbox-worker");
+    expect(result.replies[0]?.fence).toEqual({
+      conversationId: "discord:123", epoch, generation: 1, routingGeneration: 1,
+      turnId: "turn_1", leaseToken: "lease_1",
+    });
+  });
+
+  it.each([-1, 0.5, undefined])("rejects an invalid or missing epoch %s", async (epoch) => {
+    await expect(mockReply(epoch).listRunnable("outbox-worker")).rejects.toThrow();
+  });
+
+  it.each([0, -1, 0.5])("still rejects inactive or invalid generation %s", async (generation) => {
+    await expect(mockReply(0, generation).listRunnable("outbox-worker")).rejects.toThrow();
+  });
+});
+
 describe("Convex portable checkpoints", () => {
   it("forwards a validated opaque artifact only on the durable protocol", async () => {
     let body: unknown;

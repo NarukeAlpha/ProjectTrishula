@@ -502,6 +502,28 @@ describe("bounded staged compaction", () => {
     expect(oldRequest).not.toHaveProperty("previousNativeCheckpoint");
   });
 
+  it.each(["durable-v1", "native-v2"])("dispatches a fresh conversation heartbeat through %s", async (protocol) => {
+    vi.stubEnv("DISCORD_GATEWAY_SHARED_SECRET", "fixture-gateway-secret");
+    const request = {
+      operation: "heartbeat", actorId: ownerId, instanceId: "gateway_1", status: "online",
+      run: {
+        channelId: "456", runId: "run_1", generation: 1, conversationId: "discord:123",
+        epoch: 0, conversationGeneration: 1, routingGeneration: 1, turnId: "turn_1",
+        conversationLeaseToken: "lease_1", stage: "triaging",
+      },
+    };
+    const result = { gatewayAccepted: true, loopAccepted: true, leaseExpiresAt: 100 };
+    const heartbeat = await gatewayRequest(request, result, protocol);
+    expect(heartbeat.response.status).toBe(200);
+    expect(heartbeat.body.result).toEqual(result);
+    const { operation, ...mutationArgs } = request;
+    void operation;
+    expect(heartbeat.runMutation).toHaveBeenCalledWith(expect.anything(), mutationArgs);
+    const invalid = await gatewayRequest({ ...request, run: { ...request.run, epoch: -1 } }, result, protocol);
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.runMutation).not.toHaveBeenCalled();
+  });
+
   it("negotiates native fields and checkpoint operations only through the native-v2 HTTP header", async () => {
     vi.stubEnv("DISCORD_GATEWAY_SHARED_SECRET", "fixture-gateway-secret");
     const db = database(); const conversation = db.conversation("123", 3);

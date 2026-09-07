@@ -22,6 +22,7 @@ import {
   type StoredMessage,
 } from "../contracts.js";
 import {
+  conversationEpochSchema,
   conversationIdentitySchema,
   durableConversationContextSchema,
   durableTurnRecoverySchema,
@@ -238,7 +239,7 @@ const outboxItemSchema = z
     runId: stableIdSchema,
     generation: z.number().int().positive(),
     conversationId: stableIdSchema.optional(),
-    epoch: z.number().int().positive().optional(),
+    epoch: conversationEpochSchema.optional(),
     conversationGeneration: z.number().int().positive().optional(),
     routingGeneration: z.number().int().positive().optional(),
     turnId: stableIdSchema.optional(),
@@ -566,7 +567,7 @@ function toOutboxItem(
   if (reply.conversationId !== undefined) {
     fence = {
       conversationId: reply.conversationId,
-      epoch: z.number().int().positive().parse(reply.epoch),
+      epoch: conversationEpochSchema.parse(reply.epoch),
       generation: z.number().int().positive().parse(reply.conversationGeneration),
       routingGeneration: z.number().int().positive().parse(reply.routingGeneration),
       turnId: stableIdSchema.parse(reply.turnId),

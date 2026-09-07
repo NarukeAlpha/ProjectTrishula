@@ -23,6 +23,7 @@ function content(maximum: number) {
 
 const isoDateTime = z.iso.datetime({ offset: true });
 const httpsUrl = z.url().refine((value) => new URL(value).protocol === "https:");
+export const conversationEpochSchema = z.number().int().nonnegative();
 
 export const conversationIdentitySchema = z
   .object({
@@ -30,7 +31,7 @@ export const conversationIdentitySchema = z
     ownerBindingVersion: z.number().int().positive(),
     guildId: snowflakeSchema,
     conversationId: z.string().regex(/^discord:\d{1,32}$/),
-    epoch: z.number().int().nonnegative(),
+    epoch: conversationEpochSchema,
     turnId: stableIdSchema,
     runId: stableIdSchema,
     generation: z.number().int().positive(),
@@ -171,7 +172,7 @@ export const nativeCheckpointSchema = z.object({
   ownerBindingVersion: z.number().int().positive(),
   guildId: snowflakeSchema,
   conversationId: z.string().regex(/^discord:\d{1,32}$/),
-  epoch: z.number().int().nonnegative(),
+  epoch: conversationEpochSchema,
   compactedThroughOrdinal: z.number().int().positive(),
   sourceRevision: z.number().int().positive(),
   sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -244,7 +245,7 @@ export const portableCheckpointIdentitySchema = z.object({
   ownerBindingVersion: z.number().int().positive(),
   guildId: snowflakeSchema,
   conversationId: z.string().regex(/^discord:\d{1,32}$/),
-  epoch: z.number().int().nonnegative(),
+  epoch: conversationEpochSchema,
   generation: z.number().int().positive(),
   routingGeneration: z.number().int().positive(),
   revision: z.number().int().positive(),
