@@ -13,10 +13,11 @@ import type {
   ClaimedPublication,
   MarketResearchChartRequest,
   MarketResearchSafeError,
+  PublicationAcknowledgement,
 } from "./contracts.js";
 import type { MarketChartRenderer } from "../media/chart-img.js";
 import type { ProviderMarketChartSpec, RenderedMarketChart } from "../media/market-chart.js";
-import { logger } from "../runtime/logger.js";
+import { PublicationTelemetry, type PublicationLogSink } from "./publication-telemetry.js";
 
 const MAX_RECENT_FORUM_THREADS = 100;
 const MAX_RECENT_THREAD_MESSAGES = 100;
@@ -39,6 +40,8 @@ export interface ForumPublisherOptions {
   random?: () => number;
   chartImages?: MarketChartRenderer;
   chartsEnabled?: boolean;
+  publicationLog?: PublicationLogSink;
+  monotonicNow?: () => number;
 }
 
 export interface PublicationErrorDecision {
@@ -231,12 +234,14 @@ export class ForumPublisher {
   private readonly delays: readonly number[];
   private readonly delay: (milliseconds: number) => Promise<void>;
   private readonly random: () => number;
+  private readonly telemetry: PublicationTelemetry;
   private polling = false;
 
   constructor(private readonly options: ForumPublisherOptions) {
     this.delays = options.reconciliationDelaysMs ?? DEFAULT_RECONCILIATION_DELAYS_MS;
     this.delay = options.delay ?? sleep;
     this.random = options.random ?? Math.random;
+    this.telemetry = new PublicationTelemetry(options.publicationLog, options.monotonicNow);
   }
 
   async poll(): Promise<boolean> {
@@ -255,7 +260,8 @@ export class ForumPublisher {
   async publish(claim: ClaimedPublication): Promise<void> {
     const botUserId = this.options.client.user?.id;
     if (!botUserId) return;
-    if (!(await this.options.convex.heartbeatPublication(claim))) return;
+    this.telemetry.record(claim, "attempt", { outcome: "started" });
+    if (!(await this.heartbeat(claim))) return;
     const fetched = await this.options.client.channels.fetch(claim.forumChannelId);
     if (fetched?.type !== ChannelType.GuildForum || fetched.guildId !== claim.guildId) {
       await this.fail(claim, { code: "forum_wrong_channel_type", retryable: false });
@@ -289,15 +295,19 @@ export class ForumPublisher {
     let thread: AnyThreadChannel;
     try {
       const files = await this.renderCharts(claim, forum, botUserId);
-      thread = await forum.threads.create({
-        name: claim.forumTitle,
-        message: {
-          content: claim.delivery.content,
-          allowedMentions: { parse: [] },
-          ...(files.length === 0 ? {} : { files }),
-        },
-        appliedTags: claim.forumTagIds,
-      });
+      thread = await this.telemetry.measure(claim, "send",
+        () => forum.threads.create({
+          name: claim.forumTitle,
+          message: {
+            content: claim.delivery.content,
+            allowedMentions: { parse: [] },
+            ...(files.length === 0 ? {} : { files }),
+          },
+          appliedTags: claim.forumTagIds,
+        }),
+        () => ({ outcome: "sent", attachmentCount: files.length }),
+        (error) => ({ outcome: "failed", ...classifyPublicationError(error, "starter") }),
+      );
     } catch (error) {
       const decision = classifyPublicationError(error, "starter");
       if (decision.code !== "discord_thread_reconcile_ambiguous") {
@@ -312,10 +322,13 @@ export class ForumPublisher {
 
     for (const delay of [0, ...this.delays]) {
       if (delay > 0) await this.delay(Math.round(delay * (0.75 + this.random() * 0.5)));
-      if (!(await this.options.convex.heartbeatPublication(claim))) return;
-      const starter = await starterForThread(thread, claim, botUserId);
+      if (!(await this.heartbeat(claim))) return;
+      const starter = await this.telemetry.measure(claim, "verify_starter",
+        () => starterForThread(thread, claim, botUserId),
+        (result) => ({ outcome: result ? "verified" : "unverified" }),
+      );
       if (starter) {
-        await this.options.convex.acknowledgePublication(claim, {
+        await this.acknowledge(claim, {
           status: "sent",
           discordThreadId: starter.threadId,
           discordMessageId: starter.messageId,
@@ -338,13 +351,13 @@ export class ForumPublisher {
       await this.fail(claim, { code: "discord_thread_reconcile_failed", retryable: false });
       return;
     }
-    const existing = await reconcileReply(fetched, claim, botUserId);
+    const existing = await this.reconcileReply(fetched, claim, botUserId);
     if (existing.state === "duplicate") {
       await this.stopForDuplicateReply(claim, fetched.id, existing.earliestMessageId);
       return;
     }
     if (existing.state === "found") {
-      await this.options.convex.acknowledgePublication(claim, {
+      await this.acknowledge(claim, {
         status: "sent",
         discordThreadId: fetched.id,
         discordMessageId: existing.messageId,
@@ -353,27 +366,31 @@ export class ForumPublisher {
     }
     try {
       const files = await this.renderCharts(claim, fetched, botUserId);
-      const message = await fetched.send({
-        content: claim.delivery.content,
-        allowedMentions: { parse: [] },
-        nonce: claim.delivery.nonce,
-        enforceNonce: true,
-        ...(files.length === 0 ? {} : { files }),
-      });
-      await this.options.convex.acknowledgePublication(claim, {
+      const message = await this.telemetry.measure(claim, "send",
+        () => fetched.send({
+          content: claim.delivery.content,
+          allowedMentions: { parse: [] },
+          nonce: claim.delivery.nonce,
+          enforceNonce: true,
+          ...(files.length === 0 ? {} : { files }),
+        }),
+        () => ({ outcome: "sent", attachmentCount: files.length }),
+        (error) => ({ outcome: "failed", ...classifyPublicationError(error, "reply") }),
+      );
+      await this.acknowledge(claim, {
         status: "sent",
         discordThreadId: fetched.id,
         discordMessageId: message.id,
       });
     } catch (error) {
       try {
-        const reconciled = await reconcileReply(fetched, claim, botUserId);
+        const reconciled = await this.reconcileReply(fetched, claim, botUserId);
         if (reconciled.state === "duplicate") {
           await this.stopForDuplicateReply(claim, fetched.id, reconciled.earliestMessageId);
           return;
         }
         if (reconciled.state === "found") {
-          await this.options.convex.acknowledgePublication(claim, {
+          await this.acknowledge(claim, {
             status: "sent",
             discordThreadId: fetched.id,
             discordMessageId: reconciled.messageId,
@@ -393,7 +410,11 @@ export class ForumPublisher {
     botUserId: string,
   ): Promise<StarterReconciliation> {
     try {
-      return await reconcileStarterOnce(forum, claim, botUserId);
+      return await this.telemetry.measure(claim, "reconcile",
+        () => reconcileStarterOnce(forum, claim, botUserId),
+        (result) => ({ outcome: result.state }),
+        () => ({ outcome: "failed", code: "discord_thread_reconcile_failed" }),
+      );
     } catch {
       return { state: "none" };
     }
@@ -406,7 +427,7 @@ export class ForumPublisher {
   ): Promise<StarterReconciliation> {
     for (const delay of this.delays) {
       await this.delay(Math.round(delay * (0.75 + this.random() * 0.5)));
-      if (!(await this.options.convex.heartbeatPublication(claim))) return { state: "none" };
+      if (!(await this.heartbeat(claim))) return { state: "none" };
       const result = await this.safeStarterReconciliation(forum, claim, botUserId);
       if (result.state !== "none") return result;
     }
@@ -419,16 +440,15 @@ export class ForumPublisher {
   ): Promise<boolean> {
     if (reconciliation.state === "none") return false;
     if (reconciliation.state === "duplicate") {
-      await this.options.convex.adoptReconciledStarter(
+      await this.adopt(
         claim,
         reconciliation.earliest.threadId,
         reconciliation.earliest.messageId,
-        undefined,
         true,
       );
       return true;
     }
-    await this.options.convex.adoptReconciledStarter(
+    await this.adopt(
       claim,
       reconciliation.threadId,
       reconciliation.messageId,
@@ -437,7 +457,7 @@ export class ForumPublisher {
   }
 
   private async fail(claim: ClaimedPublication, decision: PublicationErrorDecision): Promise<void> {
-    await this.options.convex.acknowledgePublication(claim, {
+    await this.acknowledge(claim, {
       status: "failed",
       code: decision.code,
       retryable: decision.retryable,
@@ -450,7 +470,7 @@ export class ForumPublisher {
     threadId: string,
     earliestMessageId: string,
   ): Promise<void> {
-    await this.options.convex.acknowledgePublication(claim, {
+    await this.acknowledge(claim, {
       status: "failed",
       discordThreadId: threadId,
       discordMessageId: earliestMessageId,
@@ -464,40 +484,71 @@ export class ForumPublisher {
     channel: ForumChannel | AnyThreadChannel,
     botUserId: string,
   ): Promise<RenderedMarketChart[]> {
-    if (
+    const requestedCharts = Math.max(claim.delivery.chartRequests.length, claim.delivery.chartAttachmentIds.length);
+    const renderer = this.options.chartImages;
+    const unavailable = (
       !this.options.chartsEnabled
-      || this.options.chartImages === undefined
+      || renderer === undefined
       || claim.delivery.chartRequests.length === 0
       || channel.permissionsFor(botUserId)?.has(PermissionFlagsBits.AttachFiles) !== true
-    ) {
-      if (claim.delivery.chartAttachmentIds.length > 0) {
-        logger.warn("Market-research chart attachments were unavailable; text publication continues.", {
-          editionId: claim.editionId,
-          code: "chart_unavailable",
-        });
+    );
+    return this.telemetry.measure(claim, "charts", async () => {
+      const files: RenderedMarketChart[] = [];
+      if (unavailable) return files;
+      for (const request of claim.delivery.chartRequests) {
+        const spec = chartSpecForMarketResearch(request);
+        if (spec === null) continue;
+        try {
+          files.push(await renderer.render(spec));
+        } catch {
+          // Optional image failures are counted below; text publication continues.
+        }
       }
-      return [];
-    }
-    const files: RenderedMarketChart[] = [];
-    for (const request of claim.delivery.chartRequests) {
-      const spec = chartSpecForMarketResearch(request);
-      if (spec === null) {
-        logger.warn("Market-research chart symbol is unsupported; text publication continues.", {
-          editionId: claim.editionId,
-          code: "chart_unavailable",
-        });
-        continue;
-      }
-      try {
-        files.push(await this.options.chartImages.render(spec));
-      } catch {
-        logger.warn("Market-research chart rendering failed; text publication continues.", {
-          editionId: claim.editionId,
-          code: "chart_unavailable",
-        });
-      }
-    }
-    return files;
+      return files;
+    }, (files) => ({
+      outcome: unavailable ? "skipped" : files.length === requestedCharts ? "complete" : files.length > 0 ? "partial" : "failed",
+      requestedCharts,
+      renderedCharts: files.length,
+      unavailableCharts: requestedCharts - files.length,
+      code: files.length < requestedCharts ? "chart_unavailable" : undefined,
+    }));
+  }
+
+  private heartbeat(claim: ClaimedPublication): Promise<boolean> {
+    return this.telemetry.measure(claim, "heartbeat",
+      () => this.options.convex.heartbeatPublication(claim),
+      (accepted) => ({ outcome: accepted ? "accepted" : "fence_rejected" }),
+    );
+  }
+
+  private acknowledge(claim: ClaimedPublication, result: PublicationAcknowledgement): Promise<boolean> {
+    return this.telemetry.measure(claim, "acknowledge",
+      () => this.options.convex.acknowledgePublication(claim, result),
+      (accepted) => ({
+        outcome: accepted ? "accepted" : "fence_rejected",
+        acknowledgement: result.status,
+        code: result.code,
+        retryable: result.retryable,
+        retryAfterMs: result.retryAfterMs,
+      }),
+      () => ({ outcome: "failed", acknowledgement: result.status, code: result.code, retryable: result.retryable }),
+    );
+  }
+
+  private adopt(claim: ClaimedPublication, threadId: string, messageId: string, duplicateIncident?: boolean): Promise<boolean> {
+    return this.telemetry.measure(claim, "adopt",
+      () => this.options.convex.adoptReconciledStarter(claim, threadId, messageId, undefined, duplicateIncident),
+      (accepted) => ({ outcome: accepted ? "accepted" : "fence_rejected", duplicateIncident: duplicateIncident ?? false }),
+      () => ({ outcome: "failed", duplicateIncident: duplicateIncident ?? false }),
+    );
+  }
+
+  private reconcileReply(thread: AnyThreadChannel, claim: ClaimedPublication, botUserId: string): Promise<ReplyReconciliation> {
+    return this.telemetry.measure(claim, "reconcile",
+      () => reconcileReply(thread, claim, botUserId),
+      (result) => ({ outcome: result.state }),
+      () => ({ outcome: "failed", code: "discord_thread_reconcile_failed" }),
+    );
   }
 }
 

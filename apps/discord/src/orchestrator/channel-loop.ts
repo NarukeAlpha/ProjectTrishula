@@ -27,6 +27,8 @@ import type {
   FrontmanResearchRequest,
   FrontmanResumeRequest,
   FrontmanResumeResponse,
+  DurableConversationContext,
+  NativeCheckpointRejection,
   ResearchFailure,
   SolResearchRequest,
   SolResearchResponse,
@@ -106,6 +108,19 @@ export interface ConvexLoopClient {
     >,
     signal?: AbortSignal,
   ): Promise<void>;
+  invalidateNativeCheckpoint?(
+    invalidation: {
+      guildId: string;
+      conversationId: string;
+      checkpointId: string;
+      epoch: number;
+      ownerBindingVersion: number;
+      revision: number;
+      generation: number;
+      routingGeneration: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 export interface PiLoopClient {
@@ -131,6 +146,51 @@ export interface PiLoopClient {
 
 function channelKey(channel: ChannelReference): string {
   return `${channel.guildId}:${channel.channelId}`;
+}
+
+async function consumeNativeCheckpointRejection(
+  dependencies: ChannelLoopDependencies,
+  conversation: ClaimedLoop["conversation"],
+  durableContext: DurableConversationContext,
+  rejection: NativeCheckpointRejection | undefined,
+  signal: AbortSignal,
+): Promise<DurableConversationContext> {
+  if (rejection === undefined) return durableContext;
+  if (
+    conversation.activeCheckpointId !== rejection.checkpointId
+    || durableContext.activeCheckpointId !== rejection.checkpointId
+    || durableContext.nativeCheckpoint?.checkpointId !== rejection.checkpointId
+  ) throw new Error("Pi rejected a native checkpoint outside the active conversation fence.");
+  const invalidate = dependencies.convex.invalidateNativeCheckpoint;
+  if (invalidate === undefined) {
+    logger.warn("Discord native checkpoint invalidation was deferred.", {
+      guildId: conversation.guildId,
+      checkpointId: rejection.checkpointId,
+      reason: "gateway_operation_unavailable",
+    });
+  } else {
+    try {
+      await invalidate.call(dependencies.convex, {
+        guildId: conversation.guildId,
+        conversationId: conversation.conversationId,
+        checkpointId: rejection.checkpointId,
+        epoch: conversation.epoch,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        revision: conversation.revision,
+        generation: conversation.generation,
+        routingGeneration: conversation.routingGeneration,
+      }, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      logger.warn("Discord native checkpoint invalidation was deferred.", {
+        guildId: conversation.guildId,
+        checkpointId: rejection.checkpointId,
+        reason: "gateway_write_failed",
+      });
+    }
+  }
+  const { nativeCheckpoint: _invalidated, ...portableContext } = durableContext;
+  return portableContext;
 }
 
 function runIdentity(
@@ -304,19 +364,29 @@ export class ChannelLoopOrchestrator {
       channelId: claim.channelId,
       channelName: claim.channelName,
     };
+    let durableContext = claim.durableContext;
     const planRequestId = `${claim.runId}:frontman-plan`;
     let plan = claim.recovery?.plan;
     if (plan === undefined) {
       await changeStage("triaging");
-      plan = await planAgent.call(this.dependencies.pi, {
+      const planResult = await planAgent.call(this.dependencies.pi, {
         requestId: planRequestId,
         profile: "frontman_plan",
         triggerKind: claim.triggerKind,
         conversation: claim.conversation,
-        durableContext: claim.durableContext,
+        durableContext,
         channel: agentChannel,
         messages: claim.messages,
       }, signal);
+      durableContext = await consumeNativeCheckpointRejection(
+        this.dependencies,
+        claim.conversation,
+        durableContext,
+        planResult.nativeCheckpointRejection,
+        signal,
+      );
+      const { nativeCheckpointRejection: _rejection, ...planWithoutRejection } = planResult;
+      plan = planWithoutRejection;
       await recordPlan.call(
         this.dependencies.convex,
         identity,
@@ -542,7 +612,7 @@ export class ChannelLoopOrchestrator {
             profile: "frontman_resume",
             triggerKind: claim.triggerKind,
             conversation: claim.conversation,
-            durableContext: claim.durableContext,
+            durableContext,
             channel: agentChannel,
             messages: newest.messages,
             targetMessageId: target.messageId,
@@ -558,7 +628,16 @@ export class ChannelLoopOrchestrator {
         if (newest.nextExplicitTriggerSequence !== undefined) {
           resumeRequest.nextExplicitTriggerSequence = newest.nextExplicitTriggerSequence;
         }
-        resume = await resumeAgent.call(this.dependencies.pi, resumeRequest, signal);
+        const resumeResult = await resumeAgent.call(this.dependencies.pi, resumeRequest, signal);
+        durableContext = await consumeNativeCheckpointRejection(
+          this.dependencies,
+          claim.conversation,
+          durableContext,
+          resumeResult.nativeCheckpointRejection,
+          signal,
+        );
+        const { nativeCheckpointRejection: _rejection, ...resumeWithoutRejection } = resumeResult;
+        resume = resumeWithoutRejection;
       }
       if (
         claim.triggerKind !== "ambient"

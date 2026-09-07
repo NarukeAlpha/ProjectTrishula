@@ -22,6 +22,7 @@ import {
   type StoredMessage,
 } from "../contracts.js";
 import {
+  conversationEpochSchema,
   conversationIdentitySchema,
   durableConversationContextSchema,
   durableTurnRecoverySchema,
@@ -48,8 +49,9 @@ import {
   validDiscordContent,
 } from "../content.js";
 
-const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
-const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+export const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
+export const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+export const DISCORD_GATEWAY_NATIVE_PROTOCOL = "native-v2";
 
 const operationSchema = z.enum([
   "syncGuilds",
@@ -65,6 +67,7 @@ const operationSchema = z.enum([
   "listRunnable",
   "nextPortableCheckpoint",
   "storePortableCheckpoint",
+  "invalidateNativeCheckpoint",
   "enqueueReply",
   "beginReplyDelivery",
   "acknowledgeReply",
@@ -236,7 +239,7 @@ const outboxItemSchema = z
     runId: stableIdSchema,
     generation: z.number().int().positive(),
     conversationId: stableIdSchema.optional(),
-    epoch: z.number().int().positive().optional(),
+    epoch: conversationEpochSchema.optional(),
     conversationGeneration: z.number().int().positive().optional(),
     routingGeneration: z.number().int().positive().optional(),
     turnId: stableIdSchema.optional(),
@@ -346,8 +349,12 @@ const portableCheckpointStoreResponseSchema = z.object({
   accepted: z.literal(true),
   duplicate: z.boolean(),
   checkpointId: stableIdSchema,
-  status: z.enum(["active", "superseded", "invalid", "expired"]),
+  status: z.enum(["candidate", "active", "superseded", "invalid", "expired"]),
 }).passthrough();
+const nativeCheckpointInvalidationResponseSchema = z.object({
+  accepted: z.literal(true),
+  invalidated: z.boolean(),
+}).strict();
 
 export interface MonitoredChannelCursor extends ChannelReference {
   afterMessageId: string | null;
@@ -469,6 +476,17 @@ export interface AcknowledgeResult {
   status: "pending" | "sent" | "failed" | "delivery_uncertain";
 }
 
+export interface NativeCheckpointInvalidation {
+  guildId: string;
+  conversationId: string;
+  checkpointId: string;
+  epoch: number;
+  ownerBindingVersion: number;
+  revision: number;
+  generation: number;
+  routingGeneration: number;
+}
+
 function stageFence(identity: RunIdentity) {
   if (identity.fence === undefined) {
     throw new Error("A durable stage write requires a conversation fence.");
@@ -549,7 +567,7 @@ function toOutboxItem(
   if (reply.conversationId !== undefined) {
     fence = {
       conversationId: reply.conversationId,
-      epoch: z.number().int().positive().parse(reply.epoch),
+      epoch: conversationEpochSchema.parse(reply.epoch),
       generation: z.number().int().positive().parse(reply.conversationGeneration),
       routingGeneration: z.number().int().positive().parse(reply.routingGeneration),
       turnId: stableIdSchema.parse(reply.turnId),
@@ -1147,8 +1165,31 @@ export class ConvexDiscordClient {
         inputTokens: validatedResponse.estimator.inputEstimatedTokens,
         outputTokens: validatedResponse.estimator.outputEstimatedTokens,
         estimatedSavedTokens: validatedResponse.estimator.estimatedSavedTokens,
+        nativeCompaction: validatedResponse.nativeCompaction,
       },
       portableCheckpointStoreResponseSchema,
+      signal,
+    );
+  }
+
+  async invalidateNativeCheckpoint(
+    invalidation: NativeCheckpointInvalidation,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.request(
+      "invalidateNativeCheckpoint",
+      {
+        actorId: this.config.discordOwnerId,
+        guildId: invalidation.guildId,
+        conversationId: invalidation.conversationId,
+        checkpointId: invalidation.checkpointId,
+        epoch: invalidation.epoch,
+        expectedOwnerBindingVersion: invalidation.ownerBindingVersion,
+        expectedRevision: invalidation.revision,
+        expectedGeneration: invalidation.generation,
+        expectedRoutingGeneration: invalidation.routingGeneration,
+      },
+      nativeCheckpointInvalidationResponseSchema,
       signal,
     );
   }
@@ -1218,7 +1259,7 @@ export class ConvexDiscordClient {
       headers: {
         authorization: `Bearer ${this.config.convexSharedSecret}`,
         "content-type": "application/json",
-        [DISCORD_GATEWAY_PROTOCOL_HEADER]: DISCORD_GATEWAY_DURABLE_PROTOCOL,
+        [DISCORD_GATEWAY_PROTOCOL_HEADER]: DISCORD_GATEWAY_NATIVE_PROTOCOL,
       },
       body: JSON.stringify({ operation, ...payload }),
       signal: combined,

@@ -143,6 +143,14 @@ class FakeConvex implements ConvexLoopClient {
   newestMessages: AgentMessage[] = [newestMessage];
   newestThroughSequence = 2;
   durableWrites: string[] = [];
+  invalidations: Array<{
+    checkpointId: string;
+    revision: number;
+    generation: number;
+    routingGeneration: number;
+  }> = [];
+  nativeCheckpointContext = false;
+  invalidationFails = false;
   recovery: Extract<ClaimLoopResponse, { claimed: true }>["recovery"];
   recoveryFailure: Extract<ClaimLoopResponse, { claimed: true }>["recoveryFailure"];
 
@@ -156,6 +164,47 @@ class FakeConvex implements ConvexLoopClient {
       claim.triggerKind = this.claimTriggerKind;
       if (this.recovery !== undefined) claim.recovery = this.recovery;
       if (this.recoveryFailure !== undefined) claim.recoveryFailure = this.recoveryFailure;
+      if (this.nativeCheckpointContext) {
+        const checkpointId = "checkpoint:native:1";
+        claim.conversation.activeCheckpointId = checkpointId;
+        claim.durableContext = {
+          ...claim.durableContext,
+          activeCheckpointId: checkpointId,
+          activeCheckpointCompactedThroughOrdinal: 1,
+          activeCheckpointSourceRevision: 1,
+          activeCheckpointSourceContextHash: "c".repeat(64),
+          nativeCheckpoint: {
+            checkpointId,
+            ownerId: claim.conversation.ownerId,
+            ownerBindingVersion: claim.conversation.ownerBindingVersion,
+            guildId: claim.conversation.guildId,
+            conversationId: claim.conversation.conversationId,
+            epoch: claim.conversation.epoch,
+            compactedThroughOrdinal: 1,
+            sourceRevision: 1,
+            sourceContextHash: "c".repeat(64),
+            personalityVersion: claim.conversation.personalityVersion,
+            systemPromptHash: claim.conversation.systemPromptHash,
+            capabilityProfileHash: claim.conversation.capabilityProfileHash,
+            artifact: {
+              schemaVersion: 1,
+              implementationVersion: "responses-compaction-v2-pi-0_84_1-v1",
+              provider: "openai-codex",
+              model: "gpt-5.6-luna",
+              replacementHistory: [{ type: "compaction", opaque: "provider-owned" }],
+              artifactSha256: "d".repeat(64),
+              serializedBytes: 56,
+              usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+              requestEvidence: {
+                store: false,
+                transport: "sse",
+                betaFeature: "remote_compaction_v2",
+                endpoint: "chatgpt-codex-responses",
+              },
+            },
+          },
+        };
+      }
     }
     return claim;
   }
@@ -239,6 +288,17 @@ class FakeConvex implements ConvexLoopClient {
   ): Promise<void> {
     this.durableWrites.push("resume");
   }
+
+  async invalidateNativeCheckpoint(invalidation: {
+    checkpointId: string;
+    revision: number;
+    generation: number;
+    routingGeneration: number;
+  }): Promise<void> {
+    if (this.invalidationFails) throw new Error("Synthetic invalidation outage.");
+    this.invalidations.push(invalidation);
+    this.durableWrites.push("native_invalidated");
+  }
 }
 
 class FakePi implements PiLoopClient {
@@ -250,6 +310,8 @@ class FakePi implements PiLoopClient {
   frontmanAction: FrontmanPlanResponse["action"] = "research";
   durableCalls: string[] = [];
   resumeAction: FrontmanResumeResponse["action"] = "send";
+  rejectNativeCheckpointOnPlan = false;
+  rejectNativeCheckpointOnResume = false;
 
   async frontmanPlan(input: FrontmanPlanRequest): Promise<FrontmanPlanResponse> {
     this.durableCalls.push("plan");
@@ -266,6 +328,9 @@ class FakePi implements PiLoopClient {
         reply: this.frontmanAction === "reply"
           ? "A durable direct answer."
           : "Which market session do you mean?",
+        nativeCheckpointRejection: this.rejectNativeCheckpointOnPlan
+          ? { checkpointId: "checkpoint:native:1", reason: "provider_rejected" }
+          : undefined,
       };
     }
     if (this.frontmanAction === "silent") {
@@ -340,7 +405,7 @@ class FakePi implements PiLoopClient {
 
   async frontmanResume(_input: FrontmanResumeRequest): Promise<FrontmanResumeResponse> {
     this.durableCalls.push("resume");
-    return this.resumeAction === "send"
+    const resume: FrontmanResumeResponse = this.resumeAction === "send"
       ? {
           profile: "frontman_resume",
           action: "send",
@@ -352,6 +417,13 @@ class FakePi implements PiLoopClient {
           action: "suppress",
           reasonCode: "answered_by_human",
         };
+    if (this.rejectNativeCheckpointOnResume) {
+      resume.nativeCheckpointRejection = {
+        checkpointId: "checkpoint:native:1",
+        reason: "provider_rejected",
+      };
+    }
+    return resume;
   }
 
   async triage(input: TriageRequest): Promise<TriageResponse> {
@@ -465,6 +537,63 @@ describe("ChannelLoopOrchestrator", () => {
       consumesThroughSequence: 2,
       fence: { eligibleHumanRevision: 2 },
     });
+  });
+
+  it("invalidates provider-rejected opaque state before it persists the portable fallback", async () => {
+    const convex = new FakeConvex();
+    convex.claimTriggerKind = "mention";
+    convex.nativeCheckpointContext = true;
+    const pi = new FakePi();
+    pi.frontmanAction = "reply";
+    pi.rejectNativeCheckpointOnPlan = true;
+    orchestrator(convex, pi, true).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(1));
+    expect(convex.durableWrites).toEqual(["native_invalidated", "plan"]);
+    expect(convex.invalidations).toEqual([{
+      checkpointId: "checkpoint:native:1",
+      revision: 1,
+      generation: 1,
+      routingGeneration: 1,
+      guildId: "10",
+      conversationId: "discord:10",
+      epoch: 1,
+      ownerBindingVersion: 1,
+    }]);
+  });
+
+  it("invalidates a resume-time rejection after durable plan and research writes", async () => {
+    const convex = new FakeConvex();
+    convex.claimTriggerKind = "mention";
+    convex.nativeCheckpointContext = true;
+    const pi = new FakePi();
+    pi.rejectNativeCheckpointOnResume = true;
+    orchestrator(convex, pi, true).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(3));
+    expect(convex.durableWrites).toEqual([
+      "plan",
+      "research_started",
+      "research_result",
+      "native_invalidated",
+      "resume",
+    ]);
+    expect(convex.invalidations).toHaveLength(1);
+  });
+
+  it("keeps the valid portable fallback when native invalidation is temporarily unavailable", async () => {
+    const convex = new FakeConvex();
+    convex.claimTriggerKind = "mention";
+    convex.nativeCheckpointContext = true;
+    convex.invalidationFails = true;
+    const pi = new FakePi();
+    pi.frontmanAction = "reply";
+    pi.rejectNativeCheckpointOnPlan = true;
+    orchestrator(convex, pi, true).schedule(channel);
+
+    await vi.waitFor(() => expect(convex.queued).toHaveLength(1));
+    expect(convex.queued[0]?.content).toBe("A durable direct answer.");
+    expect(convex.durableWrites).toEqual(["plan"]);
   });
 
   it("orders explicit acknowledgement, isolated Sol, catch-up, and resume", async () => {
