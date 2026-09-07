@@ -4,7 +4,7 @@ interface ProtectedRange {
 }
 
 const markdownLink = /\[[^\]\n]+\]\(https:\/\/[^\s)]+(?:\([^\s)]*\)[^\s)]*)*\)/gu;
-const plainUrl = /https:\/\/[^\s<>{}\[\]]+/gu;
+const plainUrl = /https:\/\/[^\s<>{}\u005b\u005d]+/gu;
 const citationMarker = /\[[A-Za-z0-9:._-]{1,256}\]/gu;
 const atomicReportLine = /^(?:[-*+]\s|\d+[.)]\s|[A-Z][A-Z0-9.^=-]{0,19}\s*(?::|\||-|—))[^\n]*(?:\n|$)/gmu;
 const fencedCodeBlock = /```[^\n]*\n[\s\S]*?```(?:\n|$)/gu;
