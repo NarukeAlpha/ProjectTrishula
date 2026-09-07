@@ -25,6 +25,9 @@ describe("loadConfig", () => {
     expect(config.exaContentsConcurrency).toBe(5);
     expect(config.exaMaxSearchRequestsPerEdition).toBe(12);
     expect(config.exaMaxContentPagesPerEdition).toBe(24);
+    expect(config.marketDataProviderId).toBe("disabled");
+    expect(config.financialDatasetsOwnerDecision).toBe("pending");
+    expect(config.financialDatasetsMaxCostUsdPerRequest).toBeUndefined();
   });
 
   it("requires HTTPS for the production Convex endpoint", () => {
@@ -104,5 +107,21 @@ describe("loadConfig", () => {
     });
     expect(config.marketResearchEnabled).toBe(true);
     expect(config.exaApiKey).toBe("test-exa-key-not-a-production-secret");
+  });
+
+  it("requires explicit approval and a cost cap for Financial Datasets", () => {
+    expect(() => loadConfig({
+      ...base,
+      MARKET_DATA_PROVIDER_ID: "exa_financial_datasets",
+    })).toThrow(/approved owner decision/);
+    const config = loadConfig({
+      ...base,
+      MARKET_DATA_PROVIDER_ID: "exa_financial_datasets",
+      EXA_FINANCIAL_DATASETS_OWNER_DECISION: "approved",
+      EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST: "0.25",
+    });
+    expect(config.marketDataProviderId).toBe("exa_financial_datasets");
+    expect(config.financialDatasetsOwnerDecision).toBe("approved");
+    expect(config.financialDatasetsMaxCostUsdPerRequest).toBe(0.25);
   });
 });

@@ -10,6 +10,7 @@
     "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "auth:codex": "node dist/auth/codex-cli.js",
+    "market-research:evaluate-financial-datasets": "npm run build && node dist/market-research/evaluate-financial-datasets-cli.js",
     "start": "node dist/start.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

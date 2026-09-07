@@ -63,6 +63,10 @@ export interface MarketResearchRunner {
 export interface MarketResearchRunnerOptions {
   exaClient: (request: MarketResearchJobRequest) => MarketResearchExaClient;
   marketData?: MarketDataProvider;
+  marketDataFactory?: (
+    request: MarketResearchJobRequest,
+    exaClient: MarketResearchExaClient,
+  ) => MarketDataProvider;
   composer: MorningPaperComposer;
   callbacks: MarketResearchCallbacks;
   logger: Logger;
@@ -289,11 +293,15 @@ function snapshotEvidence(snapshot: MarketSnapshot): MarketResearchEvidenceItem[
   const fields = [snapshot.price, snapshot.priorClose, snapshot.bid, snapshot.ask, snapshot.volume].filter(
     (value): value is NonNullable<typeof value> => value !== undefined,
   );
-  return fields.map((field) => marketResearchEvidenceItemSchema.parse({
+  return fields.map((field) => {
+    const url = canonicalSourceUrl(field.sourceUrls[0] ?? "");
+    return marketResearchEvidenceItemSchema.parse({
     evidenceId: `market-${sha256(`${snapshot.symbol}:${field.rawField}:${field.providerTimestamp}`).slice(0, 32)}`,
     kind: "quote",
     provider: field.provider,
     sourcePolicy: field.policyStatus,
+    url,
+    canonicalUrlHash: sha256(url),
     providerTimestamp: field.providerTimestamp,
     retrievedAt: field.retrievedAt,
     sessionLabel: field.sessionLabel,
@@ -302,7 +310,8 @@ function snapshotEvidence(snapshot: MarketSnapshot): MarketResearchEvidenceItem[
     highlights: [],
     normalizedClaims: [`${field.symbol} ${field.rawField}=${field.value} ${field.unit}`],
     contentHash: sha256(JSON.stringify(field)),
-  }));
+    });
+  });
 }
 
 function snapshotHasConflict(snapshot: MarketSnapshot): boolean {
@@ -323,11 +332,14 @@ function barSeriesEvidence(symbol: string, bars: readonly MarketBar[], retrieved
   const last = bars.at(-1);
   if (!first || !last) return null;
   const claim = `${symbol} ${first.interval} series has ${bars.length} approved bars from ${first.timestamp} through ${last.timestamp}; latest OHLC ${last.open}/${last.high}/${last.low}/${last.close}${last.volume === undefined ? "" : ` volume ${last.volume}`}.`;
+  const url = canonicalSourceUrl(first.sourceUrls[0] ?? "");
   return marketResearchEvidenceItemSchema.parse({
     evidenceId: `bars-${sha256(`${symbol}:${first.interval}:${bars.map((bar) => bar.timestamp).join(",")}`).slice(0, 32)}`,
     kind: "bar",
     provider: first.provider,
     sourcePolicy: first.policyStatus,
+    url,
+    canonicalUrlHash: sha256(url),
     providerTimestamp: last.providerTimestamp,
     retrievedAt,
     sessionLabel: last.sessionLabel,
@@ -342,6 +354,7 @@ function barSeriesEvidence(symbol: string, bars: readonly MarketBar[], retrieved
 function calculationEvidence(symbol: string, bars: readonly MarketBar[], retrievedAt: string): MarketResearchEvidenceItem[] {
   const interval = bars[0]?.interval;
   if (interval === undefined) return [];
+  const url = canonicalSourceUrl(bars[0]?.sourceUrls[0] ?? "");
   const analytics = calculateAnalytics(bars);
   const fieldsByInterval: Record<MarketBar["interval"], ReadonlySet<keyof typeof analytics>> = {
     "5m": new Set(["vwap", "range", "slope"]),
@@ -358,6 +371,8 @@ function calculationEvidence(symbol: string, bars: readonly MarketBar[], retriev
       kind: "calculation",
       provider: "Project Trishula deterministic analytics",
       sourcePolicy: "approved",
+      url,
+      canonicalUrlHash: sha256(url),
       providerTimestamp: bars.at(-1)?.providerTimestamp,
       retrievedAt,
       sessionLabel: bars.at(-1)?.sessionLabel,
@@ -462,14 +477,15 @@ function safeFailure(error: unknown): { code: MarketResearchSafeErrorCode; retry
 }
 
 class DefaultMarketResearchRunner implements MarketResearchRunner {
-  private readonly marketData: MarketDataProvider;
   private readonly sourcePolicy: SourcePolicy;
   private readonly now: () => Date;
   private disposed = false;
   private initializationError: string | undefined;
 
   constructor(private readonly options: MarketResearchRunnerOptions) {
-    this.marketData = options.marketData ?? new DisabledMarketDataProvider();
+    if (options.marketData !== undefined && options.marketDataFactory !== undefined) {
+      throw new Error("market_data_conflict");
+    }
     this.sourcePolicy = options.sourcePolicy ?? new StaticSourcePolicy();
     this.now = options.now ?? (() => new Date());
   }
@@ -537,6 +553,9 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
         newsPublicationWindow(now, publicationWindowOptions),
       );
       const exa = this.options.exaClient(request);
+      const marketData = this.options.marketDataFactory?.(request, exa)
+        ?? this.options.marketData
+        ?? new DisabledMarketDataProvider();
       let evidence = [...await this.options.callbacks.loadEvidence(request, leaseSignal)];
       if (request.retainedEvidenceIds.some((evidenceId) => !evidence.some((item) => item.evidenceId === evidenceId))) {
         throw new Error("evidence_below_minimum");
@@ -612,11 +631,11 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
       let snapshots: MarketSnapshot[] = [];
       const missingFields: string[] = [];
       const conflicts: MorningPaperEvidenceV1["conflicts"] = [];
-      let marketDataAvailable = this.marketData.policyStatus === "approved";
+      let marketDataAvailable = marketData.policyStatus === "approved";
       if (marketDataAvailable) {
         try {
           const providerSession = validateSessionStatus(
-            await this.marketData.getSessionStatus(
+            await marketData.getSessionStatus(
               request.session.editionDate,
               request.session.timezone,
               leaseSignal,
@@ -634,8 +653,8 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
             const conflictEvidence = marketResearchEvidenceItemSchema.parse({
               evidenceId: `session-conflict-${sha256(`${request.editionId}:${providerSession.date}:${providerSession.status}`).slice(0, 32)}`,
               kind: "source_status",
-              provider: this.marketData.id,
-              sourcePolicy: this.marketData.policyStatus,
+              provider: marketData.id,
+              sourcePolicy: marketData.policyStatus,
               url: canonicalSourceUrl(providerSession.sourceUrl),
               retrievedAt: now.toISOString(),
               freshness: "fresh",
@@ -659,8 +678,10 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
           const failure = safeFailure(error);
           if (failure.code === "market_data_conflict") {
             missingFields.push("session: conflicting structured provider response");
+            marketDataAvailable = false;
+          } else {
+            missingFields.push("session: structured provider does not supply a market calendar");
           }
-          marketDataAvailable = false;
         }
       }
       if (marketDataAvailable) {
@@ -670,7 +691,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
             ...request.preferences.sectorSymbols,
           ])];
           snapshots = validateSnapshots(
-            await this.marketData.getSnapshots(requestedSymbols, leaseSignal),
+            await marketData.getSnapshots(requestedSymbols, leaseSignal),
             requestedSymbols,
           );
           for (const snapshot of snapshots) {
@@ -692,7 +713,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
             for (const [interval, days] of intervalWindows) {
               try {
                 const bars = validateBars(
-                  await this.marketData.getBars(
+                  await marketData.getBars(
                     ticker,
                     interval,
                     new Date(now.getTime() - days * 24 * 60 * 60 * 1_000).toISOString(),
@@ -713,7 +734,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
               }
             }
             try {
-              const actions = await this.marketData.getCorporateActions(
+              const actions = await marketData.getCorporateActions(
                 ticker,
                 request.session.previousSessionDate === null
                   ? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1_000).toISOString()
@@ -729,7 +750,7 @@ class DefaultMarketResearchRunner implements MarketResearchRunner {
             }
           }
           try {
-            const movers = await this.marketData.getMarketMovers(leaseSignal);
+            const movers = await marketData.getMarketMovers(leaseSignal);
             const eligibleMovers = movers.filter((mover) => {
               const price = mover.snapshot.price?.value;
               const priorClose = mover.snapshot.priorClose?.value;

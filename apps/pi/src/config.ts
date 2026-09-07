@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const positiveInteger = z.coerce.number().int().positive();
 const nonnegativeMoney = z.coerce.number().finite().nonnegative();
+const positiveMoney = z.coerce.number().finite().positive();
 const stableActorId = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
 
 const environmentSchema = z.object({
@@ -34,6 +35,14 @@ const environmentSchema = z.object({
   EXA_MAX_SEARCH_REQUESTS_PER_EDITION: positiveInteger.max(100).default(12),
   EXA_MAX_CONTENT_PAGES_PER_EDITION: positiveInteger.max(100).default(24),
   EXA_MAX_COST_USD_PER_EDITION: nonnegativeMoney.max(1_000).optional(),
+  MARKET_DATA_PROVIDER_ID: z.enum(["disabled", "exa_financial_datasets"]).default("disabled"),
+  EXA_FINANCIAL_DATASETS_OWNER_DECISION: z.enum([
+    "pending",
+    "approved",
+    "partial",
+    "rejected",
+  ]).default("pending"),
+  EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST: positiveMoney.max(100).optional(),
   PI_MARKET_RESEARCH_MODEL: z.string().trim().min(1).default("gpt-5.6-sol"),
 });
 
@@ -67,6 +76,9 @@ export interface AppConfig {
   exaMaxSearchRequestsPerEdition: number;
   exaMaxContentPagesPerEdition: number;
   exaMaxCostUsdPerEdition: number | undefined;
+  marketDataProviderId: "disabled" | "exa_financial_datasets";
+  financialDatasetsOwnerDecision: "pending" | "approved" | "partial" | "rejected";
+  financialDatasetsMaxCostUsdPerRequest: number | undefined;
   marketResearchModel: string;
 }
 
@@ -96,6 +108,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
   if (value.MARKET_RESEARCH_ENABLED && value.EXA_API_KEY === undefined) {
     throw new Error("EXA_API_KEY is required when MARKET_RESEARCH_ENABLED is true.");
+  }
+  if (
+    value.MARKET_DATA_PROVIDER_ID === "exa_financial_datasets"
+    && (
+      value.EXA_FINANCIAL_DATASETS_OWNER_DECISION !== "approved"
+      || value.EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST === undefined
+    )
+  ) {
+    throw new Error(
+      "Exa Financial Datasets requires an approved owner decision and explicit per-request cost cap.",
+    );
   }
 
   const robinhoodOAuthRedirectUri = value.ROBINHOOD_OAUTH_REDIRECT_URI
@@ -144,6 +167,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     exaMaxSearchRequestsPerEdition: value.EXA_MAX_SEARCH_REQUESTS_PER_EDITION,
     exaMaxContentPagesPerEdition: value.EXA_MAX_CONTENT_PAGES_PER_EDITION,
     exaMaxCostUsdPerEdition: value.EXA_MAX_COST_USD_PER_EDITION,
+    marketDataProviderId: value.MARKET_DATA_PROVIDER_ID,
+    financialDatasetsOwnerDecision: value.EXA_FINANCIAL_DATASETS_OWNER_DECISION,
+    financialDatasetsMaxCostUsdPerRequest:
+      value.EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST,
     marketResearchModel: value.PI_MARKET_RESEARCH_MODEL,
   };
   if (value.ROBINHOOD_OAUTH_CLIENT_ID !== undefined) config.robinhoodOAuthClientId = value.ROBINHOOD_OAUTH_CLIENT_ID;

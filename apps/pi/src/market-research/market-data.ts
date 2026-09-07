@@ -13,6 +13,8 @@ export interface Provenance {
   entitlement: "real_time" | "delayed" | "end_of_day" | "unknown";
   policyStatus: MarketDataPolicyStatus;
   rawField: string;
+  sourceUrls: readonly string[];
+  providerIdentifiers: readonly string[];
 }
 
 export interface MarketValue extends Provenance {
@@ -111,6 +113,8 @@ const approvedProvenanceSchema = z.object({
   entitlement: marketEntitlementSchema,
   policyStatus: z.literal("approved"),
   rawField: z.string().trim().min(1).max(100),
+  sourceUrls: z.array(z.url().max(2_000)).min(1).max(10),
+  providerIdentifiers: z.array(marketResearchIdSchema).min(1).max(20),
 }).strict();
 const marketValueSchema = approvedProvenanceSchema.extend({
   symbol: marketResearchSymbolSchema,
@@ -157,7 +161,13 @@ function validateSnapshotValue(
   ) {
     throw new Error("market_data_conflict");
   }
-  return parsed.data;
+  let sourceUrls: string[];
+  try {
+    sourceUrls = parsed.data.sourceUrls.map(canonicalSourceUrl);
+  } catch {
+    throw new Error("market_data_conflict");
+  }
+  return { ...parsed.data, sourceUrls };
 }
 
 export function validateSessionStatus(
@@ -236,8 +246,14 @@ export function validateBars(
       || (expected.allowedSessions !== undefined && !expected.allowedSessions.includes(bar.sessionLabel))
     ) throw new Error("market_data_conflict");
     previousTimestamp = timestamp;
+    let sourceUrls: string[];
+    try {
+      sourceUrls = bar.sourceUrls.map(canonicalSourceUrl);
+    } catch {
+      throw new Error("market_data_conflict");
+    }
     const { volume, ...required } = bar;
-    const validated: MarketBar = required;
+    const validated: MarketBar = { ...required, sourceUrls };
     if (volume !== undefined) validated.volume = volume;
     result.push(validated);
   }
