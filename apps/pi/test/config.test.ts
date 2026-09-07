@@ -24,12 +24,12 @@ describe("loadConfig", () => {
       trishulaLunaReasoningEffort: "xhigh",
       trishulaLunaServiceTier: "priority",
       trishulaSolModel: "gpt-5.6-sol",
-      trishulaSolReasoningEffort: "ultra",
+      trishulaSolReasoningEffort: "max",
       trishulaSolServiceTier: "priority",
       trishulaPersonalityVersion: "trishula-discord-v1",
       trishulaLunaProfileVersion: "luna-frontman-v1",
       trishulaSolProfileVersion: "sol-research-v1",
-      trishulaModelContextWindow: 400_000,
+      trishulaModelContextWindow: 272_000,
       trishulaLunaMaxOutputTokens: 8_000,
       trishulaSolMaxOutputTokens: 16_000,
       trishulaResearchPacketTokenTarget: 2_500,
@@ -39,7 +39,7 @@ describe("loadConfig", () => {
       trishulaAmbientMinConfidence: 0.85,
       trishulaAmbientMinAdditiveValue: 0.9,
       trishulaCompactionReserve: 32_000,
-      trishulaCompactionThreshold: 280_000,
+      trishulaCompactionThreshold: 190_400,
       trishulaDurableConversationsEnabled: true,
       trishulaHotSessionReuseEnabled: true,
       trishulaPortableCheckpointsEnabled: false,
@@ -47,23 +47,27 @@ describe("loadConfig", () => {
     });
   });
 
-  it("rejects model drift and cannot enable the opaque compaction gate", () => {
+  it("rejects model drift and keeps only opaque compaction locked off", () => {
     expect(() => loadConfig({
       ...base,
       TRISHULA_LUNA_MODEL: "gpt-5.6-terra",
     })).toThrow(/TRISHULA_LUNA_MODEL/);
     expect(() => loadConfig({
       ...base,
-      TRISHULA_SOL_REASONING_EFFORT: "xhigh",
+      TRISHULA_SOL_REASONING_EFFORT: "ultra",
     })).toThrow(/TRISHULA_SOL_REASONING_EFFORT/);
     expect(() => loadConfig({
       ...base,
       TRISHULA_NATIVE_COMPACTION_ENABLED: "true",
     })).toThrow(/TRISHULA_NATIVE_COMPACTION_ENABLED/);
-    expect(() => loadConfig({
+    expect(loadConfig({
       ...base,
       TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
-    })).toThrow(/TRISHULA_PORTABLE_CHECKPOINTS_ENABLED/);
+    }).trishulaPortableCheckpointsEnabled).toBe(true);
+    expect(() => loadConfig({
+      ...base,
+      TRISHULA_MODEL_CONTEXT_WINDOW: "400000",
+    })).toThrow(/TRISHULA_MODEL_CONTEXT_WINDOW/);
     expect(() => loadConfig({
       ...base,
       TRISHULA_PERSONALITY_VERSION: "unreviewed-v2",

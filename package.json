@@ -14,6 +14,7 @@
     "check:convex": "npm run typecheck --prefix apps/convex && npm test --prefix apps/convex",
     "check:pi": "npm run typecheck --prefix apps/pi && npm test --prefix apps/pi && npm run build --prefix apps/pi",
     "check:discord": "npm run typecheck --prefix apps/discord && npm test --prefix apps/discord && npm run build --prefix apps/discord",
+    "check:personality": "npm run test:personality --prefix apps/pi && npm run test:personality --prefix apps/discord && npm run test:personality --prefix apps/convex",
     "check:railway": "bash scripts/railway/validate.sh",
     "railway:plan": "railway config plan",
     "check": "npm run lint && npm run check:convex && npm run check:pi && npm run check:discord && npm run check:web && npm run check:railway"

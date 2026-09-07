@@ -26,6 +26,18 @@ describe("loadConfig", () => {
       baseEnvironment.PI_DISCORD_SHARED_SECRET,
     );
     expect(config.durableConversationsEnabled).toBe(true);
+    expect(config.portableCheckpointsEnabled).toBe(false);
+  });
+
+  it("parses the portable-checkpoint rollout switch independently", () => {
+    expect(loadConfig({
+      ...baseEnvironment,
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "true",
+    }).portableCheckpointsEnabled).toBe(true);
+    expect(() => loadConfig({
+      ...baseEnvironment,
+      TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: "1",
+    })).toThrow("TRISHULA_PORTABLE_CHECKPOINTS_ENABLED");
   });
 
   it("parses the durable-conversation rollback switch independently", () => {

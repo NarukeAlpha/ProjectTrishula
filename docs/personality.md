@@ -37,7 +37,7 @@ The following decisions are not implementation options.
 | `DEC-004` | Changing the configured conversation channel within a guild preserves the guild's Luna conversation. |
 | `DEC-005` | At most one Luna turn may actively mutate a guild conversation at a time. |
 | `DEC-006` | Luna uses `gpt-5.6-luna`, `xhigh`, and the priority service tier unless an approved configuration version changes it. |
-| `DEC-007` | Sol uses `gpt-5.6-sol`, `ultra`, and the priority service tier. Each research request gets a fresh, isolated worker session. |
+| `DEC-007` | Sol uses `gpt-5.6-sol`, `max`, and the priority service tier. Each research request gets a fresh, isolated worker session. A 2026-09-07 OAuth probe showed that this transport rejects the literal `ultra`; `max` is its highest accepted effort. |
 | `DEC-008` | Sol has only bounded public research tools. Discord has no brokerage, account, credential-vault, order, shell, filesystem, or general private-network capability. |
 | `DEC-009` | Luna is one logical thread across direct and researched turns. A researched turn may pause for Sol and resume in the same Luna conversation. |
 | `DEC-010` | Sol's complete context never enters Luna. Only a validated, bounded evidence packet does. |
@@ -59,7 +59,7 @@ The app already configures one conversation channel and one optional research-lo
 | Luna lifetime | A fresh in-memory Pi session is created and disposed for every stage in `apps/pi/src/discord/runner.ts` | One durable logical conversation per guild; hot session reuse is optional |
 | Long-term context | At most ten trailing Discord messages enter a stage | A compacted durable history plus a raw recent-context tail |
 | Stages | Separate `triage`, `research`, and `reply` jobs; direct replies can bypass the reply writer | One Luna frontman protocol with direct or research-and-resume paths; one voice contract |
-| Research | Fresh Sol job with public research tools | Keep it fresh and isolated; change the target reasoning effort to `ultra`; bound the handoff |
+| Research | Fresh Sol job with public research tools | Keep it fresh and isolated; use the highest accepted reasoning effort, `max`; bound the handoff |
 | Reply length | Pi and gateway contracts cap replies at 1,200 characters | Raise the final contract to 2,000 characters and use adaptive targets below that ceiling |
 | Delivery length | Dispatcher silently applies `.slice(0, 2_000)` | Validate before the outbox; reject or repair an invalid draft; never slice |
 | Compaction | Discord explicitly disables compaction | Enable a verified server-compaction adapter for Luna only |
@@ -91,7 +91,7 @@ Pi: durable Luna frontman conversation
             +-- optional one-time acknowledgment ----> outbox -> Discord
             |
             v
-        fresh Sol ultra worker + public tools
+        fresh Sol max worker + public tools
             |
             | bounded validated evidence packet only
             v
@@ -595,6 +595,10 @@ Choose one of these implementations after the spike:
 1. A narrow first-party adapter around the current Pi/OpenAI-Codex runtime and official server-compaction contract.
 2. A pinned fork of the external extension with the required Pi 0.84 and replacement-history fixes audited and covered by local tests.
 
+Implementation decision on 2026-09-07: keep native opaque compaction locked off. The pinned Pi `0.84.1` package exposes local `AgentSession.compact()`, but its Codex provider does not expose a validated first-party bridge to the official `POST /responses/compact` replacement artifact. Treating Pi's local lossy summary as the official opaque artifact would invent compatibility that has not passed section 9.6.
+
+The repository now has a separate first-party portable path, `portable-summary-v1`. At a stable boundary, Convex selects canonical evidence above the 190,400-token trigger and a contiguous 20,000-token recent tail. A fresh tool-free Luna job creates a typed replacement summary. Pi rejects invented source-event and author IDs. Convex then rechecks the source hash, full revision and generation fence, evidence references, exact recent tail, byte limit, and token accounting before activation. This path defaults off and is not an opaque server-compaction implementation.
+
 Do not select an implementation from benchmark headline quality alone. In the reviewed snapshot's [product-defaults validation](https://github.com/algal/pi-openai-server-compaction/blob/8a3de2f3b0c178fdd6f73f2f94172dfc3943e466/VALIDATION.md), full context scored 100%, the extension's native policy scored 78%, and Pi default scored 48% on its retained Sol fixture. Native used 4.58 times Pi's mean compaction output tokens, 2.52 times its compaction cost, and 1.29 times its downstream input tokens. Its artifact allocation was also variable. This shows better aggregate recall in that fixture, not better accuracy at an equal token budget or guaranteed savings for Discord. Measure this app's real workload.
 
 The official `store=false` statement applies to the documented API path. Do not assume identical storage behavior for the `openai-codex` OAuth backend until the spike proves the exact request and response behavior.
@@ -937,7 +941,7 @@ Add explicit configuration for:
 - Maximum autonomous rechecks.
 - Ambient confidence and additive-value thresholds.
 
-For the initial profile version, configuration validation must accept only the locked tuples in `DEC-006` and `DEC-007`: Luna `gpt-5.6-luna`/`xhigh`/priority and Sol `gpt-5.6-sol`/`ultra`/priority. These fields exist for explicit versioning, deployment visibility, and controlled migration, not arbitrary runtime substitution. A different tuple requires a new approved profile version, compatibility review, behavioral evals, and checkpoint invalidation rules.
+For the initial profile version, configuration validation must accept only the locked tuples in `DEC-006` and `DEC-007`: Luna `gpt-5.6-luna`/`xhigh`/priority and Sol `gpt-5.6-sol`/`max`/priority. These fields exist for explicit versioning, deployment visibility, and controlled migration, not arbitrary runtime substitution. A different tuple requires a new approved profile version, compatibility review, behavioral evals, and checkpoint invalidation rules.
 
 Do not document environment variables that the runtime does not read. The current root README names Luna/Sol variables that are not present in `apps/pi/src/config.ts`; either add validated variables or remove the claims.
 
@@ -1168,7 +1172,7 @@ Acceptance:
 - A next-turn request trace contains the prior visible final reply but not the prior Sol packet or internal plan JSON.
 - The hot-cache-disabled suite produces the same canonical outputs and ordering.
 
-### `TASK-060`: Make Sol a bounded ultra research worker
+### `TASK-060`: Make Sol a bounded maximum-effort research worker
 
 Targets:
 
@@ -1178,7 +1182,7 @@ Targets:
 
 Work:
 
-- Configure `gpt-5.6-sol`, `ultra`, priority.
+- Configure `gpt-5.6-sol`, `max`, priority.
 - Keep one fresh session per research request.
 - Pass only the normalized research request and needed public context.
 - Validate source URLs against tool returns and charts against the trusted side channel.
@@ -1591,7 +1595,13 @@ Use these initial measurable gates for the fixed long-conversation and restart f
 
 Record fixture definitions, sample size, model and prompt versions, raw token counts, cost assumptions, latency percentiles, and rubric results. Do not claim that server compaction is cheaper from context length alone. The compaction call and its replacement artifact also consume tokens.
 
-## 18. References
+## 18. Implementation readiness record
+
+The dated evidence, commands, passed checks, and remaining live gates are in [personality-rollout-readiness.md](personality-rollout-readiness.md). Run `npm run check:personality` for the deterministic, login-independent shadow, restart, checkpoint, orchestration, and contract harness. This command does not send a Discord message.
+
+The native opaque flag remains hard false. The portable flag accepts `true` but defaults false in both Pi and the gateway. Do not enable it in a pilot until the storage-protection and live long-context rows in the readiness record pass.
+
+## 19. References
 
 - Current system boundary and reliability design: `docs/ARCHITECTURE.md`
 - Current Discord orchestration: `apps/discord/src/orchestrator/channel-loop.ts`
@@ -1603,6 +1613,7 @@ Record fixture definitions, sample size, model and prompt versions, raw token co
 - Current Convex schema: `apps/convex/convex/schema.ts`
 - Current outbox delivery: `apps/discord/src/outbox/dispatcher.ts`
 - [OpenAI compaction guide](https://developers.openai.com/api/docs/guides/compaction), accessed 2026-08-31
+- [OpenAI compact response endpoint](https://developers.openai.com/api/reference/resources/responses/methods/compact), checked 2026-09-07
 - [Discord Create Message contract](https://docs.discord.com/developers/resources/message#create-message), accessed 2026-08-31
 - [Reviewed pi-openai-server-compaction snapshot](https://github.com/algal/pi-openai-server-compaction/tree/8a3de2f3b0c178fdd6f73f2f94172dfc3943e466), commit `8a3de2f3b0c178fdd6f73f2f94172dfc3943e466`, reviewed 2026-08-31
 - [Reviewed extension validation report](https://github.com/algal/pi-openai-server-compaction/blob/8a3de2f3b0c178fdd6f73f2f94172dfc3943e466/VALIDATION.md), reviewed 2026-08-31

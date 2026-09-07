@@ -15,6 +15,32 @@ describe("Discord gateway HTTP contract", () => {
     }).success).toBe(false);
   });
 
+  it("accepts the backward-compatible portable checkpoint operations", () => {
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "nextPortableCheckpoint",
+      actorId: "user_01HWORKOSALLOWED",
+    }).success).toBe(true);
+    expect(discordGatewayRequestSchema.safeParse({
+      operation: "storePortableCheckpoint",
+      actorId: "user_01HWORKOSALLOWED",
+      guildId: "123",
+      conversationId: "discord:123",
+      epoch: 1,
+      expectedRevision: 3,
+      expectedGeneration: 2,
+      expectedRoutingGeneration: 1,
+      checkpointId: "checkpoint:123:1:3:abc",
+      sourceContextHash: "a".repeat(64),
+      toolPolicyHash: "b".repeat(64),
+      compactedThroughOrdinal: 2,
+      portableSummary: JSON.stringify({ participants: [] }),
+      retainedRecentEventIds: ["event:3"],
+      inputTokens: 100,
+      outputTokens: 40,
+      estimatedSavedTokens: 60,
+    }).success).toBe(true);
+  });
+
   it("rejects unknown fields instead of forwarding them to an internal mutation", () => {
     expect(discordGatewayRequestSchema.safeParse({
       operation: "newestContext",

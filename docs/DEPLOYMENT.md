@@ -58,6 +58,7 @@ Discord service:
 | `CONVEX_SITE_URL` | Convex HTTP Actions base ending in `/http` |
 | `PI_SERVICE_URL` | Private Pi URL, normally `http://pi.railway.internal:8080` |
 | `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` | `true` for the durable path |
+| `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` | `false` during the initial pilot; align with Pi |
 
 Pi service:
 
@@ -71,7 +72,7 @@ Pi service:
 | `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` | `true`; align with the Discord service |
 | `TRISHULA_HOT_SESSION_REUSE_ENABLED` | `true` initially; can be disabled independently |
 | `TRISHULA_NATIVE_COMPACTION_ENABLED` | `false` only |
-| `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` | `false` only |
+| `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` | `false` during initial rollout; `true` only after the documented portable gates pass |
 
 The runtime supplies defaults for the locked profile values below. Set them explicitly only when deployment visibility is useful. Any different locked literal fails startup.
 
@@ -83,12 +84,12 @@ The runtime supplies defaults for the locked profile values below. Set them expl
 | `TRISHULA_LUNA_PROFILE_VERSION` | `luna-frontman-v1` |
 | `TRISHULA_LUNA_MAX_OUTPUT_TOKENS` | `8000` |
 | `TRISHULA_SOL_MODEL` | `gpt-5.6-sol` |
-| `TRISHULA_SOL_REASONING_EFFORT` | `ultra` |
+| `TRISHULA_SOL_REASONING_EFFORT` | `max` |
 | `TRISHULA_SOL_SERVICE_TIER` | `priority` |
 | `TRISHULA_SOL_PROFILE_VERSION` | `sol-research-v1` |
 | `TRISHULA_SOL_MAX_OUTPUT_TOKENS` | `16000` |
 | `TRISHULA_PERSONALITY_VERSION` | `trishula-discord-v1` |
-| `TRISHULA_MODEL_CONTEXT_WINDOW` | `400000` |
+| `TRISHULA_MODEL_CONTEXT_WINDOW` | `272000` |
 | `TRISHULA_RESEARCH_PACKET_TOKEN_TARGET` | `2500` |
 | `TRISHULA_RESEARCH_PACKET_MAX_BYTES` | `16384` only |
 | `TRISHULA_RECENT_TAIL_TOKEN_BUDGET` | `20000` only |
@@ -97,14 +98,14 @@ The runtime supplies defaults for the locked profile values below. Set them expl
 | `TRISHULA_AMBIENT_MIN_ADDITIVE_VALUE` | `0.9` |
 | `TRISHULA_HOT_SESSION_IDLE_MS` | `3600000` |
 
-The visible provider tuples are Luna `gpt-5.6-luna` / `xhigh` / `priority` and Sol `gpt-5.6-sol` / `ultra` / `priority`. Pi maps its harness `max` level to the provider's locked Sol `ultra` value.
+The visible provider tuples are Luna `gpt-5.6-luna` / `xhigh` / `priority` and Sol `gpt-5.6-sol` / `max` / `priority`. The pinned provider catalog and the 2026-09-07 OAuth smoke test both use the wire value `max`. The literal `ultra` is invalid for this transport.
 
 ## Rollout order
 
 Deploy the durable contract in this order:
 
 1. **Convex**: deploy schema, generated API, HTTP operations, guild conversation state, persisted turn stages, privacy controls, and outbox reconciliation first. Existing services must remain compatible while the new functions become available.
-2. **Pi**: deploy the locked frontman and Sol contracts, durable Luna reconstruction, content limits, and hard-false compaction controls. Verify `/health` and Codex OAuth before continuing.
+2. **Pi**: deploy the locked frontman, Sol, and disabled-by-default portable checkpoint contracts. Verify `/health` and Codex OAuth before continuing.
 3. **Discord**: deploy the durable orchestrator and set `TRISHULA_DURABLE_CONVERSATIONS_ENABLED=true` only after Convex and Pi accept the new contracts.
 4. **Web**: deploy the server conversation status, reset, and privacy-deletion controls after the backend mutations are live.
 
@@ -147,12 +148,12 @@ Local type checks, tests, builds, and IaC validation do not prove production rea
 - cross-guild isolation, activity-feed redaction, explicit failure closure, source grounding, and newest-context suppression;
 - one shadow guild and one noncritical pilot with recorded latency, token, cost, ambient-chatter, and naturalness results.
 
-Keep native opaque compaction off. Its Pi `0.84.1` Codex OAuth compatibility, continuation, restart, privacy, and measurement spike is incomplete. Keep portable automatic checkpoints off. The repository has checkpoint contracts, bounded storage, expiry, and deletion plumbing, but it does not have an enabled execution path or verified storage-encryption evidence. The stored protection label is `platform_default_unverified`.
+Keep native opaque compaction off. Its Pi `0.84.1` Codex OAuth compatibility, continuation, restart, privacy, and measurement spike is incomplete. Keep portable automatic checkpoints off for the initial pilot. The execution path exists, but live long-context quality, savings, failure-recovery, and storage-encryption evidence remain open. The stored protection label is `platform_default_unverified`.
 
 Rollback controls are independent:
 
 - Disable Pi hot-session reuse without losing durable Convex history.
 - Disable the durable Discord gateway path to return to the compatibility runner without deleting canonical data.
-- Keep both compaction flags at their only accepted value, `false`.
+- Keep native compaction at its only accepted value, `false`. Disable portable checkpoints independently without deleting canonical data.
 
 Do not delete canonical conversation records during rollback. The activity feed reports `delivery_uncertain` and `delivery_reconciliation_required` without message content. Investigate either state before another final delivery or privacy deletion for that guild.

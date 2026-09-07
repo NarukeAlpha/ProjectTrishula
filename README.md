@@ -35,16 +35,16 @@ The durable path is:
 7. Convex persists the resume result and creates an idempotent outbox record. The gateway sends it with an enforced nonce and with Discord mentions disabled.
 8. Only human messages and Discord-confirmed assistant messages enter canonical visible history. Recovery reuses completed plan, research, resume, and delivery stages.
 
-Luna is locked to `gpt-5.6-luna`, `xhigh`, and the priority service tier. Sol is locked to `gpt-5.6-sol`, `ultra`, and the priority service tier. Final replies can contain at most 2,000 Unicode code points. Research acknowledgments can contain at most 320. No delivery path silently truncates text.
+Luna is locked to `gpt-5.6-luna`, `xhigh`, and the priority service tier. Sol is locked to `gpt-5.6-sol`, `max`, and the priority service tier. Final replies can contain at most 2,000 Unicode code points. Research acknowledgments can contain at most 320. No delivery path silently truncates text.
 
 ## Continuity controls
 
 - `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` selects the durable gateway path. Keep the Discord and Pi values aligned during rollout.
 - `TRISHULA_HOT_SESSION_REUSE_ENABLED` disables or enables only the Pi in-memory cache. Durable Convex continuity remains authoritative.
 - `TRISHULA_NATIVE_COMPACTION_ENABLED` is hard-locked to `false`. The reviewed native opaque-compaction adapter is not compatible with the pinned Pi `0.84.1` runtime.
-- `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` is hard-locked to `false`. Portable automatic checkpoint execution is not enabled.
+- `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` defaults to `false`. When both Pi and the gateway set it to `true`, the gateway can generate and compare-and-set activate first-party portable checkpoints at stable boundaries.
 
-Portable checkpoint schemas, bounded storage, expiry, and restore validation exist. Automatic generation and activation remain disabled until the execution path and storage-encryption evidence pass the `docs/personality.md` gates. Checkpoint storage is labeled `platform_default_unverified`; the repository does not claim verified encryption at rest. Current durable restoration uses canonical Convex history and its bounded raw tail.
+Portable checkpoint generation, bounded storage, expiry, source validation, compare-and-set activation, and restart reconstruction exist. Keep the opt-in flag off until the live long-context and storage-protection gates in `docs/personality-rollout-readiness.md` pass. Checkpoint storage is labeled `platform_default_unverified`; the repository does not claim verified encryption at rest. Native opaque compaction remains unavailable.
 
 The owner can reset a server conversation. Reset keeps `conversationId`, increments the epoch and fences, cancels old unsent work, and starts clean memory. Reset does not delete source Discord data. Privacy deletion is a separate owner-authorized operation that fences active work and removes retained conversation data.
 
@@ -59,6 +59,7 @@ npm install --prefix apps/pi
 npm install --prefix apps/discord
 npm install --prefix apps/web
 npm run check
+npm run check:personality
 ```
 
 ## Railway variables
@@ -75,6 +76,7 @@ Discord gateway:
 - `CONVEX_SITE_URL`
 - `PI_SERVICE_URL=http://pi.railway.internal:8080`
 - `TRISHULA_DURABLE_CONVERSATIONS_ENABLED=true`
+- `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED=false`
 
 Pi:
 

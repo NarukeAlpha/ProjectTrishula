@@ -13,6 +13,7 @@ import {
   portableConversationSummarySchema,
   requireDiscordReplyContent,
   selectDiscordCanonicalTail,
+  selectDiscordCheckpointTail,
   validatePortableCheckpointCandidate,
 } from "../convex/lib/discord_conversation.js";
 
@@ -219,6 +220,18 @@ describe("Discord canonical conversation invariants", () => {
     expect(selected.omittedEventCount).toBe(1);
     expect(selected.complete).toBe(false);
     expect(selected.estimatedTokens).toBeLessThanOrEqual(120);
+  });
+
+  it("keeps the portable-checkpoint replay tail contiguous", () => {
+    const events = [
+      { eventId: "event:1", ordinal: 1, content: "x".repeat(300) },
+      { eventId: "event:2", ordinal: 2, content: "x" },
+      { eventId: "event:3", ordinal: 3, content: "x".repeat(90) },
+    ];
+    const selected = selectDiscordCheckpointTail(events, { tokenBudget: 60 });
+    expect(selected.events.map((event) => event.eventId)).toEqual(["event:3"]);
+    expect(selected.omittedEventCount).toBe(2);
+    expect(selected.complete).toBe(false);
   });
 
   it("rejects unordered canonical replay input", () => {

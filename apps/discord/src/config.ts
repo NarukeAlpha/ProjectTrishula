@@ -55,6 +55,7 @@ const environmentSchema = z
       .max(1_000)
       .default(500),
     TRISHULA_DURABLE_CONVERSATIONS_ENABLED: booleanFlag.default(true),
+    TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: booleanFlag.default(false),
   })
   .superRefine((value, context) => {
     if (value.CONVEX_DISCORD_SHARED_SECRET === value.PI_DISCORD_SHARED_SECRET) {
@@ -85,6 +86,7 @@ export interface DiscordGatewayConfig {
   agentTimeoutMs: number;
   maxReconcileMessages: number;
   durableConversationsEnabled: boolean;
+  portableCheckpointsEnabled: boolean;
 }
 
 function normalizeBaseUrl(raw: string, label: string): string {
@@ -149,5 +151,6 @@ export function loadConfig(
     agentTimeoutMs: value.AGENT_TIMEOUT_MS,
     maxReconcileMessages: value.DISCORD_MAX_RECONCILE_MESSAGES,
     durableConversationsEnabled: value.TRISHULA_DURABLE_CONVERSATIONS_ENABLED,
+    portableCheckpointsEnabled: value.TRISHULA_PORTABLE_CHECKPOINTS_ENABLED,
   };
 }

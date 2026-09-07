@@ -40,7 +40,7 @@ Durable outbox
   -> Discord send and canonical sent acknowledgment
 ```
 
-Luna is locked to `gpt-5.6-luna`, `xhigh`, and `priority`. Sol is locked to `gpt-5.6-sol`, `ultra`, and `priority`. Each Sol request creates a fresh session. Sol receives only the normalized research request and needed public context. Only its validated bounded evidence packet can enter the active Luna turn.
+Luna is locked to `gpt-5.6-luna`, `xhigh`, and `priority`. Sol is locked to `gpt-5.6-sol`, `max`, and `priority`. Each Sol request creates a fresh session. Sol receives only the normalized research request and needed public context. Only its validated bounded evidence packet can enter the active Luna turn.
 
 The research packet targets 2,500 estimated tokens and has a hard 16,384-byte boundary. Exact source URLs must come from trusted research tools. Current claims require grounded sources. A trusted chart artifact comes through a separate side channel. Sol's hidden reasoning, provider transcript, raw tool trace, failed JSON, and repair prompts are not durable Luna history.
 
@@ -81,8 +81,8 @@ Durable continuity, hot-session reuse, native compaction, and portable automatic
 - `TRISHULA_DURABLE_CONVERSATIONS_ENABLED` controls the durable gateway path.
 - `TRISHULA_HOT_SESSION_REUSE_ENABLED` controls only the Pi in-memory cache.
 - `TRISHULA_NATIVE_COMPACTION_ENABLED` accepts only `false`.
-- `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` accepts only `false`.
+- `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` defaults to `false` and enables the portable pipeline only when Pi and gateway values are both `true`.
 
-Native opaque compaction is hard-disabled until the pinned Pi `0.84.1` Codex OAuth compatibility, restart, privacy, and measurement spike passes. Portable checkpoint schemas, bounded storage, expiry, restore validation, and privacy deletion are present, but automatic generation and activation are disabled until the execution path and storage-encryption evidence pass. The storage record says `platform_default_unverified`; it is not an encryption claim.
+Native opaque compaction is hard-disabled until the pinned Pi Codex OAuth compatibility, restart, privacy, and measurement spike passes. The portable pipeline is implemented separately. Convex selects a stable threshold candidate, Pi creates a full source-bound summary without tools, and the gateway activates it through revision, generation, routing, content-hash, and recent-tail checks. The storage record says `platform_default_unverified`; it is not an encryption claim, so the portable rollout flag stays off until that gate and the live long-context gate pass.
 
 Until those gates pass, durable recovery uses canonical Convex history and the bounded raw tail. A checkpoint failure or missing checkpoint cannot authorize cross-guild state or make a process-local file authoritative.

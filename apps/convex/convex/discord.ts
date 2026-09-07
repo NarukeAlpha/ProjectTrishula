@@ -46,6 +46,8 @@ import {
 } from "./lib/discord_state.js";
 import {
   DISCORD_CONVERSATION_LEASE_MS,
+  DISCORD_COMPACTION_THRESHOLD_TOKENS,
+  DISCORD_MAX_RECENT_EVENT_COUNT,
   DISCORD_PERSONALITY_PROFILE,
   DISCORD_RECENT_TAIL_ESTIMATOR_VERSION,
   DISCORD_RECENT_TAIL_TOKEN_BUDGET,
@@ -56,8 +58,10 @@ import {
   isCurrentDiscordConversationFence,
   portableCheckpointRestorable,
   portableConversationSummarySchema,
+  estimateDiscordCanonicalEventTokens,
   requireDiscordReplyContent,
   selectDiscordCanonicalTail,
+  selectDiscordCheckpointTail,
   validatePortableCheckpointCandidate,
   DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES,
   DISCORD_PORTABLE_CHECKPOINT_RETENTION_MS,
@@ -236,6 +240,44 @@ interface DurableConversationContextView {
   portableSummary?: z.infer<typeof portableConversationSummarySchema>;
   recentEvents: DurableRecentEvent[];
   tail: DurableConversationTail;
+}
+
+interface PortableCheckpointSourceEventView {
+  eventId: string;
+  ordinal: number;
+  role: "human" | "assistant";
+  authorId?: string;
+  displayName?: string;
+  content: string;
+  createdAt: string;
+  freshness?: "current" | "limited" | "unknown";
+}
+
+interface PortableCheckpointConversationView {
+  ownerId: string;
+  ownerBindingVersion: number;
+  guildId: string;
+  conversationId: string;
+  epoch: number;
+  generation: number;
+  routingGeneration: number;
+  revision: number;
+  personalityVersion: string;
+  systemPromptHash: string;
+  capabilityProfileHash: string;
+  activeCheckpointId?: string;
+}
+
+interface PortableCheckpointRequestView {
+  profile: "portable_checkpoint";
+  requestId: string;
+  conversation: PortableCheckpointConversationView;
+  sourceContextHash: string;
+  compactedThroughOrdinal: number;
+  previousSummary?: z.infer<typeof portableConversationSummarySchema>;
+  sourceEvents: PortableCheckpointSourceEventView[];
+  retainedRecentEventIds: string[];
+  inputEstimatedTokens: number;
 }
 
 interface PublicConversationIdentityView {
@@ -749,7 +791,12 @@ async function durableConversationContext(
     eventId: event.eventId,
     ordinal: event.ordinal,
     content: event.content!,
-  })), { requiredEventIds });
+  })), {
+    requiredEventIds,
+    tokenBudget: activeCheckpointId === undefined
+      ? DISCORD_COMPACTION_THRESHOLD_TOKENS
+      : DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+  });
   const recentEvents: DurableRecentEvent[] = selection.events
     .map((event) => {
       const recentEvent: DurableRecentEvent = {
@@ -765,7 +812,9 @@ async function durableConversationContext(
     });
   const tail: DurableConversationTail = {
     estimatorVersion: DISCORD_RECENT_TAIL_ESTIMATOR_VERSION,
-    tokenBudget: DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+    tokenBudget: activeCheckpointId === undefined
+      ? DISCORD_COMPACTION_THRESHOLD_TOKENS
+      : DISCORD_RECENT_TAIL_TOKEN_BUDGET,
     estimatedTokens: selection.estimatedTokens,
     compactedThroughOrdinal,
     omittedEventCount: selection.omittedEventCount,
@@ -1879,6 +1928,138 @@ export const transferGuildConversationOwnership = mutation({
   },
 });
 
+export const nextPortableCheckpoint = internalMutation({
+  args: { actorId: serviceId },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const conversations = await ctx.db
+      .query("discordAssistantConversations")
+      .withIndex("by_owner_guild", (index) => index.eq("ownerId", ownerId))
+      .collect();
+    const unresolvedDeliveries = await Promise.all(
+      (["delivery_uncertain", "needs_reconciliation"] as const).map((status) => ctx.db
+        .query("discordOutbox")
+        .withIndex("by_owner_status_createdAt", (index) => index
+          .eq("ownerId", ownerId)
+          .eq("status", status))
+        .collect()),
+    );
+    const blockedGuildIds = new Set(unresolvedDeliveries.flat().flatMap((reply) => [
+      reply.guildId,
+      reply.sourceGuildId,
+    ]));
+    const now = Date.now();
+
+    for (const conversation of conversations.toSorted((left, right) => left.updatedAt - right.updatedAt)) {
+      if (
+        conversation.activeTurnId !== undefined
+        || conversation.leaseExpiresAt !== undefined
+        || blockedGuildIds.has(conversation.guildId)
+      ) continue;
+      const restored = await durableConversationContext(ctx, conversation, now);
+      const compactedThroughOrdinal = restored.tail.compactedThroughOrdinal;
+      const events = await ctx.db
+        .query("discordConversationEvents")
+        .withIndex("by_conversation_epoch_ordinal", (index) => index
+          .eq("conversationId", conversation.conversationId)
+          .eq("epoch", conversation.epoch))
+        .order("asc")
+        .collect();
+      const visibleEvents = events
+        .filter((event) => event.visibility === "conversation"
+          && event.status === "committed"
+          && event.ordinal > compactedThroughOrdinal
+          && event.content !== undefined
+          && (event.kind === "human_message"
+            || event.kind === "assistant_ack"
+            || event.kind === "assistant_final"))
+        .map((event) => ({
+          event,
+          eventId: event.eventId,
+          ordinal: event.ordinal,
+          content: event.content!,
+        }));
+      const previousSummaryTokens = restored.portableSummary === undefined
+        ? 0
+        : Math.ceil(new TextEncoder().encode(JSON.stringify(restored.portableSummary)).byteLength / 3) + 8;
+      const currentEstimatedTokens = previousSummaryTokens
+        + visibleEvents.reduce((total, event) => total + estimateDiscordCanonicalEventTokens(event), 0);
+      if (currentEstimatedTokens < DISCORD_COMPACTION_THRESHOLD_TOKENS) continue;
+
+      const tail = selectDiscordCheckpointTail(visibleEvents, {
+        tokenBudget: DISCORD_RECENT_TAIL_TOKEN_BUDGET,
+        maximumEvents: DISCORD_MAX_RECENT_EVENT_COUNT,
+      });
+      if (tail.complete || tail.events.length === 0) continue;
+      const sourceEvents = visibleEvents.slice(0, visibleEvents.length - tail.events.length);
+      const lastSourceEvent = sourceEvents.at(-1);
+      if (lastSourceEvent === undefined) continue;
+      const sourceSlice = await canonicalCheckpointSlice(
+        ctx,
+        conversation,
+        lastSourceEvent.ordinal,
+      );
+      const checkpointId = [
+        "checkpoint",
+        conversation.guildId,
+        conversation.epoch,
+        conversation.revision,
+        sourceSlice.sourceContextHash.slice(0, 16),
+      ].join(":");
+      const checkpointConversation: PortableCheckpointConversationView = {
+        ownerId,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        guildId: conversation.guildId,
+        conversationId: conversation.conversationId,
+        epoch: conversation.epoch,
+        generation: conversation.generation,
+        routingGeneration: conversation.routingGeneration,
+        revision: conversation.revision,
+        personalityVersion: conversation.personalityVersion,
+        systemPromptHash: conversation.systemPromptHash,
+        capabilityProfileHash: conversation.capabilityProfileHash,
+      };
+      if (restored.activeCheckpointId !== undefined) {
+        checkpointConversation.activeCheckpointId = restored.activeCheckpointId;
+      }
+      const checkpointSourceEvents: PortableCheckpointSourceEventView[] = sourceEvents.map(
+        ({ event }) => {
+          const sourceEvent: PortableCheckpointSourceEventView = {
+            eventId: event.eventId,
+            ordinal: event.ordinal,
+            role: event.kind === "human_message" ? "human" : "assistant",
+            content: event.content!,
+            createdAt: new Date(event.createdAt).toISOString(),
+          };
+          if (event.authorId !== undefined) sourceEvent.authorId = event.authorId;
+          if (event.authorName !== undefined) sourceEvent.displayName = event.authorName;
+          if (event.freshness !== undefined) sourceEvent.freshness = event.freshness;
+          return sourceEvent;
+        },
+      );
+      const request: PortableCheckpointRequestView = {
+        profile: "portable_checkpoint" as const,
+        requestId: checkpointId,
+        conversation: checkpointConversation,
+        sourceContextHash: sourceSlice.sourceContextHash,
+        compactedThroughOrdinal: lastSourceEvent.ordinal,
+        sourceEvents: checkpointSourceEvents,
+        retainedRecentEventIds: tail.events.map((event) => event.eventId),
+        inputEstimatedTokens: previousSummaryTokens + sourceEvents.reduce(
+          (total, event) => total + estimateDiscordCanonicalEventTokens(event),
+          0,
+        ),
+      };
+      if (restored.portableSummary !== undefined) {
+        request.previousSummary = restored.portableSummary;
+      }
+      if (new TextEncoder().encode(JSON.stringify(request)).byteLength > 1_500_000) continue;
+      return { available: true as const, request };
+    }
+    return { available: false as const };
+  },
+});
+
 export const storePortableCheckpoint = internalMutation({
   args: {
     actorId: serviceId,
@@ -1922,14 +2103,13 @@ export const storePortableCheckpoint = internalMutation({
       !Number.isSafeInteger(args.compactedThroughOrdinal)
       || args.compactedThroughOrdinal <= 0
       || args.compactedThroughOrdinal >= conversation.nextOrdinal
-      || args.retainedRecentEventIds.length > 100
+      || args.retainedRecentEventIds.length > DISCORD_MAX_RECENT_EVENT_COUNT
     ) {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
+    let parsedSummary: z.infer<typeof portableConversationSummarySchema>;
     try {
-      portableConversationSummarySchema.parse(
-        JSON.parse(args.portableSummary),
-      );
+      parsedSummary = portableConversationSummarySchema.parse(JSON.parse(args.portableSummary));
     } catch {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
@@ -1945,6 +2125,18 @@ export const storePortableCheckpoint = internalMutation({
       canonicalSlice.events.length === 0
       || canonicalSlice.sourceContextHash !== args.sourceContextHash
     ) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    const sourceEventIds = new Set(canonicalSlice.events.map((event) => event.eventId));
+    const referencedEventIds = [
+      ...parsedSummary.acceptedFacts.flatMap((entry) => entry.sourceEventIds),
+      ...parsedSummary.corrections.flatMap((entry) => entry.sourceEventIds),
+      ...parsedSummary.unresolvedQuestions.flatMap((entry) => entry.sourceEventIds),
+      ...parsedSummary.commitments.flatMap((entry) => entry.sourceEventIds),
+      ...parsedSummary.conversationPreferences.flatMap((entry) => entry.sourceEventIds),
+      ...parsedSummary.sourceFreshnessNotes.flatMap((entry) => entry.sourceEventIds),
+    ];
+    if (referencedEventIds.some((eventId) => !sourceEventIds.has(eventId))) {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
     const normalizedRetainedEventIds = args.retainedRecentEventIds.map((id) =>
@@ -1966,6 +2158,40 @@ export const storePortableCheckpoint = internalMutation({
       || event.status !== "committed"
       || event.ordinal <= args.compactedThroughOrdinal
     )) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    const canonicalRecentEvents = (await ctx.db
+      .query("discordConversationEvents")
+      .withIndex("by_conversation_epoch_ordinal", (index) => index
+        .eq("conversationId", conversationId)
+        .eq("epoch", args.epoch))
+      .order("asc")
+      .collect())
+      .filter((event) => event.visibility === "conversation"
+        && event.status === "committed"
+        && event.ordinal > args.compactedThroughOrdinal
+        && event.content !== undefined
+        && (event.kind === "human_message"
+          || event.kind === "assistant_ack"
+          || event.kind === "assistant_final"));
+    const expectedRetainedEventIds = selectDiscordCheckpointTail(
+      canonicalRecentEvents.map((event) => ({
+        eventId: event.eventId,
+        ordinal: event.ordinal,
+        content: event.content!,
+      })),
+    ).events.map((event) => event.eventId);
+    if (canonicalJson(normalizedRetainedEventIds) !== canonicalJson(expectedRetainedEventIds)) {
+      return { accepted: false as const, reason: "checkpoint_invalid" as const };
+    }
+    if (
+      !Number.isSafeInteger(args.inputTokens)
+      || args.inputTokens <= 0
+      || !Number.isSafeInteger(args.outputTokens)
+      || args.outputTokens < 0
+      || !Number.isSafeInteger(args.estimatedSavedTokens)
+      || args.estimatedSavedTokens !== args.inputTokens - args.outputTokens
+    ) {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
     const now = Date.now();

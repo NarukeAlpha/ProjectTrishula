@@ -33,6 +33,9 @@ export function discordPrivacyDeletionBlocked(
   );
 }
 export const DISCORD_RECENT_TAIL_TOKEN_BUDGET = 20_000;
+export const DISCORD_LUNA_CONTEXT_WINDOW = 272_000;
+export const DISCORD_COMPACTION_THRESHOLD_TOKENS = 190_400;
+export const DISCORD_MAX_RECENT_EVENT_COUNT = 2_000;
 export const DISCORD_RECENT_TAIL_ESTIMATOR_VERSION =
   "utf8-bytes-div-3-plus-message-overhead:v1";
 
@@ -44,7 +47,7 @@ export const DISCORD_PERSONALITY_PROFILE = {
   lunaReasoningEffort: "xhigh",
   lunaServiceTier: "priority",
   solModel: "gpt-5.6-sol",
-  solReasoningEffort: "ultra",
+  solReasoningEffort: "max",
   solServiceTier: "priority",
 } as const;
 
@@ -257,6 +260,46 @@ export function selectDiscordCanonicalTail<Event extends DiscordCanonicalTailEve
   const lastEvent = events.at(-1);
   if (firstEvent !== undefined) selection.firstRetainedOrdinal = firstEvent.ordinal;
   if (lastEvent !== undefined) selection.lastRetainedOrdinal = lastEvent.ordinal;
+  return selection;
+}
+
+/** Selects the newest contiguous event suffix used after a portable checkpoint. */
+export function selectDiscordCheckpointTail<Event extends DiscordCanonicalTailEvent>(
+  orderedEvents: readonly Event[],
+  options: { tokenBudget?: number; maximumEvents?: number } = {},
+): DiscordCanonicalTailSelection<Event> {
+  const tokenBudget = options.tokenBudget ?? DISCORD_RECENT_TAIL_TOKEN_BUDGET;
+  const maximumEvents = options.maximumEvents ?? DISCORD_MAX_RECENT_EVENT_COUNT;
+  if (!Number.isSafeInteger(tokenBudget) || tokenBudget <= 0) {
+    throw new Error("Discord checkpoint tail token budget must be positive.");
+  }
+  if (!Number.isSafeInteger(maximumEvents) || maximumEvents <= 0) {
+    throw new Error("Discord checkpoint tail event limit must be positive.");
+  }
+  for (let index = 1; index < orderedEvents.length; index += 1) {
+    if (orderedEvents[index - 1]!.ordinal >= orderedEvents[index]!.ordinal) {
+      throw new Error("Discord checkpoint tail events must use increasing ordinals.");
+    }
+  }
+
+  let firstRetainedIndex = orderedEvents.length;
+  let estimatedTokens = 0;
+  for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+    if (orderedEvents.length - index > maximumEvents) break;
+    const eventTokens = estimateDiscordCanonicalEventTokens(orderedEvents[index]!);
+    if (estimatedTokens + eventTokens > tokenBudget) break;
+    estimatedTokens += eventTokens;
+    firstRetainedIndex = index;
+  }
+  const events = orderedEvents.slice(firstRetainedIndex);
+  const selection: DiscordCanonicalTailSelection<Event> = {
+    events,
+    estimatedTokens,
+    omittedEventCount: firstRetainedIndex,
+    complete: firstRetainedIndex === 0,
+  };
+  if (events[0] !== undefined) selection.firstRetainedOrdinal = events[0].ordinal;
+  if (events.at(-1) !== undefined) selection.lastRetainedOrdinal = events.at(-1)!.ordinal;
   return selection;
 }
 

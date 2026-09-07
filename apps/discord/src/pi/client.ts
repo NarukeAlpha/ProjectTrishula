@@ -19,12 +19,16 @@ import {
   frontmanPlanResponseSchema,
   frontmanResumeRequestSchema,
   frontmanResumeResponseSchema,
+  portableCheckpointRequestSchema,
+  portableCheckpointResponseSchema,
   solResearchRequestSchema,
   solResearchResponseSchema,
   type FrontmanPlanRequest,
   type FrontmanPlanResponse,
   type FrontmanResumeRequest,
   type FrontmanResumeResponse,
+  type PortableCheckpointRequest,
+  type PortableCheckpointResponse,
   type SolResearchRequest,
   type SolResearchResponse,
 } from "../personality-contracts.js";
@@ -35,7 +39,8 @@ type AgentRequest =
   | ReplyRequest
   | FrontmanPlanRequest
   | SolResearchRequest
-  | FrontmanResumeRequest;
+  | FrontmanResumeRequest
+  | PortableCheckpointRequest;
 
 const JOB_POLL_INTERVAL_MS = 1_000;
 const JOB_REQUEST_RETRY_DELAYS_MS = [250, 1_000, 2_500] as const;
@@ -209,6 +214,17 @@ export class PiAgentClient {
     return this.request(
       frontmanResumeRequestSchema.parse(input),
       frontmanResumeResponseSchema,
+      signal,
+    );
+  }
+
+  async portableCheckpoint(
+    input: PortableCheckpointRequest,
+    signal?: AbortSignal,
+  ): Promise<PortableCheckpointResponse> {
+    return this.request(
+      portableCheckpointRequestSchema.parse(input),
+      portableCheckpointResponseSchema,
       signal,
     );
   }
