@@ -197,6 +197,158 @@ const discordReplyContent = z.string().trim().min(1).refine(
   "Discord reply content exceeds 2,000 Unicode characters.",
 );
 
+export const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
+export const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+
+interface LegacyClaimLoopResult {
+  claimed: true;
+  idempotent: boolean;
+  runId: string;
+  generation: number;
+  mode: "messages" | "recheck";
+  channelName: string;
+  leaseExpiresAt: number;
+  windowStart: number;
+  windowEnd: number;
+  contextHash: string;
+  recheckCount: number;
+  triggerKind: "ambient" | "mention" | "recheck";
+  replyChannelId: string;
+  researchLogChannelId?: string;
+  messages: readonly unknown[];
+}
+
+export function projectLegacyClaimLoopResponse<
+  T extends LegacyClaimLoopResult | { claimed: false; reason: string },
+>(result: T) {
+  if (!result.claimed) return { claimed: false as const, reason: result.reason };
+  const projected: LegacyClaimLoopResult = {
+    claimed: true as const,
+    idempotent: result.idempotent,
+    runId: result.runId,
+    generation: result.generation,
+    mode: result.mode,
+    channelName: result.channelName,
+    leaseExpiresAt: result.leaseExpiresAt,
+    windowStart: result.windowStart,
+    windowEnd: result.windowEnd,
+    contextHash: result.contextHash,
+    recheckCount: result.recheckCount,
+    triggerKind: result.triggerKind,
+    replyChannelId: result.replyChannelId,
+    messages: result.messages,
+  };
+  if (result.researchLogChannelId !== undefined) {
+    projected.researchLogChannelId = result.researchLogChannelId;
+  }
+  return projected;
+}
+
+interface LegacyNewestContextResult {
+  guildId: string;
+  channelId: string;
+  throughSequence: number;
+  triggerThroughSequence: number;
+  completedThroughSequence: number;
+  contextHash: string;
+  messages: readonly unknown[];
+}
+
+export function projectLegacyNewestContextResponse<T extends LegacyNewestContextResult>(
+  result: T,
+) {
+  return {
+    guildId: result.guildId,
+    channelId: result.channelId,
+    throughSequence: result.throughSequence,
+    triggerThroughSequence: result.triggerThroughSequence,
+    completedThroughSequence: result.completedThroughSequence,
+    contextHash: result.contextHash,
+    messages: result.messages,
+  };
+}
+
+interface LegacyRunnableChannel {
+  guildId: string;
+  channelId: string;
+  status: string;
+  pendingMessageCount: number;
+  leaseExpired: boolean;
+  updatedAt: number;
+}
+
+interface LegacyRunnableReply {
+  outboxId: string;
+  sourceGuildId: string;
+  sourceChannelId: string;
+  guildId: string;
+  channelId: string;
+  runId: string;
+  generation: number;
+  replyKind?: "acknowledgement" | "research_log" | "final" | undefined;
+  status: "pending" | "sent";
+  content: string;
+  chart?: unknown;
+  replyToMessageId?: string | undefined;
+  consumesThroughSequence?: number | undefined;
+  recheckRequested: boolean;
+  finalizesLoop: boolean;
+  discordMessageId?: string | undefined;
+  deliveryToken?: string | undefined;
+  attempts: number;
+  createdAt: number;
+}
+
+interface LegacyRunnableResult {
+  channels: readonly LegacyRunnableChannel[];
+  replies: readonly LegacyRunnableReply[];
+}
+
+export function projectLegacyRunnableResponse<T extends LegacyRunnableResult>(result: T) {
+  return {
+    channels: result.channels.map((channel) => ({
+      guildId: channel.guildId,
+      channelId: channel.channelId,
+      status: channel.status,
+      pendingMessageCount: channel.pendingMessageCount,
+      leaseExpired: channel.leaseExpired,
+      updatedAt: channel.updatedAt,
+    })),
+    replies: result.replies.map((reply) => {
+      const projected: LegacyRunnableReply = {
+        outboxId: reply.outboxId,
+        sourceGuildId: reply.sourceGuildId,
+        sourceChannelId: reply.sourceChannelId,
+        guildId: reply.guildId,
+        channelId: reply.channelId,
+        runId: reply.runId,
+        generation: reply.generation,
+        status: reply.status,
+        content: reply.content,
+        recheckRequested: reply.recheckRequested,
+        finalizesLoop: reply.finalizesLoop,
+        attempts: reply.attempts,
+        createdAt: reply.createdAt,
+      };
+      if (reply.replyKind !== undefined) projected.replyKind = reply.replyKind;
+      if (reply.chart !== undefined) projected.chart = reply.chart;
+      if (reply.replyToMessageId !== undefined) {
+        projected.replyToMessageId = reply.replyToMessageId;
+      }
+      if (reply.consumesThroughSequence !== undefined) {
+        projected.consumesThroughSequence = reply.consumesThroughSequence;
+      }
+      if (reply.discordMessageId !== undefined) {
+        projected.discordMessageId = reply.discordMessageId;
+      }
+      if (reply.deliveryToken !== undefined) {
+        projected.deliveryToken = reply.deliveryToken;
+      }
+      return projected;
+    }),
+  };
+}
+
 export const discordGatewayRequestSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("syncGuilds"),

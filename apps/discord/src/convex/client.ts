@@ -48,6 +48,9 @@ import {
   validDiscordContent,
 } from "../content.js";
 
+const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
+const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+
 const operationSchema = z.enum([
   "syncGuilds",
   "ingestMessage",
@@ -1215,6 +1218,7 @@ export class ConvexDiscordClient {
       headers: {
         authorization: `Bearer ${this.config.convexSharedSecret}`,
         "content-type": "application/json",
+        [DISCORD_GATEWAY_PROTOCOL_HEADER]: DISCORD_GATEWAY_DURABLE_PROTOCOL,
       },
       body: JSON.stringify({ operation, ...payload }),
       signal: combined,
