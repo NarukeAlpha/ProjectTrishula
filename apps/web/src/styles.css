@@ -2125,6 +2125,27 @@ summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.discord-newspaper-advanced {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.discord-newspaper-advanced > summary {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.discord-newspaper-advanced[open] > summary {
+  margin-bottom: 18px;
+}
+
+.discord-newspaper-advanced > p {
+  margin: 14px 0 0;
+}
+
 .discord-newspaper .discord-gateway-actions {
   flex-wrap: wrap;
   gap: 10px;

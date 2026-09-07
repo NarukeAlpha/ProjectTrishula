@@ -474,7 +474,7 @@ function MarketResearchSettings({
       <div className="discord-section-heading">
         <div>
           <p className="section-kicker">03 · Scheduled research</p>
-          <h3 id={`newspaper-${guild.guildId}`}>Morning newspaper forum</h3>
+          <h3 id={`newspaper-${guild.guildId}`}>Morning newspaper</h3>
         </div>
         <span
           className="status-pill"
@@ -484,12 +484,12 @@ function MarketResearchSettings({
         </span>
       </div>
       <p>
-        Publish one independent research edition in a Discord forum. This route
-        does not change either conversation channel.
+        A separate research edition for your Discord forum. Conversation routes
+        stay unchanged.
       </p>
       <div className="discord-newspaper-grid">
         <label>
-          <span>Morning newspaper forum</span>
+          <span>Forum</span>
           <select
             aria-label="Morning newspaper forum"
             value={forumChannelId}
@@ -537,19 +537,30 @@ function MarketResearchSettings({
             </label>
           )}
         <label>
-          <span>Schedule timezone</span>
+          <span>Timezone</span>
           <select
             aria-label="Schedule timezone"
-            value={timezone}
+            value={timezoneConfirmed ? timezone : ""}
             disabled={busy}
-            onChange={(event) => setTimezone(event.target.value)}
+            onChange={(event) => {
+              if (event.target.value === "") return;
+              setTimezone(event.target.value);
+              setTimezoneConfirmed(true);
+            }}
           >
+            <option value="" disabled>
+              Choose a timezone
+            </option>
             <option value="America/New_York">America/New_York</option>
             <option value="America/Puerto_Rico">America/Puerto_Rico</option>
+            {timezone !== "America/New_York" &&
+              timezone !== "America/Puerto_Rico" && (
+                <option value={timezone}>{timezone}</option>
+              )}
           </select>
         </label>
         <label>
-          <span>Local publish time</span>
+          <span>Publish time</span>
           <input
             aria-label="Local publish time"
             type="time"
@@ -559,7 +570,7 @@ function MarketResearchSettings({
           />
         </label>
         <label>
-          <span>Edition depth</span>
+          <span>Edition style</span>
           <select
             aria-label="Edition depth"
             value={editionDepth}
@@ -575,65 +586,43 @@ function MarketResearchSettings({
           </select>
         </label>
         <label>
-          <span>Maximum ranked setups</span>
-          <input
-            aria-label="Maximum ranked setups"
-            type="number"
-            min="1"
-            max="5"
-            value={maximumRankedSetups}
-            disabled={busy}
-            onChange={(event) =>
-              setMaximumRankedSetups(Number(event.target.value))
-            }
-          />
-        </label>
-        <label>
-          <span>Numerical data provider</span>
+          <span>Charts</span>
           <select
-            aria-label="Numerical data provider"
-            value={marketDataProviderId}
+            aria-label="Chart images"
+            value={includeCharts ? maximumCharts : 0}
             disabled={busy}
-            onChange={(event) => setMarketDataProviderId(event.target.value)}
+            onChange={(event) => {
+              const count = Number(event.target.value);
+              setIncludeCharts(count > 0);
+              setMaximumCharts(count);
+            }}
           >
-            <option value="">No numerical provider</option>
-            <option value="exa_financial_datasets">
-              Exa Connect Financial Datasets
-            </option>
-            {marketDataProviderId !== "" &&
-              marketDataProviderId !== "exa_financial_datasets" && (
-                <option value={marketDataProviderId}>
-                  Existing provider: {marketDataProviderId}
-                </option>
-              )}
+            <option value={0}>Off</option>
+            {[1, 2, 3].map((count) => (
+              <option
+                key={count}
+                value={count}
+                disabled={
+                  !includeCharts &&
+                  selectedForum !== undefined &&
+                  !selectedForum.canAttachFiles
+                }
+              >
+                {count}
+              </option>
+            ))}
           </select>
         </label>
       </div>
       <p className="discord-fine-print">
-        Selecting a provider does not approve it. Financial Datasets needs a
-        reviewed live evaluation, an approved owner decision, a service cost
-        cap, and runtime enablement. Until then, numerical data remains
-        unavailable. Preview does not need a forum or an enabled schedule.
+        Charts need forum attachment permission, the CHART-IMG service, and its
+        rollout switch. This page cannot verify provider readiness. Images are
+        optional context, not numerical evidence; text can publish without them.
+        {selectedForum &&
+          !selectedForum.canAttachFiles &&
+          " This forum is missing ATTACH_FILES."}
       </p>
       <div className="discord-newspaper-checks">
-        <label>
-          <input
-            type="checkbox"
-            checked={timezoneConfirmed}
-            disabled={busy}
-            onChange={(event) => setTimezoneConfirmed(event.target.checked)}
-          />
-          I confirm this schedule timezone.
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={includeWeekends}
-            disabled={busy}
-            onChange={(event) => setIncludeWeekends(event.target.checked)}
-          />
-          Publish weekend outlooks.
-        </label>
         <label>
           <input
             type="checkbox"
@@ -647,44 +636,68 @@ function MarketResearchSettings({
             }
             onChange={(event) => setEnabled(event.target.checked)}
           />
-          Enable the scheduled newspaper.
+          Automatic publishing
         </label>
         <label>
           <input
             type="checkbox"
-            checked={includeCharts}
-            disabled={
-              busy ||
-              (!includeCharts &&
-                selectedForum !== undefined &&
-                !selectedForum.canAttachFiles)
-            }
-            onChange={(event) => setIncludeCharts(event.target.checked)}
+            checked={includeWeekends}
+            disabled={busy}
+            onChange={(event) => setIncludeWeekends(event.target.checked)}
           />
-          Include optional chart images for this server.
+          Include weekend outlooks
         </label>
       </div>
-      <label>
-        <span>Maximum chart images</span>
-        <input
-          aria-label="Maximum chart images"
-          type="number"
-          min={0}
-          max={3}
-          value={maximumCharts}
-          disabled={busy || !includeCharts}
-          onChange={(event) => setMaximumCharts(Number(event.target.value))}
-        />
-      </label>
       <p className="discord-fine-print">
-        Chart delivery also requires the CHART-IMG service and its chart rollout
-        switch. Provider readiness is not verified by this page. Images are
-        optional context, not numerical evidence. Missing images do not block
-        the text edition.
-        {selectedForum &&
-          !selectedForum.canAttachFiles &&
-          " This forum is missing ATTACH_FILES."}
+        Automatic publishing needs a permitted forum, a chosen timezone, and a
+        numerical provider in Advanced. Saving does not bypass provider approval
+        or service rollout gates.
       </p>
+      <details className="discord-newspaper-advanced">
+        <summary>Advanced</summary>
+        <div className="discord-newspaper-grid">
+          <label>
+            <span>Numerical data provider</span>
+            <select
+              aria-label="Numerical data provider"
+              value={marketDataProviderId}
+              disabled={busy}
+              onChange={(event) => setMarketDataProviderId(event.target.value)}
+            >
+              <option value="">No numerical provider</option>
+              <option value="exa_financial_datasets">
+                Exa Connect Financial Datasets
+              </option>
+              {marketDataProviderId !== "" &&
+                marketDataProviderId !== "exa_financial_datasets" && (
+                  <option value={marketDataProviderId}>
+                    Existing provider: {marketDataProviderId}
+                  </option>
+                )}
+            </select>
+          </label>
+          <label>
+            <span>Maximum ranked setups</span>
+            <input
+              aria-label="Maximum ranked setups"
+              type="number"
+              min="1"
+              max="5"
+              value={maximumRankedSetups}
+              disabled={busy}
+              onChange={(event) =>
+                setMaximumRankedSetups(Number(event.target.value))
+              }
+            />
+          </label>
+        </div>
+        <p className="discord-fine-print">
+          Choosing a provider does not approve it. Financial Datasets requires a
+          reviewed live evaluation, owner approval, a service cost cap, and
+          runtime enablement. Numerical data stays unavailable until these gates
+          pass.
+        </p>
+      </details>
       {selectedForum && !forumReady && (
         <p className="discord-route-warning">
           This forum is missing a required permission or valid required tag.
@@ -694,17 +707,19 @@ function MarketResearchSettings({
         <button
           className="discord-settings-save"
           type="button"
+          aria-label="Save morning newspaper"
           disabled={busy}
           onClick={() => void save()}
         >
-          Save morning newspaper
+          Save
         </button>
         <button
           type="button"
+          aria-label="Run preview"
           disabled={busy}
           onClick={() => void runAction("preview")}
         >
-          Run preview
+          Preview (no Discord)
         </button>
         <button
           type="button"
@@ -747,6 +762,10 @@ function MarketResearchSettings({
             </button>
           )}
       </div>
+      <p className="discord-fine-print">
+        Preview and Publish now use saved settings. Preview needs no forum or
+        automatic publishing.
+      </p>
       {status?.preview && (
         <details className="discord-fine-print" open>
           <summary>Latest preview: {status.preview.status}</summary>

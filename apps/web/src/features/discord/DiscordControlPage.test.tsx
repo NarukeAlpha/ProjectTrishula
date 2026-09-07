@@ -240,8 +240,31 @@ describe("Discord control surface", () => {
     expect(
       screen.getByRole("combobox", { name: "Morning newspaper forum" }),
     ).toHaveValue("");
-    expect(screen.getAllByRole("combobox")).toHaveLength(7);
-    expect(screen.getAllByRole("checkbox")).toHaveLength(4);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    expect(screen.getByRole("combobox", { name: "Chart images" })).toHaveValue(
+      "0",
+    );
+    expect(screen.getByText("Advanced").closest("details")).not.toHaveAttribute(
+      "open",
+    );
+    expect(
+      screen.getByLabelText("Numerical data provider").closest("details"),
+    ).toBe(screen.getByText("Advanced").closest("details"));
+    expect(
+      screen.getByLabelText("Maximum ranked setups").closest("details"),
+    ).toBe(screen.getByText("Advanced").closest("details"));
+    expect(
+      screen.queryByRole("checkbox", { name: /timezone|chart/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: "Maximum chart images" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    ).toHaveTextContent("Save");
+    expect(
+      screen.getByRole("button", { name: "Run preview" }),
+    ).toHaveTextContent("Preview (no Discord)");
   });
 
   it("saves the forum route without changing either conversational route", async () => {
@@ -320,19 +343,16 @@ describe("Discord control surface", () => {
         onResetGuildConversation={resetGuildConversation}
       />,
     );
-    fireEvent.change(
-      screen.getByRole("combobox", { name: "Numerical data provider" }),
-      { target: { value: "exa_financial_datasets" } },
-    );
-    fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: "Include optional chart images for this server.",
-      }),
-    );
-    fireEvent.change(
-      screen.getByRole("spinbutton", { name: "Maximum chart images" }),
-      { target: { value: "2" } },
-    );
+    fireEvent.click(screen.getByText("Advanced"));
+    fireEvent.change(screen.getByLabelText("Numerical data provider"), {
+      target: { value: "exa_financial_datasets" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Chart images" }), {
+      target: { value: "2" },
+    });
+    fireEvent.change(screen.getByLabelText("Maximum ranked setups"), {
+      target: { value: "3" },
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Save morning newspaper" }),
     );
@@ -342,6 +362,7 @@ describe("Discord control surface", () => {
           marketDataProviderId: "exa_financial_datasets",
           includeCharts: true,
           maximumCharts: 2,
+          maximumRankedSetups: 3,
           enabled: false,
         }),
       ),
@@ -378,11 +399,13 @@ describe("Discord control surface", () => {
         onResetGuildConversation={resetGuildConversation}
       />,
     );
-    expect(
-      screen.getByRole("checkbox", {
-        name: "Include optional chart images for this server.",
-      }),
-    ).toBeDisabled();
+    const charts = screen.getByRole("combobox", { name: "Chart images" });
+    expect(charts).toBeEnabled();
+    expect(within(charts).getByRole("option", { name: "Off" })).toBeEnabled();
+    for (const count of [1, 2, 3])
+      expect(
+        within(charts).getByRole("option", { name: String(count) }),
+      ).toBeDisabled();
     expect(screen.getByText("Latest preview: completed")).toBeVisible();
     expect(
       screen.getByText("Preview composed without delivery."),
@@ -390,6 +413,171 @@ describe("Discord control surface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
     await waitFor(() => expect(onMarketResearchAction).toHaveBeenCalledOnce());
     expect(onSaveMarketResearch).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit timezone choice without adding a confirmation checkbox", async () => {
+    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+    const status = marketResearchStatus();
+    status.preferences.forumChannelId = "channel_3";
+    status.preferences.forumTagIds = ["tag_1"];
+    status.preferences.marketDataProviderId = "exa_financial_datasets";
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[status]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={onSaveMarketResearch}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    const timezone = screen.getByRole("combobox", {
+      name: "Schedule timezone",
+    });
+    expect(timezone).toHaveValue("");
+    expect(
+      within(timezone).getByRole("option", { name: "Choose a timezone" }),
+    ).toBeDisabled();
+    const automatic = screen.getByRole("checkbox", {
+      name: "Automatic publishing",
+    });
+    expect(automatic).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
+    await waitFor(() =>
+      expect(onSaveMarketResearch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timezone: "America/New_York",
+          timezoneConfirmed: false,
+          enabled: false,
+        }),
+      ),
+    );
+    await waitFor(() => expect(timezone).toBeEnabled());
+    fireEvent.change(timezone, { target: { value: "America/New_York" } });
+    expect(automatic).toBeEnabled();
+    expect(automatic).not.toBeChecked();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
+    await waitFor(() =>
+      expect(onSaveMarketResearch).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          timezone: "America/New_York",
+          timezoneConfirmed: true,
+          enabled: false,
+        }),
+      ),
+    );
+  });
+
+  it.each(["America/Puerto_Rico", "Europe/London"])(
+    "preserves an already-confirmed saved timezone: %s",
+    async (timezone) => {
+      const status = marketResearchStatus(timezone);
+      status.preferences.timezoneConfirmed = true;
+      status.preferences.maximumCharts = 2;
+      const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+      render(
+        <DiscordControlView
+          model={controlPlane()}
+          marketResearch={[status]}
+          onSetGuildRouting={vi.fn()}
+          onSaveMarketResearch={onSaveMarketResearch}
+          onResetGuildConversation={resetGuildConversation}
+        />,
+      );
+      expect(
+        screen.getByRole("combobox", { name: "Schedule timezone" }),
+      ).toHaveValue(timezone);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save morning newspaper" }),
+      );
+      await waitFor(() =>
+        expect(onSaveMarketResearch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            timezone,
+            timezoneConfirmed: true,
+            includeCharts: false,
+            maximumCharts: 2,
+            enabled: false,
+          }),
+        ),
+      );
+    },
+  );
+
+  it.each([0, 1, 2, 3])(
+    "maps chart choice %s to the existing save fields without enabling publishing",
+    async (count) => {
+      const status = marketResearchStatus();
+      status.preferences.includeCharts = true;
+      status.preferences.maximumCharts = 3;
+      const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+      render(
+        <DiscordControlView
+          model={controlPlane()}
+          marketResearch={[status]}
+          onSetGuildRouting={vi.fn()}
+          onSaveMarketResearch={onSaveMarketResearch}
+          onResetGuildConversation={resetGuildConversation}
+        />,
+      );
+      const charts = screen.getByRole("combobox", { name: "Chart images" });
+      expect(charts).toHaveValue("3");
+      fireEvent.change(charts, { target: { value: String(count) } });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Save morning newspaper" }),
+      );
+      await waitFor(() =>
+        expect(onSaveMarketResearch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            includeCharts: count > 0,
+            maximumCharts: count,
+            timezoneConfirmed: false,
+            enabled: false,
+          }),
+        ),
+      );
+    },
+  );
+
+  it("keeps automatic publishing gated by the forum, required tag, timezone, and provider", () => {
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi.fn()}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    const automatic = screen.getByRole("checkbox", {
+      name: "Automatic publishing",
+    });
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Schedule timezone" }),
+      { target: { value: "America/Puerto_Rico" } },
+    );
+    fireEvent.click(screen.getByText("Advanced"));
+    fireEvent.change(screen.getByLabelText("Numerical data provider"), {
+      target: { value: "exa_financial_datasets" },
+    });
+    expect(automatic).toBeDisabled();
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Morning newspaper forum" }),
+      { target: { value: "channel_3" } },
+    );
+    expect(automatic).toBeDisabled();
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Morning newspaper tag" }),
+      { target: { value: "tag_1" } },
+    );
+    expect(automatic).toBeEnabled();
+    expect(automatic).not.toBeChecked();
+    fireEvent.change(screen.getByLabelText("Numerical data provider"), {
+      target: { value: "" },
+    });
+    expect(automatic).toBeDisabled();
   });
 
   it("does not present split legacy roles as a configured conversation", () => {
