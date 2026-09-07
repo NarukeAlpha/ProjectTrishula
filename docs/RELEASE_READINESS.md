@@ -30,6 +30,9 @@ and verify that the owner can test them through the website and Discord.
 - Built-in browser demo checks passed at desktop and 390-pixel phone width. Content width equals viewport width; reset confirmation opens and cancels; console error/warning list is empty. Live owner settings testing still needs a WorkOS sign-in.
 - The integrated source is backed up on `codex/feature-release-integration`. This branch does not trigger production deployment.
 - A single live CHART-IMG request from the Discord service returned HTTP 200 and a valid 800 by 600 PNG (47,215 bytes). It did not publish to Discord. This proves provider access, not the full newspaper attachment-delivery path.
+- The checkpoint-attribution fixes passed the complete gate at `247c933`: 482 app tests and four deployment-source tests. The numerical adapter and evaluation CLI then passed all 258 Pi tests, typechecking, and build after integration.
+- The provider adapter now requires a matching saved provider selection, an explicit runtime owner decision, and a cost cap. This is implemented but not live-evaluated; Exa access and the configured-time evaluation are still required.
+- A read-only Railway plan after the approved configuration apply reported no drift.
 
 ## Remaining release work
 
