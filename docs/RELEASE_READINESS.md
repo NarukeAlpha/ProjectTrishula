@@ -5,6 +5,13 @@ and verify that the owner can test them through the website and Discord.
 
 ## Current checkpoint
 
+- The simplified newspaper configurator is live and browser-verified at web `4ba745f`. The remaining checks below are feature-release work, not unfinished UI changes.
+- A private Discord mention exposed a fresh-conversation epoch mismatch. The fix is committed at `e9529ec`: Convex accepts epoch zero throughout a turn, and the Discord outbox restores epoch-zero replies. Production deployment of this fix is pending the owner approval described below. Do not reset the server conversation to work around it.
+- The full gate at `e9529ec` passed 593 application tests: Convex 160, Pi 282, Discord 84, and web 67, plus four deployment-source tests, formatting, lint, typechecks, builds, and bundle checks.
+- Pi native-compaction source is deployed at `f618911`. The first synthetic native probe failed with `provider_request_failed`; no native artifact or attestation was produced. Probe-only transport diagnostics are integrated at `2861ece` and deployed from `17f85a3`: Railway deployment `93c72c14-8ae5-4ed4-88b0-a638479a7b71` succeeded, with exact Pi build inputs and readiness verified. The Pi follow-up passed 287 tests, typecheck, build, and lint. Its live probe still reports `provider_request_failed`, with zero requests seen by the instrumented fetch hook. SDK-path diagnosis is in progress; this is not evidence of an HTTP rejection.
+- The Convex resume-revision fix and the fresh-conversation fix remain local. Approval review rejected a backend source-analysis upload before execution. Do not retry that upload or deploy the pending Convex source until the owner approves the source upload.
+- Stardust now has a forum named `ttrrrr`, but the owner has not selected it in the website. Do not select it for them. Exa access and runtime activation decisions remain pending.
+- The market-research audit identified recovery-budget, cancelled-dispatch reuse, freshness, and numerical-grounding defects. The market agent is implementing and testing bounded corrections before another release. Do not treat the earlier passing suite as coverage of these newly identified cases.
 - Both feature baselines are integrated and deployed through GitHub-connected Railway builds. Follow-up fixes and native compaction verification are still in progress.
 - Market research was recovered in `0ef9711`; 63 changed files were restored from successful historical patches.
 - Both feature agents use persistent worktrees and must commit recovery and implementation milestones.
@@ -53,6 +60,7 @@ and verify that the owner can test them through the website and Discord.
 
 ## Remaining release work
 
+0. With owner approval, deploy the Convex and Discord epoch-zero fixes and verify recovery of the existing private QA mention. Do not post another duplicate QA message. The gateway ingested the mention, but the old HTTP validators reject the turn before the model runs.
 1. Finish the native compaction adapter, persistence, and synthetic continuation/restart verification.
 2. Newspaper spacing and simplified controls are deployed and verified. The portable-summary retry and durable cost-ledger follow-up are also complete.
 3. Preserve durable delivery, owner boundaries, and existing control-page actions through the final checkpoints.
