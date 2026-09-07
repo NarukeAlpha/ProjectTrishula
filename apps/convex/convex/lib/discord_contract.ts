@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { nativeCompactionArtifactSchema } from "./discord_native_checkpoint.js";
+import { nativeCompactionArtifactSchema, type NativeCheckpointView } from "./discord_native_checkpoint.js";
 import {
   DISCORD_CONTEXT_SIZE,
   DISCORD_LOOP_LEASE_MS,
@@ -161,6 +161,33 @@ const discordReplyContent = z.string().trim().min(1).refine(
 
 export const DISCORD_GATEWAY_PROTOCOL_HEADER = "x-trishula-discord-protocol";
 export const DISCORD_GATEWAY_DURABLE_PROTOCOL = "durable-v1";
+export const DISCORD_GATEWAY_NATIVE_PROTOCOL = "native-v2";
+
+interface NativeContextFields {
+  nativeCheckpoint?: NativeCheckpointView;
+  activeCheckpointSourceRevision?: number;
+  activeCheckpointSourceContextHash?: string;
+  activeCheckpointCompactedThroughOrdinal?: number;
+}
+
+export function projectPreNativeContext<T extends NativeContextFields>(context: T) {
+  const {
+    nativeCheckpoint, activeCheckpointSourceRevision, activeCheckpointSourceContextHash,
+    activeCheckpointCompactedThroughOrdinal, ...projected
+  } = context;
+  void nativeCheckpoint; void activeCheckpointSourceRevision; void activeCheckpointSourceContextHash;
+  void activeCheckpointCompactedThroughOrdinal;
+  return projected;
+}
+
+export function projectPreNativeCheckpointRequest<T extends {
+  conversation: NativeContextFields;
+  previousNativeCheckpoint?: NativeCheckpointView;
+}>(request: T) {
+  const { previousNativeCheckpoint, ...projected } = request;
+  void previousNativeCheckpoint;
+  return { ...projected, conversation: projectPreNativeContext(request.conversation) };
+}
 
 interface LegacyClaimLoopResult {
   claimed: true;

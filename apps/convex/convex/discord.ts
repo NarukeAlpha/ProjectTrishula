@@ -10,6 +10,7 @@ import {
 } from "./_generated/server.js";
 import { actorFromIdentity, requireAllowedWorkosUserId } from "./lib/auth.js";
 import { canonicalJson, sha256Hex } from "./lib/canonical_json.js";
+import { projectPreNativeCheckpointRequest } from "./lib/discord_contract.js";
 import {
   checkpointUtf8Bytes,
   nativeCheckpointView,
@@ -65,6 +66,7 @@ import {
   discordSnowflakeUpperBound,
   isCurrentDiscordConversationFence,
   portableCheckpointRestorable,
+  portableCheckpointSourceBatchSupported,
   selectDiscordCheckpointSourceBatch,
   portableConversationSummarySchema,
   portableSummaryEvidenceMatchesEvents,
@@ -2031,7 +2033,7 @@ export const transferGuildConversationOwnership = mutation({
 });
 
 export const nextPortableCheckpoint = internalMutation({
-  args: { actorId: serviceId },
+  args: { actorId: serviceId, nativeCompactionSupported: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const ownerId = requireDiscordOwnerId(args.actorId);
     const conversations = await ctx.db
@@ -2059,11 +2061,15 @@ export const nextPortableCheckpoint = internalMutation({
         || blockedGuildIds.has(conversation.guildId)
       ) continue;
       const active = await durableConversationContext(ctx, conversation, now);
-      const staged = await stagedCheckpointContext(ctx, conversation, now);
+      const staged = args.nativeCompactionSupported === true
+        ? await stagedCheckpointContext(ctx, conversation, now)
+        : undefined;
       const restored = staged ?? active;
       // Staged opaque artifacts have no independent active lineage on the wire. Until that
       // contract exists, staged progress carries the verified readable summary only.
-      const previousNativeCheckpoint = staged === undefined ? active.nativeCheckpoint : undefined;
+      const previousNativeCheckpoint = args.nativeCompactionSupported === true && staged === undefined
+        ? active.nativeCheckpoint
+        : undefined;
       const compactedThroughOrdinal = restored.tail.compactedThroughOrdinal;
       const events = await ctx.db
         .query("discordConversationEvents")
@@ -2092,8 +2098,10 @@ export const nextPortableCheckpoint = internalMutation({
       const previousNativeTokens = previousNativeCheckpoint === undefined
         ? 0
         : Math.ceil(previousNativeCheckpoint.artifact.serializedBytes / 3) + 8;
-      const previousContextTokens = previousSummaryTokens + previousNativeTokens;
-      const currentEstimatedTokens = previousContextTokens
+      // Portable generation consumes the readable summary; native generation consumes
+      // the opaque predecessor instead. Bound each call without double-counting them.
+      const previousCallTokens = Math.max(previousSummaryTokens, previousNativeTokens);
+      const currentEstimatedTokens = previousSummaryTokens
         + visibleEvents.reduce((total, event) => total + estimateDiscordCanonicalEventTokens(event), 0);
       if (staged === undefined && currentEstimatedTokens < DISCORD_COMPACTION_THRESHOLD_TOKENS) continue;
 
@@ -2108,11 +2116,13 @@ export const nextPortableCheckpoint = internalMutation({
         previousNativeCheckpoint,
         retainedRecentEventIds,
       }));
-      const sourceEvents = selectDiscordCheckpointSourceBatch(visibleEvents, tail.events.length, {
+      const allSourceEvents = visibleEvents.slice(0, visibleEvents.length - tail.events.length);
+      if (args.nativeCompactionSupported !== true && !portableCheckpointSourceBatchSupported(allSourceEvents.length)) continue;
+      const sourceEvents = args.nativeCompactionSupported === true ? selectDiscordCheckpointSourceBatch(visibleEvents, tail.events.length, {
         // Reserve the exact previous artifacts and retained IDs, plus bounded identity/hash metadata.
         maximumBytes: Math.min(900_000, 1_500_000 - previousContextBytes - 8_192),
-        tokenBudget: DISCORD_COMPACTION_THRESHOLD_TOKENS - previousContextTokens,
-      });
+        tokenBudget: DISCORD_COMPACTION_THRESHOLD_TOKENS - previousCallTokens,
+      }) : allSourceEvents;
       const lastSourceEvent = sourceEvents.at(-1);
       if (lastSourceEvent === undefined) continue;
       const sourceSlice = await canonicalCheckpointSlice(
@@ -2169,7 +2179,7 @@ export const nextPortableCheckpoint = internalMutation({
         compactedThroughOrdinal: lastSourceEvent.ordinal,
         sourceEvents: checkpointSourceEvents,
         retainedRecentEventIds,
-        inputEstimatedTokens: previousContextTokens + sourceEvents.reduce(
+        inputEstimatedTokens: previousSummaryTokens + sourceEvents.reduce(
           (total, event) => total + estimateDiscordCanonicalEventTokens(event),
           0,
         ),
@@ -2181,7 +2191,10 @@ export const nextPortableCheckpoint = internalMutation({
         request.previousNativeCheckpoint = previousNativeCheckpoint;
       }
       if (new TextEncoder().encode(JSON.stringify(request)).byteLength > 1_500_000) continue;
-      return { available: true as const, request };
+      return {
+        available: true as const,
+        request: args.nativeCompactionSupported === true ? request : projectPreNativeCheckpointRequest(request),
+      };
     }
     return { available: false as const };
   },
@@ -2202,6 +2215,7 @@ export const storePortableCheckpoint = internalMutation({
     compactedThroughOrdinal: v.number(),
     portableSummary: v.string(),
     nativeCompaction: v.optional(v.any()),
+    nativeCompactionSupported: v.optional(v.boolean()),
     retainedRecentEventIds: v.array(serviceId),
     inputTokens: v.number(),
     outputTokens: v.number(),
@@ -2310,6 +2324,9 @@ export const storePortableCheckpoint = internalMutation({
       })),
     );
     const expectedRetainedEventIds = retainedTail.events.map((event) => event.eventId);
+    if (args.nativeCompactionSupported !== true && (!retainedTail.complete || args.nativeCompaction !== undefined)) {
+      return { accepted: false as const, reason: "checkpoint_native_protocol_required" as const };
+    }
     if (canonicalJson(normalizedRetainedEventIds) !== canonicalJson(expectedRetainedEventIds)) {
       return { accepted: false as const, reason: "checkpoint_invalid" as const };
     }
@@ -2333,7 +2350,7 @@ export const storePortableCheckpoint = internalMutation({
     } catch {
       return { accepted: false as const, reason: "checkpoint_native_invalid" as const };
     }
-    const serializedBytes = checkpointUtf8Bytes(args.portableSummary) + (nativeCompaction?.serializedBytes ?? 0);
+    let serializedBytes = checkpointUtf8Bytes(args.portableSummary) + (nativeCompaction?.serializedBytes ?? 0);
     try {
       validatePortableCheckpointCandidate({
         sourceRevision: args.expectedRevision,
@@ -2344,6 +2361,20 @@ export const storePortableCheckpoint = internalMutation({
       });
     } catch {
       return { accepted: false as const, reason: "checkpoint_oversize" as const };
+    }
+    const checkpointStatus = retainedTail.complete ? "active" as const : "candidate" as const;
+    if (nativeCompaction !== undefined) {
+      // native-v2 proves only active opaque lineage, not staged or summary-backed
+      // native input. Keep readable progress, but never activate a delta-only artifact
+      // from a rolling-deployment Pi that did not include the previous summary.
+      const unsupportedLineage = checkpointStatus === "candidate"
+        || conversation.candidateCheckpointId !== undefined
+        || (conversation.activeCheckpointId !== undefined
+          && (await durableConversationContext(ctx, conversation, now)).nativeCheckpoint === undefined);
+      if (unsupportedLineage) {
+        nativeCompaction = undefined;
+        serializedBytes = checkpointUtf8Bytes(args.portableSummary);
+      }
     }
     const existing = await ctx.db
       .query("discordCompactionCheckpoints")
@@ -2362,7 +2393,6 @@ export const storePortableCheckpoint = internalMutation({
         ? { accepted: true as const, duplicate: true, checkpointId, status: existing.status }
         : { accepted: false as const, reason: "checkpoint_id_conflict" as const };
     }
-    const checkpointStatus = retainedTail.complete ? "active" as const : "candidate" as const;
     if (checkpointStatus === "active" && conversation.activeCheckpointId !== undefined) {
       const active = await ctx.db
         .query("discordCompactionCheckpoints")

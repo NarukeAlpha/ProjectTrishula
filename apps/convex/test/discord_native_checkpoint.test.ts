@@ -8,12 +8,17 @@ import {
   expirePortableCheckpoints, invalidateNativeCheckpoint, nextPortableCheckpoint, resetGuildConversation,
   stagedCheckpointContext, storePortableCheckpoint,
 } from "../convex/discord.js";
+import { discordGateway } from "../convex/discord_http.js";
 import { sha256Hex } from "../convex/lib/canonical_json.js";
 import {
   DISCORD_PERSONALITY_PROFILE, DISCORD_PORTABLE_CHECKPOINT_MAX_BYTES,
-  selectDiscordCheckpointSourceBatch, selectDiscordCheckpointTail,
+  estimateDiscordCanonicalEventTokens, selectDiscordCheckpointSourceBatch, selectDiscordCheckpointTail,
 } from "../convex/lib/discord_conversation.js";
-import { projectLegacyClaimLoopResponse, projectLegacyNewestContextResponse } from "../convex/lib/discord_contract.js";
+import {
+  projectLegacyClaimLoopResponse, projectLegacyNewestContextResponse,
+  projectPreNativeContext, projectPreNativeCheckpointRequest,
+  DISCORD_GATEWAY_PROTOCOL_HEADER,
+} from "../convex/lib/discord_contract.js";
 import {
   checkpointUtf8Bytes, nativeCompactionArtifactSchema, restoreNativeCompaction, validateNativeCompaction,
 } from "../convex/lib/discord_native_checkpoint.js";
@@ -127,6 +132,20 @@ async function invoke(mutation: RegisteredMutationFixture, ctx: MutationCtx, arg
   return z.record(z.string(), z.unknown()).parse(result);
 }
 
+async function gatewayRequest(body: Record<string, unknown>, result: Record<string, unknown>, protocol?: string) {
+  const runMutation = vi.fn(async () => result);
+  // SAFETY: The registered HTTP action exposes its original callback, just as mutations do.
+  const action = discordGateway as typeof discordGateway & {
+    _handler: (context: { runMutation: typeof runMutation }, request: Request) => Promise<Response>;
+  };
+  const headers = new Headers({ authorization: "Bearer fixture-gateway-secret", "content-type": "application/json" });
+  if (protocol !== undefined) headers.set(DISCORD_GATEWAY_PROTOCOL_HEADER, protocol);
+  const response = await action._handler({ runMutation }, new Request("https://example.invalid/discord", {
+    method: "POST", headers, body: JSON.stringify(body),
+  }));
+  return { response, runMutation, body: z.record(z.string(), z.unknown()).parse(await response.json()) };
+}
+
 async function storeArgs(db: ReturnType<typeof database>, conversation: Doc<"discordAssistantConversations">, through: number) {
   const source = await canonicalCheckpointSlice(db.ctx, conversation, through);
   const tail = selectDiscordCheckpointTail(db.rows("discordConversationEvents")
@@ -139,6 +158,7 @@ async function storeArgs(db: ReturnType<typeof database>, conversation: Doc<"dis
     sourceContextHash: source.sourceContextHash, toolPolicyHash: conversation.capabilityProfileHash,
     compactedThroughOrdinal: through, portableSummary, retainedRecentEventIds: tail.events.map((event) => event.eventId),
     inputTokens: 100, outputTokens: 10, estimatedSavedTokens: 90, nativeCompaction: await artifact(),
+    nativeCompactionSupported: true,
   };
 }
 
@@ -257,6 +277,10 @@ describe("native checkpoint CAS, restore, and removal", () => {
       const db = database(); const conversation = db.conversation("123", size);
       const stored = await storeArgs(db, conversation, 1);
       await invoke(storePortableCheckpoint, db.ctx, stored);
+      if (size === 300) {
+        // Historical candidate artifacts can exist before the native-v2 lineage guard.
+        db.rows("discordCompactionCheckpoints")[0]!.nativeCompaction = await validateNativeCompaction(await artifact(), portableSummary);
+      }
       const args = {
         actorId: ownerId, guildId: "123", conversationId: "discord:123", checkpointId: stored.checkpointId,
         epoch: 1, expectedOwnerBindingVersion: 1, expectedRevision: size, expectedGeneration: 1, expectedRoutingGeneration: 1,
@@ -290,7 +314,7 @@ describe("bounded staged compaction", () => {
 
   it("advances contiguous stages, keeps active memory unchanged, and rotates ready guilds fairly", async () => {
     const db = database(); const first = db.conversation("123", 6_000); db.conversation("456", 6_000);
-    const response = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId });
+    const response = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId, nativeCompactionSupported: true });
     const request = z.object({
       compactedThroughOrdinal: z.number(), sourceEvents: z.array(z.object({ ordinal: z.number() }).passthrough()),
       inputEstimatedTokens: z.number(),
@@ -305,13 +329,14 @@ describe("bounded staged compaction", () => {
     expect(first.activeCheckpointId).toBeUndefined();
     expect((await durableConversationContext(db.ctx, first, Date.now())).nativeCheckpoint).toBeUndefined();
     const staged = await stagedCheckpointContext(db.ctx, first, Date.now());
-    expect(staged?.nativeCheckpoint).toBeDefined();
-    const other = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId });
+    expect(staged?.portableSummary).toBeDefined();
+    expect(staged?.nativeCheckpoint).toBeUndefined();
+    const other = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId, nativeCompactionSupported: true });
     expect(other.request).toMatchObject({ conversation: { guildId: "456" } });
     db.rows("discordAssistantConversations").splice(1, 1);
     let previous = request.compactedThroughOrdinal;
     for (let stage = 0; stage < 30 && first.activeCheckpointId === undefined; stage += 1) {
-      const next = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId });
+      const next = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId, nativeCompactionSupported: true });
       const batch = z.object({ compactedThroughOrdinal: z.number(), inputEstimatedTokens: z.number(), sourceEvents: z.array(z.object({ ordinal: z.number() }).passthrough()) }).passthrough().parse(next.request);
       expect(batch.inputEstimatedTokens).toBeLessThanOrEqual(190_400);
       expect(checkpointUtf8Bytes(JSON.stringify(batch))).toBeLessThanOrEqual(1_500_000);
@@ -325,14 +350,17 @@ describe("bounded staged compaction", () => {
     expect(first.activeCheckpointId).toBeDefined();
     expect(first.candidateCheckpointId).toBeUndefined();
     const restored = await durableConversationContext(db.ctx, first, Date.now());
-    expect(restored.nativeCheckpoint).toBeDefined();
+    expect(restored.nativeCheckpoint).toBeUndefined();
+    expect(restored.portableSummary).toBeDefined();
     expect(restored.tail.complete).toBe(true);
     expect(restored.recentEvents[0]?.ordinal).toBe(previous + 1);
   });
 
   it("projects previous native data only with the independently checked active source lineage", async () => {
     const db = database(); const conversation = db.conversation("123", 1_200);
-    await invoke(storePortableCheckpoint, db.ctx, await storeArgs(db, conversation, 1_190));
+    await invoke(storePortableCheckpoint, db.ctx, {
+      ...await storeArgs(db, conversation, 1_190), nativeCompaction: await artifact("x".repeat(450_000)),
+    });
     const template = db.rows("discordConversationEvents").at(-1)!;
     for (let ordinal = 1_201; ordinal <= 2_700; ordinal += 1) {
       db.rows("discordConversationEvents").push({
@@ -341,11 +369,12 @@ describe("bounded staged compaction", () => {
       });
     }
     conversation.revision = 2_700; conversation.humanRevision = 2_700; conversation.nextOrdinal = 2_701;
-    const response = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId });
+    const response = await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId, nativeCompactionSupported: true });
     const request = z.object({
       conversation: z.object({ activeCheckpointId: z.string(), activeCheckpointSourceRevision: z.number(), activeCheckpointSourceContextHash: z.string(), activeCheckpointCompactedThroughOrdinal: z.number() }).passthrough(),
-      previousNativeCheckpoint: z.object({ checkpointId: z.string(), sourceRevision: z.number(), sourceContextHash: z.string(), compactedThroughOrdinal: z.number() }).passthrough(),
-      sourceEvents: z.array(z.object({ ordinal: z.number() }).passthrough()),
+      previousNativeCheckpoint: z.object({ checkpointId: z.string(), sourceRevision: z.number(), sourceContextHash: z.string(), compactedThroughOrdinal: z.number(), artifact: z.object({ serializedBytes: z.number() }).passthrough() }).passthrough(),
+      inputEstimatedTokens: z.number(), previousSummary: z.json(),
+      sourceEvents: z.array(z.object({ eventId: z.string(), ordinal: z.number(), content: z.string() }).passthrough()),
     }).passthrough().parse(response.request);
     expect(request.previousNativeCheckpoint.checkpointId).toBe(request.conversation.activeCheckpointId);
     expect(request.previousNativeCheckpoint.sourceRevision).toBe(request.conversation.activeCheckpointSourceRevision);
@@ -353,6 +382,23 @@ describe("bounded staged compaction", () => {
     expect(request.previousNativeCheckpoint.compactedThroughOrdinal).toBe(request.conversation.activeCheckpointCompactedThroughOrdinal);
     expect(request.sourceEvents[0]?.ordinal).toBe(request.previousNativeCheckpoint.compactedThroughOrdinal + 1);
     expect(request.previousNativeCheckpoint.sourceRevision).toBe(1_200);
+    const summaryTokens = Math.ceil(checkpointUtf8Bytes(JSON.stringify(request.previousSummary)) / 3) + 8;
+    const sourceTokens = request.sourceEvents.reduce((total, event) => total + estimateDiscordCanonicalEventTokens(event), 0);
+    expect(request.inputEstimatedTokens).toBe(summaryTokens + sourceTokens);
+    expect(sourceTokens + Math.ceil(request.previousNativeCheckpoint.artifact.serializedBytes / 3) + 8).toBeLessThanOrEqual(190_400);
+  });
+
+  it("keeps a portable-only predecessor portable even when an older Pi submits delta-only native output", async () => {
+    const db = database(); const conversation = db.conversation("123", 3);
+    const first = await storeArgs(db, conversation, 1);
+    await invoke(storePortableCheckpoint, db.ctx, { ...first, nativeCompaction: undefined });
+    const next = await storeArgs(db, conversation, 2);
+    expect(await invoke(storePortableCheckpoint, db.ctx, next)).toMatchObject({ accepted: true, status: "active" });
+    const row = db.rows("discordCompactionCheckpoints").at(-1)!;
+    expect(row.nativeCompaction).toBeUndefined();
+    expect(row.serializedBytes).toBe(checkpointUtf8Bytes(portableSummary));
+    expect(await invoke(storePortableCheckpoint, db.ctx, next)).toMatchObject({ accepted: true, duplicate: true });
+    expect((await durableConversationContext(db.ctx, conversation, Date.now())).portableSummary).toBeDefined();
   });
 
   it("discards staged state after any frozen source, generation, routing, or revision changes", async () => {
@@ -383,5 +429,68 @@ describe("bounded staged compaction", () => {
     expect(projectLegacyNewestContextResponse({ guildId: "123", channelId: "456", throughSequence: 1, triggerThroughSequence: 1, completedThroughSequence: 0, contextHash: "hash", messages: [], ...extra }))
       .not.toHaveProperty("nativeCheckpoint");
     expect(projectLegacyClaimLoopResponse({ claimed: false, reason: "busy", ...extra })).toEqual({ claimed: false, reason: "busy" });
+  });
+
+  it("preserves pre-native durable shapes and refuses staged work without negotiation", async () => {
+    const db = database(); const conversation = db.conversation("123", 6_000);
+    expect(await invoke(nextPortableCheckpoint, db.ctx, { actorId: ownerId })).toEqual({ available: false });
+    const args = await storeArgs(db, conversation, 1);
+    expect(await invoke(storePortableCheckpoint, db.ctx, { ...args, nativeCompactionSupported: false }))
+      .toMatchObject({ accepted: false, reason: "checkpoint_native_protocol_required" });
+    const activeArgs = await storeArgs(db, conversation, 5_990);
+    await invoke(storePortableCheckpoint, db.ctx, activeArgs);
+    const context = await durableConversationContext(db.ctx, conversation, Date.now());
+    const old = projectPreNativeContext(context);
+    expect(Object.keys(old).sort()).toEqual(["activeCheckpointId", "portableSummary", "recentEvents", "sourceHumanRevision", "sourceRevision", "tail"]);
+    expect(JSON.stringify(old)).not.toContain("opaque-fixture");
+    if (context.nativeCheckpoint === undefined) throw new Error("missing_native_fixture");
+    const previous = context.nativeCheckpoint;
+    const previousConversation = {
+      activeCheckpointId: previous.checkpointId,
+      activeCheckpointSourceRevision: previous.sourceRevision,
+      activeCheckpointSourceContextHash: previous.sourceContextHash,
+      activeCheckpointCompactedThroughOrdinal: previous.compactedThroughOrdinal,
+    };
+    const oldRequest = projectPreNativeCheckpointRequest({
+      conversation: previousConversation,
+      previousNativeCheckpoint: previous,
+      previousSummary: context.portableSummary,
+    });
+    expect(oldRequest.conversation).toEqual({ activeCheckpointId: activeArgs.checkpointId });
+    expect(oldRequest).not.toHaveProperty("previousNativeCheckpoint");
+  });
+
+  it("negotiates native fields and checkpoint operations only through the native-v2 HTTP header", async () => {
+    vi.stubEnv("DISCORD_GATEWAY_SHARED_SECRET", "fixture-gateway-secret");
+    const db = database(); const conversation = db.conversation("123", 3);
+    await invoke(storePortableCheckpoint, db.ctx, await storeArgs(db, conversation, 1));
+    const durableContext = await durableConversationContext(db.ctx, conversation, Date.now());
+    const result = {
+      claimed: true as const, idempotent: false, runId: "run:1", generation: 1,
+      mode: "messages" as const, channelName: "chat", leaseExpiresAt: 1, windowStart: 1, windowEnd: 2,
+      contextHash: "hash", recheckCount: 0, triggerKind: "ambient" as const, replyChannelId: "456",
+      messages: [], durableContext,
+    };
+    const body = { operation: "claimLoop", actorId: ownerId, guildId: "123", channelId: "456", workerId: "worker", claimId: "claim:1" };
+    for (const protocol of [undefined, "unknown", "durable-v1", "native-v2"]) {
+      const claim = await gatewayRequest(body, result, protocol);
+      expect(claim.response.status).toBe(200);
+      const expected = protocol === "native-v2" ? result : protocol === "durable-v1"
+        ? { ...result, durableContext: projectPreNativeContext(durableContext) }
+        : projectLegacyClaimLoopResponse(result);
+      expect(claim.body.result).toEqual(expected);
+      const next = await gatewayRequest({ operation: "nextPortableCheckpoint", actorId: ownerId }, { available: false }, protocol);
+      expect(next.response.status).toBe(200);
+      expect(next.runMutation).toHaveBeenCalledWith(expect.anything(), { actorId: ownerId, nativeCompactionSupported: protocol === "native-v2" });
+    }
+    const forged = await gatewayRequest({ operation: "nextPortableCheckpoint", actorId: ownerId, nativeCompactionSupported: true }, { available: false }, "durable-v1");
+    expect(forged.response.status).toBe(400);
+    expect(forged.runMutation).not.toHaveBeenCalled();
+    const invalidation = await gatewayRequest({
+      operation: "invalidateNativeCheckpoint", actorId: ownerId, guildId: "123", conversationId: "discord:123", checkpointId: "checkpoint:123:1",
+      epoch: 1, expectedOwnerBindingVersion: 1, expectedRevision: 3, expectedGeneration: 1, expectedRoutingGeneration: 1,
+    }, { accepted: true, invalidated: true }, "durable-v1");
+    expect(invalidation.response.status).toBe(400);
+    expect(invalidation.runMutation).not.toHaveBeenCalled();
   });
 });
