@@ -68,7 +68,7 @@ export function deduplicateEvidence(
   const retained: MarketResearchEvidenceItem[] = [];
   const duplicateUrls: DeduplicatedEvidence["duplicateUrls"] = [];
   for (const item of evidence) {
-    const canonicalKey = item.canonicalUrlHash;
+    const canonicalKey = item.kind === "news" ? item.canonicalUrlHash : undefined;
     const contentKey = item.contentHash;
     const duplicate = (canonicalKey ? canonical.get(canonicalKey) : undefined)
       ?? content.get(contentKey);

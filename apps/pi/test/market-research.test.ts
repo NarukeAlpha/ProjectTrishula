@@ -694,6 +694,8 @@ describe("evidence and deterministic analytics", () => {
       entitlement: "real_time",
       policyStatus: "approved",
       rawField: "ohlcv",
+      sourceUrls: ["https://financialdatasets.ai/fixture"],
+      providerIdentifiers: ["fixture-run"],
       symbol: "AAPL",
       timestamp: new Date(Date.UTC(2026, 7, index + 1)).toISOString(),
       interval: "1d",
@@ -723,6 +725,8 @@ describe("evidence and deterministic analytics", () => {
       entitlement: "real_time" as const,
       policyStatus: "approved" as const,
       rawField: "price",
+      sourceUrls: ["https://financialdatasets.ai/fixture"],
+      providerIdentifiers: ["fixture-run"],
       symbol: "AAPL",
       value: 100,
       unit: "USD" as const,
@@ -758,7 +762,13 @@ describe("Financial Datasets evaluation gate", () => {
         evaluationId: "evaluation-2",
         status: "completed",
         raw: {
-          output: { structured: { snapshots: FINANCIAL_DATASET_EVALUATION_SYMBOLS.map((symbol) => ({ symbol, fields })) } },
+          output: {
+            structured: { snapshots: FINANCIAL_DATASET_EVALUATION_SYMBOLS.map((symbol) => ({ symbol, fields })) },
+            grounding: FINANCIAL_DATASET_EVALUATION_SYMBOLS.map((_symbol, index) => ({
+              field: `snapshots[${index}].fields.currentPrice.value`,
+              citations: [{ title: "Provider citation", url: "https://example.com/quote" }],
+            })),
+          },
           costDollars: { total: 0.25 },
           secretRawPayload: "must-not-survive",
         },

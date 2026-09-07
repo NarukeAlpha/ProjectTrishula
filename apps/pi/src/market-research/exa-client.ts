@@ -70,7 +70,7 @@ class OfficialExaSdkTransport implements ExaSdkTransport {
       query: request.query,
       dataSources: [{ provider: "financial_datasets" }],
       outputSchema: request.outputSchema,
-      effort: "low",
+      effort: "auto",
       budget: { maxCostDollars: request.maxCostDollars },
       metadata: { evaluationId: request.evaluationId },
     });

@@ -9,8 +9,8 @@ import { createDiscordAgentRunner } from "./discord/runner.js";
 import { createMorningPaperComposer } from "./market-research/composer.js";
 import { ConvexMarketResearchClient } from "./market-research/convex-client.js";
 import { MarketResearchExaClient } from "./market-research/exa-client.js";
+import { createConfiguredMarketDataProvider } from "./market-research/exa-financial-datasets-provider.js";
 import { createMarketResearchRunner } from "./market-research/runner.js";
-import { DisabledMarketDataProvider } from "./market-research/market-data.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -45,7 +45,18 @@ async function main(): Promise<void> {
             logger: consoleLogger,
           });
         },
-        marketData: new DisabledMarketDataProvider(),
+        marketDataFactory: (request, exaClient) =>
+          createConfiguredMarketDataProvider(
+            {
+              providerId: config.marketDataProviderId,
+              financialDatasetsOwnerDecision:
+                config.financialDatasetsOwnerDecision,
+              financialDatasetsMaxCostUsdPerRequest:
+                config.financialDatasetsMaxCostUsdPerRequest,
+            },
+            request,
+            exaClient,
+          ),
         composer: createMorningPaperComposer(codexRuntime, config.marketResearchModel),
         callbacks,
         logger: consoleLogger,

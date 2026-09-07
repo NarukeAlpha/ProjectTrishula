@@ -72,7 +72,8 @@ const citedValueSchema = z.object({
   value: valueSchema.nullable(),
   asOf: z.iso.datetime({ offset: true }).nullable(),
   sessionLabel: z.enum(["premarket", "regular", "after_hours", "closed", "unknown"]).nullable(),
-  citations: z.array(citationSchema).max(10),
+  // Older snapshots may include inline citations; Agent grounding is authoritative.
+  citations: z.array(citationSchema).max(10).default([]),
 }).strict();
 
 const symbolSnapshotSchema = z.object({
@@ -116,6 +117,7 @@ export interface FinancialDatasetsEvaluationReport {
     citationCount: number;
     value: FinancialDatasetValue | null;
     citations: z.infer<typeof citationSchema>[];
+    groundingCitations: z.infer<typeof citationSchema>[];
   }>;
   latencyMs: number;
   costUsd: number | null;
@@ -145,6 +147,76 @@ function structuredOutput(raw: unknown): unknown {
   return typeof output === "object" && output !== null
     ? (output as Record<string, unknown>).structured
     : undefined;
+}
+
+const groundingSchema = z.array(z.object({
+  field: z.string().max(500),
+  citations: z.array(z.object({
+    url: z.string().max(2_000),
+    title: z.string().trim().max(500).nullish(),
+  })).max(10),
+})).max(10_000);
+type Citation = z.infer<typeof citationSchema>;
+
+function groundingByField(raw: unknown): Map<string, Citation[]> {
+  const envelope = z.object({ output: z.object({ grounding: groundingSchema.nullish() }) }).safeParse(raw);
+  const result = new Map<string, Citation[]>();
+  if (!envelope.success) return result;
+  for (const entry of envelope.data.output.grounding ?? []) {
+    // Normalize only concrete property/index paths; never match prefixes or wildcards.
+    const path = entry.field.replace(/^\$\./, "").replace(/^output\.structured\./, "")
+      .replace(/\[(\d+)\]/g, ".$1");
+    for (const citation of entry.citations) {
+      try {
+        const url = requirePublicHttpsUrl(citation.url);
+        const existing = result.get(path) ?? [];
+        if (existing.length < 10 && !existing.some((item) => item.url === citation.url)) {
+          existing.push({ title: citation.title || url.hostname, url: citation.url });
+          result.set(path, existing);
+        }
+      } catch {
+        // Invalid/private citations cannot establish support and never enter the report.
+      }
+    }
+  }
+  return result;
+}
+
+const numericalFields = new Set<typeof fieldNames[number]>([
+  "currentPrice", "priorClose", "premarketHigh", "premarketLow", "premarketShareVolume",
+  "premarketDollarVolume", "bid", "ask", "spread", "bars5m", "bars15m", "bars60m",
+  "barsDaily", "barsWeekly",
+]);
+
+interface FieldGrounding {
+  supported: boolean;
+  citations: Citation[];
+}
+
+function fieldGrounding(
+  grounding: ReadonlyMap<string, Citation[]>,
+  snapshotIndex: number,
+  field: typeof fieldNames[number],
+  value: FinancialDatasetValue | null | undefined,
+): FieldGrounding {
+  const path = `snapshots.${snapshotIndex}.fields.${field}`;
+  const aggregate = grounding.get(`${path}.value`) ?? grounding.get(path);
+  if (aggregate?.length) return { supported: true, citations: aggregate };
+  const bars = barsSchema.safeParse(value);
+  if (!field.startsWith("bars") || !bars.success) return { supported: false, citations: [] };
+  const citations = new Map<string, Citation>();
+  let supported = true;
+  for (const [index, bar] of bars.data.entries()) {
+    for (const component of ["open", "high", "low", "close", "volume"] as const) {
+      if (bar[component] === null) continue;
+      const sources = grounding.get(`${path}.value.${index}.${component}`) ?? [];
+      if (sources.length === 0) supported = false;
+      for (const citation of sources) {
+        if (citations.size < 10) citations.set(citation.url, citation);
+      }
+    }
+  }
+  return { supported, citations: [...citations.values()] };
 }
 
 function reportedCost(raw: unknown): number | null {
@@ -185,13 +257,14 @@ export async function evaluateFinancialDatasets(
   try {
     const response = await client.runFinancialDatasetEvaluation({
       evaluationId: options.evaluationId,
-      query: `Return a strict timestamped structured market-data support snapshot for ${FINANCIAL_DATASET_EVALUATION_SYMBOLS.join(", ")}. Return explicit null for each unsupported field. Do not infer premarket values from prior-close data.`,
-      outputSchema: z.toJSONSchema(structuredEvaluationSchema),
+      query: `Evaluate market-data support as of ${base.configuredInstant}, configured timezone ${options.configuredTimezone}, for ${FINANCIAL_DATASET_EVALUATION_SYMBOLS.join(", ")}. Return actual provider timestamps and session labels; do not substitute the requested time for a provider timestamp. Return explicit null for each unsupported field. Do not infer premarket values from prior-close data. Ground each supported value in output.grounding using its exact structured field path. Inline citations are optional.`,
+      outputSchema: z.toJSONSchema(structuredEvaluationSchema, { io: "input" }),
       maxCostDollars: options.maximumCostUsd,
     }, signal);
     const raw = response.raw;
     responseCost = reportedCost(raw);
     const structured = structuredEvaluationSchema.parse(structuredOutput(raw));
+    const grounding = groundingByField(raw);
     for (const snapshot of structured.snapshots) {
       for (const field of Object.values(snapshot.fields)) {
         if (!field) continue;
@@ -206,20 +279,25 @@ export async function evaluateFinancialDatasets(
     return {
       ...base,
       status: "completed",
-      supportMatrix: structured.snapshots.flatMap((snapshot) => fieldNames.map((field) => {
+      supportMatrix: structured.snapshots.flatMap((snapshot, snapshotIndex) => fieldNames.map((field) => {
         const value = snapshot.fields[field];
         const typedValue = fieldSchemas[field].safeParse(value?.value);
+        const grounded = fieldGrounding(grounding, snapshotIndex, field, value?.value);
+        const citations = [...new Map([...grounded.citations, ...(value?.citations ?? [])]
+          .map((citation) => [citation.url, citation])).values()].slice(0, 10);
         const supported = typedValue.success && value?.asOf !== null && value?.asOf !== undefined
-          && sessionSchema.safeParse(value.sessionLabel).success && value.citations.length > 0;
+          && sessionSchema.safeParse(value.sessionLabel).success && citations.length > 0
+          && (!numericalFields.has(field) || grounded.supported);
         return {
           symbol: snapshot.symbol,
           field,
           status: supported ? "supported" as const : "unsupported" as const,
           asOf: value?.asOf ?? null,
           sessionLabel: value?.sessionLabel ?? null,
-          citationCount: value?.citations.length ?? 0,
+          citationCount: citations.length,
           value: supported ? typedValue.data : null,
-          citations: value?.citations ?? [],
+          citations,
+          groundingCitations: grounded.citations,
         };
       })),
       latencyMs: Math.max(0, (options.now ?? Date.now)() - start),
