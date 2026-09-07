@@ -13,6 +13,8 @@ import {
   isNonPublicHostname,
   isMarketResearchForumIngress,
   manualEditionDisposition,
+  marketResearchControlOptionsSchema,
+  mergeMarketResearchControlOptions,
   marketResearchDeploymentOwnerMatches,
   marketEditionLabel,
   marketSessionCloseInstant,
@@ -37,6 +39,28 @@ const baseSchedule = {
   localMinute: 0,
   lateEditionCutoffLocalTime: "12:00",
 };
+
+describe("backward-compatible owner research controls", () => {
+  const previous = { marketDataProviderId: "exa_financial_datasets", includeCharts: true, maximumCharts: 2 };
+
+  it("preserves saved provider and chart preferences when old clients omit new arguments", () => {
+    expect(mergeMarketResearchControlOptions(previous, {})).toEqual(previous);
+  });
+
+  it("accepts explicit opt-in or opt-out without changing legacy acceptance metadata", () => {
+    const base = { ...previous, includeCharts: false, chartsAcceptancePassed: false };
+    const updated = { ...base, ...mergeMarketResearchControlOptions(base, { includeCharts: true, maximumCharts: 3 }) };
+    expect(updated).toMatchObject({ includeCharts: true, chartsAcceptancePassed: false });
+    expect(mergeMarketResearchControlOptions(previous, { marketDataProviderId: null, includeCharts: false, maximumCharts: 0 }))
+      .toEqual({ marketDataProviderId: null, includeCharts: false, maximumCharts: 0 });
+  });
+
+  it("rejects unknown providers, forged acceptance, and excessive chart limits", () => {
+    expect(marketResearchControlOptionsSchema.safeParse({ marketDataProviderId: "invented" }).success).toBe(false);
+    expect(marketResearchControlOptionsSchema.safeParse({ chartsAcceptancePassed: true }).success).toBe(false);
+    expect(marketResearchControlOptionsSchema.safeParse({ maximumCharts: 4 }).success).toBe(false);
+  });
+});
 
 function closedSessionsForEveryDate(start: string, end: string) {
   const sessions: Array<{ date: string; status: "CLOSED" }> = [];

@@ -198,7 +198,7 @@ describe("Discord control surface", () => {
     expect(
       screen.getByRole("combobox", { name: "Morning newspaper forum" }),
     ).toHaveValue("");
-    expect(screen.getAllByRole("combobox")).toHaveLength(6);
+    expect(screen.getAllByRole("combobox")).toHaveLength(7);
     expect(screen.getAllByRole("checkbox")).toHaveLength(4);
   });
 
@@ -236,6 +236,114 @@ describe("Discord control surface", () => {
       ),
     );
     expect(onSetGuildRouting).not.toHaveBeenCalled();
+  });
+
+  it("runs a preview without selecting a forum or enabling scheduled publication", async () => {
+    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+    const onMarketResearchAction = vi.fn().mockResolvedValue(undefined);
+    const onSetGuildRouting = vi.fn();
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={onSetGuildRouting}
+        onSaveMarketResearch={onSaveMarketResearch}
+        onMarketResearchAction={onMarketResearchAction}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Publish now" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
+    await waitFor(() =>
+      expect(onMarketResearchAction).toHaveBeenCalledWith(
+        "guild_1",
+        "preview",
+        undefined,
+      ),
+    );
+    expect(onSaveMarketResearch).toHaveBeenCalledWith(
+      expect.objectContaining({ forumChannelId: null, enabled: false }),
+    );
+    expect(onSetGuildRouting).not.toHaveBeenCalled();
+  });
+
+  it("saves explicit chart and provider choices without claiming evaluation acceptance", async () => {
+    const onSaveMarketResearch = vi.fn().mockResolvedValue(undefined);
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        onSetGuildRouting={vi.fn()}
+        marketResearch={[marketResearchStatus()]}
+        onSaveMarketResearch={onSaveMarketResearch}
+      />,
+    );
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Numerical data provider" }),
+      { target: { value: "exa_financial_datasets" } },
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Include optional chart images for this server.",
+      }),
+    );
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Maximum chart images" }),
+      { target: { value: "2" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
+    await waitFor(() =>
+      expect(onSaveMarketResearch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          marketDataProviderId: "exa_financial_datasets",
+          includeCharts: true,
+          maximumCharts: 2,
+          enabled: false,
+        }),
+      ),
+    );
+    expect(onSaveMarketResearch.mock.calls[0]![0]).not.toHaveProperty(
+      "chartsAcceptancePassed",
+    );
+    expect(onSaveMarketResearch.mock.calls[0]![0]).not.toHaveProperty(
+      "ownerDecision",
+    );
+  });
+
+  it("displays preview completion and allows preview when the forum lacks attachment permission", async () => {
+    const model = controlPlane();
+    model.guilds[0]!.channels[2]!.canAttachFiles = false;
+    const status = marketResearchStatus();
+    status.preferences.forumChannelId = "channel_3";
+    status.preferences.forumTagIds = ["tag_1"];
+    status.preview = {
+      previewId: "MRP-test",
+      status: "completed",
+      requestedAt: Date.now(),
+      qualitySummary: ["Preview composed without delivery."],
+    };
+    const onMarketResearchAction = vi.fn().mockResolvedValue(undefined);
+    const onSaveMarketResearch = vi.fn();
+    render(
+      <DiscordControlView
+        model={model}
+        onSetGuildRouting={vi.fn()}
+        marketResearch={[status]}
+        onSaveMarketResearch={onSaveMarketResearch}
+        onMarketResearchAction={onMarketResearchAction}
+      />,
+    );
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Include optional chart images for this server.",
+      }),
+    ).toBeDisabled();
+    expect(screen.getByText("Latest preview: completed")).toBeVisible();
+    expect(
+      screen.getByText("Preview composed without delivery."),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Run preview" }));
+    await waitFor(() => expect(onMarketResearchAction).toHaveBeenCalledOnce());
+    expect(onSaveMarketResearch).not.toHaveBeenCalled();
   });
 
   it("does not present split legacy roles as a configured conversation", () => {

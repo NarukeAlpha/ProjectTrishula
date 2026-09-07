@@ -30,6 +30,7 @@ import {
   hasConfirmedPriorSession,
   isNonPublicHostname,
   manualEditionDisposition,
+  mergeMarketResearchControlOptions,
   marketResearchDeploymentOwnerMatches,
   marketEditionLabel,
   mayDeleteRetainedEvidence,
@@ -267,7 +268,6 @@ function validatePreferences(value: Preferences, ownerId: string): Preferences {
     || value.maximumRankedSetups < 1 || value.maximumRankedSetups > 5
     || value.maximumCharts < 0 || value.maximumCharts > 3
   ) throw new Error("Market-research budgets are invalid.");
-  if (value.includeCharts && !value.chartsAcceptancePassed) throw new Error("Charts remain disabled until MR-016 passes.");
   if (value.enabled && (!value.timezoneConfirmed || value.forumChannelId === null || value.marketDataProviderId === null)) {
     throw new Error("An enabled schedule requires confirmed timezone, forum, and market-data provider.");
   }
@@ -279,6 +279,7 @@ function validatePreferences(value: Preferences, ownerId: string): Preferences {
 async function validateForum(
   ctx: { db: DatabaseReader },
   preferences: Preferences,
+  requireAttachmentPermission = false,
 ): Promise<void> {
   if (preferences.forumChannelId === null) {
     if (preferences.enabled) throw new Error("forum_not_configured");
@@ -299,7 +300,7 @@ async function validateForum(
     || !capabilities.canCreateForumPost
     || !capabilities.canSendInThreads
     || !capabilities.canReadThreadHistory
-    || (preferences.includeCharts && !capabilities.canAttachFiles)
+    || (requireAttachmentPermission && preferences.includeCharts && !capabilities.canAttachFiles)
   ) throw new Error("forum_permissions_incomplete");
   const tags = new Map(capabilities.availableTags.map((tag) => [tag.id, tag]));
   for (const tagId of preferences.forumTagIds) {
@@ -846,7 +847,7 @@ export const savePreferences = mutation({
   handler: async (ctx, args) => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
     const preferences = validatePreferences(args.preferences, actor.id);
-    await validateForum(ctx, preferences);
+    await validateForum(ctx, preferences, true);
     if (preferences.enabled) {
       const calendar = await currentCalendarForOwner(
         ctx,
@@ -1089,6 +1090,9 @@ export const saveControlSettings = mutation({
     editionDepth: v.union(v.literal("full"), v.literal("concise")),
     maximumRankedSetups: v.number(),
     enabled: v.boolean(),
+    marketDataProviderId: v.optional(v.union(v.literal("exa_financial_datasets"), v.null())),
+    includeCharts: v.optional(v.boolean()),
+    maximumCharts: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
@@ -1098,6 +1102,11 @@ export const saveControlSettings = mutation({
     const base = existing ? storedPreferences(existing) : defaultPreferences(actor.id, guildId, nowIso);
     const next = validatePreferences({
       ...base,
+      ...mergeMarketResearchControlOptions(base, {
+        marketDataProviderId: args.marketDataProviderId,
+        includeCharts: args.includeCharts,
+        maximumCharts: args.maximumCharts,
+      }),
       enabled: args.enabled,
       forumChannelId: args.forumChannelId,
       forumTagIds: args.forumTagIds,
@@ -1111,7 +1120,7 @@ export const saveControlSettings = mutation({
       revision: existing ? existing.revision + 1 : 0,
       updatedAt: nowIso,
     }, actor.id);
-    await validateForum(ctx, next);
+    await validateForum(ctx, next, args.includeCharts === true);
     if (next.enabled) {
       const calendar = await currentCalendarForOwner(
         ctx,
@@ -1167,6 +1176,10 @@ export const getControlStatuses = query({
       .withIndex("by_owner_guild", (index) => index.eq("ownerId", actor.id))
       .collect();
     return Promise.all(preferences.map(async (preference) => {
+      const preview = await ctx.db.query("marketResearchPreviews")
+        .withIndex("by_owner_guild_requestedAt", (index) => index
+          .eq("ownerId", actor.id).eq("guildId", preference.guildId))
+        .order("desc").first();
       const latest = await ctx.db
         .query("marketResearchEditions")
         .withIndex("by_owner_guild_editionDate", (index) => index
@@ -1177,6 +1190,13 @@ export const getControlStatuses = query({
       return {
         guildId: preference.guildId,
         preferences: storedPreferences(preference),
+        preview: preview && preview.expiresAt > Date.now() ? {
+          previewId: preview.previewId,
+          status: preview.status,
+          requestedAt: preview.requestedAt,
+          qualitySummary: preview.qualitySummary.slice(0, 30).map((line) => line.slice(0, 1_000)),
+          safeFailure: preview.safeFailure,
+        } : null,
         current: latest ? {
           editionId: latest.editionId,
           editionDate: latest.editionDate,
@@ -2053,7 +2073,6 @@ function resultMatchesFrozenConfiguration(
     || result.edition.primaryBoard.some((setup) => !configuration.primarySymbols.includes(setup.symbol))
     || result.edition.challengers.some((setup) => !configuration.discoverySymbols.includes(setup.symbol))
     || (!configuration.includeCharts && result.chartRequests.length > 0)
-    || (configuration.includeCharts && !configuration.chartsAcceptancePassed)
     || result.chartRequests.length > configuration.maximumCharts
   ) return false;
   const durableThesisSymbols = new Set(configuration.durableTheses
@@ -2210,7 +2229,6 @@ export const completeComposition = internalMutation({
     }
     if (
       (!edition.configurationSnapshot.includeCharts && result.chartRequests.length > 0)
-      || (edition.configurationSnapshot.includeCharts && !edition.configurationSnapshot.chartsAcceptancePassed)
       || result.chartRequests.length > edition.configurationSnapshot.maximumCharts
     ) return { accepted: false as const };
     const normalizedSections: Array<{

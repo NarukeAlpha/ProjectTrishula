@@ -1030,6 +1030,7 @@ export default defineSchema({
   })
     .index("by_previewId", ["previewId"])
     .index("by_owner_previewId", ["ownerId", "previewId"])
+    .index("by_owner_guild_requestedAt", ["ownerId", "guildId", "requestedAt"])
     .index("by_expiresAt", ["expiresAt"])
     .index("by_status_expiresAt", ["status", "expiresAt"])
     .index("by_status_leaseExpiresAt", ["status", "leaseExpiresAt"]),

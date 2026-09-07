@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import {
   ChannelType,
+  PermissionFlagsBits,
   type AnyThreadChannel,
   type Client,
   type ForumChannel,
@@ -287,7 +288,7 @@ export class ForumPublisher {
 
     let thread: AnyThreadChannel;
     try {
-      const files = await this.renderCharts(claim);
+      const files = await this.renderCharts(claim, forum, botUserId);
       thread = await forum.threads.create({
         name: claim.forumTitle,
         message: {
@@ -351,7 +352,7 @@ export class ForumPublisher {
       return;
     }
     try {
-      const files = await this.renderCharts(claim);
+      const files = await this.renderCharts(claim, fetched, botUserId);
       const message = await fetched.send({
         content: claim.delivery.content,
         allowedMentions: { parse: [] },
@@ -458,11 +459,16 @@ export class ForumPublisher {
     });
   }
 
-  private async renderCharts(claim: ClaimedPublication): Promise<RenderedMarketChart[]> {
+  private async renderCharts(
+    claim: ClaimedPublication,
+    channel: ForumChannel | AnyThreadChannel,
+    botUserId: string,
+  ): Promise<RenderedMarketChart[]> {
     if (
       !this.options.chartsEnabled
       || this.options.chartImages === undefined
       || claim.delivery.chartRequests.length === 0
+      || channel.permissionsFor(botUserId)?.has(PermissionFlagsBits.AttachFiles) !== true
     ) {
       if (claim.delivery.chartAttachmentIds.length > 0) {
         logger.warn("Market-research chart attachments were unavailable; text publication continues.", {
