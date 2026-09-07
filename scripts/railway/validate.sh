@@ -14,6 +14,9 @@ for script in "$SCRIPT_DIR"/*.sh; do
   bash -n "$script"
 done
 
+node --check "$SCRIPT_DIR/readiness.mjs"
+node --test "$SCRIPT_DIR/deployment-source.test.mjs"
+
 for file in \
   .railway/railway.ts \
   apps/web/Dockerfile \
@@ -46,6 +49,10 @@ grep -Fq 'CONVEX_DISCORD_SHARED_SECRET=${{convex-backend.DISCORD_GATEWAY_SHARED_
 }
 grep -Fq 'PI_DISCORD_SHARED_SECRET=${{pi.PI_DISCORD_SHARED_SECRET}}' "$SCRIPT_DIR/connect-github.sh" || {
   printf 'Discord must use Pi agent-only credentials.\n' >&2
+  exit 1
+}
+grep -Fq 'TRISHULA_SOL_REASONING_EFFORT=max' "$SCRIPT_DIR/connect-github.sh" || {
+  printf 'The Sol profile must use the verified Codex wire effort max.\n' >&2
   exit 1
 }
 grep -Fq 'ensure_generated_secret convex-backend "$backend_id" DISCORD_GATEWAY_SHARED_SECRET' "$SCRIPT_DIR/connect-github.sh" \
@@ -140,6 +147,31 @@ grep -Fq 'DISCORD_BOT_TOKEN: preserve()' "$iac" || {
 
 grep -Fq 'PUBLIC_DISCORD_APPLICATION_ID: preserve()' "$iac" || {
   printf 'Railway IaC must preserve the public Discord application identifier.\n' >&2
+  exit 1
+}
+
+grep -Fq 'EXA_API_KEY: preserve()' "$iac" || {
+  printf 'Railway IaC must preserve the Pi-only Exa API key.\n' >&2
+  exit 1
+}
+
+if grep -Eq 'EXA_API_KEY:[[:space:]]*["'"'"']' "$iac"; then
+  printf 'Railway IaC must never contain a literal Exa API key.\n' >&2
+  exit 1
+fi
+
+[ "$(grep -c 'MARKET_RESEARCH_ENABLED: preserve()' "$iac")" -eq 2 ] || {
+  printf 'Pi and Discord market research must preserve their operator-controlled runtime switches.\n' >&2
+  exit 1
+}
+
+grep -Fq 'MARKET_RESEARCH_CHARTS_ENABLED: preserve()' "$iac" || {
+  printf 'Market-research charts must preserve their operator-controlled runtime switch.\n' >&2
+  exit 1
+}
+
+grep -Fq 'TRISHULA_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION: preserve()' "$iac" || {
+  printf 'Native compaction must preserve the operator-controlled live-probe attestation.\n' >&2
   exit 1
 }
 
