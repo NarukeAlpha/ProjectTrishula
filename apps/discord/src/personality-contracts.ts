@@ -394,6 +394,11 @@ export const frontmanPlanRequestSchema = z.object({
   }
 });
 
+export const nativeCheckpointRejectionSchema = z.object({
+  checkpointId: stableIdSchema,
+  reason: z.enum(["provider_rejected", "checkpoint_incompatible"]),
+}).strict();
+
 export const frontmanPlanResponseSchema = z.object({
   profile: z.literal("frontman_plan"),
   action: z.enum(["silent", "reply", "clarify", "research"]),
@@ -408,6 +413,7 @@ export const frontmanPlanResponseSchema = z.object({
   reply: content(DISCORD_FINAL_REPLY_MAX_CHARACTERS).optional(),
   acknowledgement: content(DISCORD_ACKNOWLEDGEMENT_MAX_CHARACTERS).optional(),
   researchRequest: frontmanResearchRequestSchema.optional(),
+  nativeCheckpointRejection: nativeCheckpointRejectionSchema.optional(),
 }).strict().superRefine((value, context) => {
   if (value.action === "silent" && (value.reply !== undefined || value.acknowledgement !== undefined || value.researchRequest !== undefined)) {
     context.addIssue({ code: "custom", message: "Silent plan includes output." });
@@ -548,6 +554,7 @@ export const frontmanResumeResponseSchema = z.object({
   ]),
   reply: content(DISCORD_FINAL_REPLY_MAX_CHARACTERS).optional(),
   recheckRequest: frontmanResearchRequestSchema.optional(),
+  nativeCheckpointRejection: nativeCheckpointRejectionSchema.optional(),
 }).strict().superRefine((value, context) => {
   if ((value.action === "send") !== (value.reply !== undefined)) {
     context.addIssue({ code: "custom", message: "Send action and reply disagree." });
@@ -599,6 +606,7 @@ export type PortableCheckpointRequest = z.infer<typeof portableCheckpointRequest
 export type PortableCheckpointResponse = z.infer<typeof portableCheckpointResponseSchema>;
 export type NativeCompactionArtifact = z.infer<typeof nativeCompactionArtifactSchema>;
 export type NativeCheckpoint = z.infer<typeof nativeCheckpointSchema>;
+export type NativeCheckpointRejection = z.infer<typeof nativeCheckpointRejectionSchema>;
 export type DurableConversationContext = z.infer<typeof durableConversationContextSchema>;
 export type FrontmanResearchRequest = z.infer<typeof frontmanResearchRequestSchema>;
 export type FrontmanPlanRequest = z.infer<typeof frontmanPlanRequestSchema>;

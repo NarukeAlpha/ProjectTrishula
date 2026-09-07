@@ -66,6 +66,7 @@ const operationSchema = z.enum([
   "listRunnable",
   "nextPortableCheckpoint",
   "storePortableCheckpoint",
+  "invalidateNativeCheckpoint",
   "enqueueReply",
   "beginReplyDelivery",
   "acknowledgeReply",
@@ -349,6 +350,10 @@ const portableCheckpointStoreResponseSchema = z.object({
   checkpointId: stableIdSchema,
   status: z.enum(["candidate", "active", "superseded", "invalid", "expired"]),
 }).passthrough();
+const nativeCheckpointInvalidationResponseSchema = z.object({
+  accepted: z.literal(true),
+  invalidated: z.boolean(),
+}).strict();
 
 export interface MonitoredChannelCursor extends ChannelReference {
   afterMessageId: string | null;
@@ -468,6 +473,17 @@ export interface RunnableWork {
 
 export interface AcknowledgeResult {
   status: "pending" | "sent" | "failed" | "delivery_uncertain";
+}
+
+export interface NativeCheckpointInvalidation {
+  guildId: string;
+  conversationId: string;
+  checkpointId: string;
+  epoch: number;
+  ownerBindingVersion: number;
+  revision: number;
+  generation: number;
+  routingGeneration: number;
 }
 
 function stageFence(identity: RunIdentity) {
@@ -1151,6 +1167,28 @@ export class ConvexDiscordClient {
         nativeCompaction: validatedResponse.nativeCompaction,
       },
       portableCheckpointStoreResponseSchema,
+      signal,
+    );
+  }
+
+  async invalidateNativeCheckpoint(
+    invalidation: NativeCheckpointInvalidation,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.request(
+      "invalidateNativeCheckpoint",
+      {
+        actorId: this.config.discordOwnerId,
+        guildId: invalidation.guildId,
+        conversationId: invalidation.conversationId,
+        checkpointId: invalidation.checkpointId,
+        epoch: invalidation.epoch,
+        expectedOwnerBindingVersion: invalidation.ownerBindingVersion,
+        expectedRevision: invalidation.revision,
+        expectedGeneration: invalidation.generation,
+        expectedRoutingGeneration: invalidation.routingGeneration,
+      },
+      nativeCheckpointInvalidationResponseSchema,
       signal,
     );
   }
