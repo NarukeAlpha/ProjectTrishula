@@ -435,6 +435,7 @@ export const discordNativeCheckpointSchema = z.object({
   guildId: snowflake,
   conversationId: z.string().regex(/^discord:\d{1,32}$/),
   epoch: z.number().int().nonnegative(),
+  compactedThroughOrdinal: z.number().int().positive(),
   sourceRevision: z.number().int().positive(),
   sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
   personalityVersion: stableId,
@@ -448,6 +449,9 @@ export const durableConversationContextSchema = z
     sourceRevision: z.number().int().nonnegative(),
     sourceHumanRevision: z.number().int().nonnegative(),
     activeCheckpointId: stableId.optional(),
+    activeCheckpointCompactedThroughOrdinal: z.number().int().positive().optional(),
+    activeCheckpointSourceRevision: z.number().int().positive().optional(),
+    activeCheckpointSourceContextHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     portableSummary: portableConversationSummarySchema.optional(),
     nativeCheckpoint: discordNativeCheckpointSchema.optional(),
     recentEvents: z.array(canonicalConversationMessageSchema).max(2_000),
@@ -462,7 +466,36 @@ export const durableConversationContextSchema = z
       complete: z.boolean(),
     }).strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((context, refinement) => {
+    const lineage = [
+      context.activeCheckpointCompactedThroughOrdinal,
+      context.activeCheckpointSourceRevision,
+      context.activeCheckpointSourceContextHash,
+    ];
+    const lineageCount = lineage.filter((value) => value !== undefined).length;
+    if (lineageCount !== 0 && (lineageCount !== lineage.length || context.activeCheckpointId === undefined)) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["activeCheckpointId"],
+        message: "Active checkpoint lineage must be complete.",
+      });
+    }
+    if (context.nativeCheckpoint === undefined) return;
+    if (
+      context.activeCheckpointId !== context.nativeCheckpoint.checkpointId
+      || context.activeCheckpointCompactedThroughOrdinal
+        !== context.nativeCheckpoint.compactedThroughOrdinal
+      || context.activeCheckpointSourceRevision !== context.nativeCheckpoint.sourceRevision
+      || context.activeCheckpointSourceContextHash !== context.nativeCheckpoint.sourceContextHash
+    ) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["nativeCheckpoint"],
+        message: "Native checkpoint must match the independently projected active lineage.",
+      });
+    }
+  });
 
 export const discordPortableCheckpointIdentitySchema = z
   .object({
@@ -478,6 +511,9 @@ export const discordPortableCheckpointIdentitySchema = z
     systemPromptHash: z.string().regex(/^[a-f0-9]{64}$/),
     capabilityProfileHash: z.string().regex(/^[a-f0-9]{64}$/),
     activeCheckpointId: stableId.optional(),
+    activeCheckpointCompactedThroughOrdinal: z.number().int().positive().optional(),
+    activeCheckpointSourceRevision: z.number().int().positive().optional(),
+    activeCheckpointSourceContextHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   })
   .strict()
   .superRefine((identity, context) => {
@@ -486,6 +522,19 @@ export const discordPortableCheckpointIdentitySchema = z
         code: "custom",
         path: ["conversationId"],
         message: "Conversation ID must match the trusted guild ID.",
+      });
+    }
+    const lineage = [
+      identity.activeCheckpointCompactedThroughOrdinal,
+      identity.activeCheckpointSourceRevision,
+      identity.activeCheckpointSourceContextHash,
+    ];
+    const lineageCount = lineage.filter((value) => value !== undefined).length;
+    if (lineageCount !== 0 && (lineageCount !== lineage.length || identity.activeCheckpointId === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["activeCheckpointId"],
+        message: "Active checkpoint lineage must be complete.",
       });
     }
   });

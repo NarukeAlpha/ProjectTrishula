@@ -22,6 +22,7 @@ const SYNTHETIC_GUILD_ID = "999999999999999991";
 const SYNTHETIC_CHANNEL_ID = "999999999999999992";
 const SYNTHETIC_AUTHOR_ID = "999999999999999993";
 const NATIVE_PROBE_TIMEOUT_MS = 120_000;
+const NATIVE_CONTINUATION_QUERY = "Return {\"correction\":string,\"status\":string,\"assistantSentinel\":string} from the prior context. The assistantSentinel must be the exact unique token stated only by the prior assistant.";
 
 function probeMode(environment: NodeJS.ProcessEnv): ProbeMode {
   const value = environment.PERSONALITY_PROBE_MODE?.trim() || "all";
@@ -142,6 +143,10 @@ const nativeContinuationSchema = z.object({
 const providerUserMessageSchema = z.object({
   type: z.literal("message"),
   role: z.literal("user"),
+  content: z.array(z.object({
+    type: z.literal("input_text"),
+    text: z.string(),
+  }).passthrough()),
 }).passthrough();
 
 function nativeCheckpoint(
@@ -155,6 +160,7 @@ function nativeCheckpoint(
     guildId: source.conversation.guildId,
     conversationId: source.conversation.conversationId,
     epoch: source.conversation.epoch,
+    compactedThroughOrdinal: source.compactedThroughOrdinal,
     sourceRevision: source.conversation.revision,
     sourceContextHash: source.sourceContextHash,
     personalityVersion: source.conversation.personalityVersion,
@@ -184,7 +190,7 @@ async function runNativeContinuation(
     systemPrompt: "You are a synthetic continuity probe. Use only supplied context. Return only the requested JSON object.",
     messages: [{
       role: "user",
-      content: "Return {\"correction\":string,\"status\":string,\"assistantSentinel\":string} from the prior context. The assistantSentinel must be the exact unique token stated only by the prior assistant.",
+      content: NATIVE_CONTINUATION_QUERY,
       timestamp: Date.now(),
     }],
   }, {
@@ -200,16 +206,21 @@ async function runNativeContinuation(
         guildId: checkpoint.guildId,
         conversationId: checkpoint.conversationId,
         epoch: checkpoint.epoch,
-        sourceRevision: checkpoint.sourceRevision + 1,
+        compactedThroughOrdinal: checkpoint.compactedThroughOrdinal,
+        sourceRevision: checkpoint.sourceRevision,
+        sourceContextHash: checkpoint.sourceContextHash,
         personalityVersion: checkpoint.personalityVersion,
         systemPromptHash: checkpoint.systemPromptHash,
         capabilityProfileHash: checkpoint.capabilityProfileHash,
       });
       applied = result.applied;
       const body = z.object({ input: z.array(z.json()) }).passthrough().parse(result.payload);
-      preservedTrailingUser = body.input.some((item) => (
-        providerUserMessageSchema.safeParse(item).success
-      ));
+      preservedTrailingUser = body.input.some((item) => {
+        const parsed = providerUserMessageSchema.safeParse(item);
+        return parsed.success && parsed.data.content.some(
+          (part) => part.text === NATIVE_CONTINUATION_QUERY,
+        );
+      });
       return { ...body, store: false, service_tier: "priority" };
     },
   });
@@ -347,7 +358,7 @@ export async function runPersonalityProbe(
         transport: artifact.requestEvidence.transport,
         betaFeature: artifact.requestEvidence.betaFeature,
         sameProcessPass: true,
-        restartPass: true,
+        freshRuntimePass: true,
         elapsedMs: Date.now() - startedAt,
       });
     }

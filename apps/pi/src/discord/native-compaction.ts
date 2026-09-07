@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type {
   Api,
@@ -36,18 +37,29 @@ const providerPayloadSchema = z.object({
 }).catchall(z.json());
 
 const sseEventSchema = z.object({ type: z.string() }).passthrough();
+const createdEventSchema = z.object({
+  type: z.literal("response.created"),
+  response: z.object({
+    id: z.string().min(1),
+  }).passthrough(),
+}).passthrough();
 const outputItemEventSchema = z.object({
   type: z.literal("response.output_item.done"),
+  output_index: z.number().int().nonnegative().optional(),
+  response_id: z.string().min(1).optional(),
   item: z.json(),
 }).passthrough();
-const completedEventSchema = z.object({
-  type: z.literal("response.completed"),
+const terminalEventSchema = z.object({
+  type: z.enum(["response.completed", "response.done"]),
   response: z.object({
+    id: z.string().min(1).optional(),
+    status: z.literal("completed"),
+    output: z.array(z.json()).optional(),
     usage: z.object({
-      input_tokens: z.number().int().nonnegative().optional(),
-      output_tokens: z.number().int().nonnegative().optional(),
-      total_tokens: z.number().int().nonnegative().optional(),
-    }).passthrough().optional(),
+      input_tokens: z.number().int().positive(),
+      output_tokens: z.number().int().nonnegative(),
+      total_tokens: z.number().int().positive(),
+    }).passthrough(),
   }).passthrough(),
 }).passthrough();
 const failedEventSchema = z.object({
@@ -64,6 +76,9 @@ const retainedUserMessageSchema = z.object({
 const compactionItemSchema = z.object({
   type: z.literal("compaction"),
 }).passthrough();
+const portableSummarySeedSchema = z.object({
+  validatedPortableCheckpointSummary: z.json(),
+}).strict();
 
 export type NativeCompactionErrorCode =
   | "aborted"
@@ -88,7 +103,9 @@ export interface NativeCheckpointCompatibilityIdentity {
   guildId: string;
   conversationId: string;
   epoch: number;
+  compactedThroughOrdinal: number;
   sourceRevision: number;
+  sourceContextHash: string;
   personalityVersion: string;
   systemPromptHash: string;
   capabilityProfileHash: string;
@@ -151,8 +168,22 @@ export function nativeCompactionInput(
   request: DiscordPortableCheckpointRequest,
 ): JsonValue[] {
   const input: JsonValue[] = [];
-  if (request.previousNativeCheckpoint !== undefined) {
-    input.push(...request.previousNativeCheckpoint.artifact.replacementHistory);
+  const previousNativeCheckpoint = compatiblePreviousNativeCheckpoint(request);
+  if (previousNativeCheckpoint !== undefined) {
+    input.push(...previousNativeCheckpoint.artifact.replacementHistory);
+  } else if (request.previousSummary !== undefined) {
+    input.push({
+      type: "message",
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: JSON.stringify({
+          validatedPortableCheckpointSummary: request.previousSummary,
+        }),
+      }],
+    });
+  } else if (request.conversation.activeCheckpointId !== undefined) {
+    throw new NativeCompactionError("provider_contract_incompatible");
   }
   for (const event of request.sourceEvents) {
     const text = nativeEventText(event);
@@ -171,6 +202,35 @@ export function nativeCompactionInput(
   return input;
 }
 
+function compatiblePreviousNativeCheckpoint(
+  request: DiscordPortableCheckpointRequest,
+): DiscordNativeCheckpoint | undefined {
+  const checkpoint = request.previousNativeCheckpoint;
+  const conversation = request.conversation;
+  if (
+    checkpoint === undefined
+    || conversation.activeCheckpointId === undefined
+    || conversation.activeCheckpointCompactedThroughOrdinal === undefined
+    || conversation.activeCheckpointSourceRevision === undefined
+    || conversation.activeCheckpointSourceContextHash === undefined
+  ) return undefined;
+  const expected: NativeCheckpointCompatibilityIdentity = {
+    checkpointId: conversation.activeCheckpointId,
+    ownerId: conversation.ownerId,
+    ownerBindingVersion: conversation.ownerBindingVersion,
+    guildId: conversation.guildId,
+    conversationId: conversation.conversationId,
+    epoch: conversation.epoch,
+    compactedThroughOrdinal: conversation.activeCheckpointCompactedThroughOrdinal,
+    sourceRevision: conversation.activeCheckpointSourceRevision,
+    sourceContextHash: conversation.activeCheckpointSourceContextHash,
+    personalityVersion: conversation.personalityVersion,
+    systemPromptHash: conversation.systemPromptHash,
+    capabilityProfileHash: conversation.capabilityProfileHash,
+  };
+  return compatibleNativeCheckpoint(checkpoint, expected) ? checkpoint : undefined;
+}
+
 function retainRecentUserMessages(input: readonly JsonValue[]): JsonValue[] {
   const retained: JsonValue[] = [];
   let estimatedTokens = 0;
@@ -178,6 +238,7 @@ function retainRecentUserMessages(input: readonly JsonValue[]): JsonValue[] {
     if (retained.length >= DISCORD_NATIVE_RETAINED_USER_LIMIT) break;
     const parsed = retainedUserMessageSchema.safeParse(input[index]);
     if (!parsed.success) continue;
+    if (isPortableSummarySeed(parsed.data)) continue;
     const itemTokens = Math.max(1, Math.ceil(serializedBytes(parsed.data) / 4));
     if (estimatedTokens + itemTokens > DISCORD_NATIVE_RETAINED_USER_TOKEN_BUDGET) break;
     retained.push(parsed.data);
@@ -186,15 +247,35 @@ function retainRecentUserMessages(input: readonly JsonValue[]): JsonValue[] {
   return retained.reverse();
 }
 
+function isPortableSummarySeed(
+  message: z.infer<typeof retainedUserMessageSchema>,
+): boolean {
+  if (message.content.length !== 1) return false;
+  try {
+    return portableSummarySeedSchema.safeParse(
+      JSON.parse(message.content[0]!.text),
+    ).success;
+  } catch {
+    return false;
+  }
+}
+
 function parseSseData(text: string): unknown[] {
   const events: unknown[] = [];
+  let ended = false;
   for (const block of text.replaceAll("\r\n", "\n").split("\n\n")) {
     const data = block.split("\n")
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trimStart())
       .join("\n")
       .trim();
-    if (data === "" || data === "[DONE]") continue;
+    if (data === "") continue;
+    if (data === "[DONE]") {
+      if (ended) throw new NativeCompactionError("response_invalid");
+      ended = true;
+      continue;
+    }
+    if (ended) throw new NativeCompactionError("response_invalid");
     try {
       events.push(JSON.parse(data));
     } catch {
@@ -208,39 +289,90 @@ function responseArtifact(
   responseText: string,
   input: readonly JsonValue[],
 ): Pick<DiscordNativeCompactionArtifact, "replacementHistory" | "usage"> {
-  const compactionItems: JsonValue[] = [];
-  let completed: z.infer<typeof completedEventSchema> | undefined;
+  let createdResponseId: string | undefined;
+  let compactionEvent: z.infer<typeof outputItemEventSchema> | undefined;
+  let terminal: z.infer<typeof terminalEventSchema> | undefined;
   for (const rawEvent of parseSseData(responseText)) {
+    if (terminal !== undefined) throw new NativeCompactionError("response_invalid");
     const event = sseEventSchema.safeParse(rawEvent);
     if (!event.success) throw new NativeCompactionError("response_invalid");
     if (failedEventSchema.safeParse(rawEvent).success) {
       throw new NativeCompactionError("provider_request_failed");
     }
-    const output = outputItemEventSchema.safeParse(rawEvent);
-    if (output.success) {
-      if (compactionItemSchema.safeParse(output.data.item).success) {
-        compactionItems.push(output.data.item);
+    if (event.data.type === "response.created") {
+      const created = createdEventSchema.safeParse(rawEvent);
+      if (!created.success) throw new NativeCompactionError("response_invalid");
+      if (createdResponseId !== undefined || compactionEvent !== undefined) {
+        throw new NativeCompactionError("response_invalid");
       }
+      createdResponseId = created.data.response.id;
       continue;
     }
-    const completion = completedEventSchema.safeParse(rawEvent);
-    if (completion.success) completed = completion.data;
+    if (event.data.type === "response.output_item.done") {
+      const output = outputItemEventSchema.safeParse(rawEvent);
+      if (
+        !output.success
+        || compactionEvent !== undefined
+        || !compactionItemSchema.safeParse(output.data.item).success
+        || (
+          createdResponseId !== undefined
+          && output.data.response_id !== createdResponseId
+        )
+      ) {
+        throw new NativeCompactionError("response_invalid");
+      }
+      compactionEvent = output.data;
+      continue;
+    }
+    if (event.data.type === "response.completed" || event.data.type === "response.done") {
+      const completion = terminalEventSchema.safeParse(rawEvent);
+      if (!completion.success) throw new NativeCompactionError("response_invalid");
+      if (compactionEvent === undefined) throw new NativeCompactionError("response_invalid");
+      terminal = completion.data;
+      continue;
+    }
   }
-  if (completed === undefined) throw new NativeCompactionError("response_incomplete");
-  if (compactionItems.length !== 1) throw new NativeCompactionError("response_invalid");
+  if (terminal === undefined) throw new NativeCompactionError("response_incomplete");
+  if (
+    createdResponseId !== undefined
+    && terminal.response.id !== createdResponseId
+  ) throw new NativeCompactionError("response_invalid");
+  if (
+    compactionEvent!.response_id !== undefined
+    && terminal.response.id !== undefined
+    && compactionEvent!.response_id !== terminal.response.id
+  ) throw new NativeCompactionError("response_invalid");
+  const terminalOutput = terminal.response.output;
+  if (terminalOutput !== undefined) {
+    const outputIndex = compactionEvent!.output_index;
+    const compactionOutput = terminalOutput.filter(
+      (item) => compactionItemSchema.safeParse(item).success,
+    );
+    const linkedItem = outputIndex === undefined
+      ? compactionOutput
+      : [terminalOutput[outputIndex]];
+    if (
+      terminalOutput.length !== 1
+      || compactionOutput.length !== 1
+      || linkedItem.length !== 1
+      || linkedItem[0] === undefined
+      || !isDeepStrictEqual(linkedItem[0], compactionEvent!.item)
+    ) throw new NativeCompactionError("response_invalid");
+  }
+  const usage = terminal.response.usage;
+  if (usage.total_tokens !== usage.input_tokens + usage.output_tokens) {
+    throw new NativeCompactionError("response_invalid");
+  }
   const replacementHistory = validateNativeReplacementHistory([
     ...retainRecentUserMessages(input),
-    compactionItems[0]!,
+    compactionEvent!.item,
   ]);
-  const usage = completed.response.usage;
-  const inputTokens = usage?.input_tokens ?? 0;
-  const outputTokens = usage?.output_tokens ?? 0;
   return {
     replacementHistory,
     usage: {
-      inputTokens,
-      outputTokens,
-      totalTokens: usage?.total_tokens ?? inputTokens + outputTokens,
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      totalTokens: usage.total_tokens,
     },
   };
 }
@@ -361,7 +493,7 @@ export async function generateNativeCompaction(
       },
       streamOptions,
     );
-    if (message.stopReason === "error" || message.stopReason === "aborted") {
+    if (message.stopReason !== "stop") {
       throw new NativeCompactionError(
         message.stopReason === "aborted" ? "aborted" : "provider_request_failed",
       );
@@ -419,7 +551,9 @@ export function compatibleNativeCheckpoint(
     && checkpoint.guildId === expected.guildId
     && checkpoint.conversationId === expected.conversationId
     && checkpoint.epoch === expected.epoch
-    && checkpoint.sourceRevision <= expected.sourceRevision
+    && checkpoint.compactedThroughOrdinal === expected.compactedThroughOrdinal
+    && checkpoint.sourceRevision === expected.sourceRevision
+    && checkpoint.sourceContextHash === expected.sourceContextHash
     && checkpoint.personalityVersion === expected.personalityVersion
     && checkpoint.systemPromptHash === expected.systemPromptHash
     && checkpoint.capabilityProfileHash === expected.capabilityProfileHash

@@ -100,7 +100,7 @@ describe("Convex Discord heartbeats", () => {
         },
       },
     ]);
-    expect(protocolHeaders).toEqual(["durable-v1", "durable-v1"]);
+    expect(protocolHeaders).toEqual(["native-v2", "native-v2"]);
   });
 });
 
@@ -195,7 +195,7 @@ describe("Convex portable checkpoints", () => {
 
     const client = new ConvexDiscordClient(config, "discord-instance-1");
     await expect(client.storePortableCheckpoint(request, response)).resolves.toBeUndefined();
-    expect(protocol).toBe("durable-v1");
+    expect(protocol).toBe("native-v2");
     expect(body).toMatchObject({
       operation: "storePortableCheckpoint",
       nativeCompaction: response.nativeCompaction,

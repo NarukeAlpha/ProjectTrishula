@@ -18,6 +18,7 @@ import {
   DISCORD_NATIVE_COMPACTION_MAX_BYTES,
   generateNativeCompaction,
   injectNativeCheckpoint,
+  nativeCompactionInput,
   NativeCompactionError,
   validateNativeReplacementHistory,
 } from "../src/discord/native-compaction.js";
@@ -105,11 +106,21 @@ function sseResponse(opaque = "opaque-secret"): Response {
     {
       type: "response.completed",
       response: {
+        status: "completed",
         usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 },
       },
     },
   ];
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function customSseResponse(events: unknown[], done = true): Response {
+  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
+    + (done ? "data: [DONE]\n\n" : "");
+  return new Response(body, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
@@ -161,6 +172,7 @@ function checkpointFromArtifact(
     guildId: request.conversation.guildId,
     conversationId: request.conversation.conversationId,
     epoch: request.conversation.epoch,
+    compactedThroughOrdinal: request.compactedThroughOrdinal,
     sourceRevision: request.conversation.revision,
     sourceContextHash: request.sourceContextHash,
     personalityVersion: request.conversation.personalityVersion,
@@ -178,7 +190,9 @@ function compatibilityIdentity(checkpoint: DiscordNativeCheckpoint) {
     guildId: checkpoint.guildId,
     conversationId: checkpoint.conversationId,
     epoch: checkpoint.epoch,
-    sourceRevision: checkpoint.sourceRevision + 1,
+    compactedThroughOrdinal: checkpoint.compactedThroughOrdinal,
+    sourceRevision: checkpoint.sourceRevision,
+    sourceContextHash: checkpoint.sourceContextHash,
     personalityVersion: checkpoint.personalityVersion,
     systemPromptHash: checkpoint.systemPromptHash,
     capabilityProfileHash: checkpoint.capabilityProfileHash,
@@ -271,6 +285,69 @@ describe("native Discord compaction", () => {
     );
   });
 
+  it("uses only a fully fenced active opaque predecessor and otherwise seeds from portable memory", async () => {
+    const artifact = await generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => sseResponse(),
+    });
+    const checkpoint = checkpointFromArtifact(artifact);
+    const previousSummary = {
+      participants: [],
+      acceptedFacts: [],
+      corrections: [],
+      unresolvedQuestions: [],
+      commitments: [],
+      conversationPreferences: [],
+      sourceFreshnessNotes: [],
+    };
+    const nextRequest: DiscordPortableCheckpointRequest = {
+      ...request,
+      requestId: "checkpoint:native:2",
+      conversation: {
+        ...request.conversation,
+        activeCheckpointId: checkpoint.checkpointId,
+        activeCheckpointCompactedThroughOrdinal: checkpoint.compactedThroughOrdinal,
+        activeCheckpointSourceRevision: checkpoint.sourceRevision,
+        activeCheckpointSourceContextHash: checkpoint.sourceContextHash,
+      },
+      previousSummary,
+      previousNativeCheckpoint: checkpoint,
+    };
+
+    expect(nativeCompactionInput(nextRequest).slice(0, artifact.replacementHistory.length))
+      .toEqual(artifact.replacementHistory);
+
+    const incompatible = {
+      ...checkpoint,
+      ownerId: "another_owner",
+    };
+    const fallbackInput = nativeCompactionInput({
+      ...nextRequest,
+      previousNativeCheckpoint: incompatible,
+    });
+    expect(JSON.stringify(fallbackInput)).toContain("validatedPortableCheckpointSummary");
+    expect(JSON.stringify(fallbackInput)).not.toContain("opaque-secret");
+
+    const fallbackArtifact = await generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request: { ...nextRequest, previousNativeCheckpoint: incompatible },
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => sseResponse("portable-seeded-opaque"),
+    });
+    expect(JSON.stringify(fallbackArtifact.replacementHistory))
+      .not.toContain("validatedPortableCheckpointSummary");
+
+    expect(() => nativeCompactionInput({
+      ...nextRequest,
+      previousSummary: undefined,
+      previousNativeCheckpoint: incompatible,
+    })).toThrowError(new NativeCompactionError("provider_contract_incompatible"));
+  });
+
   it("rejects incompatible or corrupt checkpoints without changing the payload", async () => {
     const artifact = await generateNativeCompaction({
       runtime: fakeRuntime({}),
@@ -335,6 +412,101 @@ describe("native Discord compaction", () => {
       expect(error).toHaveProperty("code", "provider_contract_incompatible");
       expect(error).not.toHaveProperty("message", expect.stringContaining(secret));
     }
+  });
+
+  it("accepts the runtime response.done alias only with linked output and exact usage", async () => {
+    const compaction = {
+      id: "item_1",
+      type: "compaction",
+      opaque_payload: { providerOwned: true },
+    };
+    const response = customSseResponse([
+      { type: "response.created", response: { id: "response_1" } },
+      {
+        type: "response.output_item.done",
+        response_id: "response_1",
+        output_index: 0,
+        item: compaction,
+      },
+      {
+        type: "response.done",
+        response: {
+          id: "response_1",
+          status: "completed",
+          output: [compaction],
+          usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 },
+        },
+      },
+    ]);
+
+    await expect(generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => response,
+    })).resolves.toMatchObject({
+      replacementHistory: expect.arrayContaining([compaction]),
+      usage: { inputTokens: 21, outputTokens: 5, totalTokens: 26 },
+    });
+  });
+
+  it.each([
+    ["missing completed status", [
+      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "opaque" } },
+      { type: "response.completed", response: { usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
+    ]],
+    ["inconsistent usage", [
+      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "opaque" } },
+      { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 27 } } },
+    ]],
+    ["terminal before output", [
+      { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
+      { type: "response.output_item.done", item: { type: "compaction", encrypted_content: "opaque" } },
+    ]],
+    ["unsupported output item", [
+      { type: "response.output_item.done", item: { type: "message", role: "assistant", content: [] } },
+      { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
+    ]],
+    ["mismatched terminal output", [
+      { type: "response.output_item.done", output_index: 0, item: { id: "item_1", type: "compaction", encrypted_content: "opaque" } },
+      {
+        type: "response.completed",
+        response: {
+          status: "completed",
+          output: [{ id: "item_2", type: "compaction", encrypted_content: "other" }],
+          usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 },
+        },
+      },
+    ]],
+    ["malformed terminal followed by a valid terminal", [
+      { type: "response.output_item.done", item: { type: "compaction", opaque: "value" } },
+      { type: "response.completed", response: { status: "incomplete" } },
+      { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
+    ]],
+    ["malformed output followed by a valid output", [
+      { type: "response.output_item.done" },
+      { type: "response.output_item.done", item: { type: "compaction", opaque: "value" } },
+      { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
+    ]],
+    ["created response without an output response ID", [
+      { type: "response.created", response: { id: "response_1" } },
+      { type: "response.output_item.done", item: { type: "compaction", opaque: "value" } },
+      { type: "response.completed", response: { id: "response_1", status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
+    ]],
+    ["created response without a terminal response ID", [
+      { type: "response.created", response: { id: "response_1" } },
+      { type: "response.output_item.done", response_id: "response_1", item: { type: "compaction", opaque: "value" } },
+      { type: "response.completed", response: { status: "completed", usage: { input_tokens: 21, output_tokens: 5, total_tokens: 26 } } },
+    ]],
+  ])("rejects %s in the native SSE state machine", async (_scenario, events) => {
+    await expect(generateNativeCompaction({
+      runtime: fakeRuntime({}),
+      model,
+      request,
+      instructions: "Synthetic compaction instructions.",
+      fetch: async () => customSseResponse(events),
+    })).rejects.toBeInstanceOf(NativeCompactionError);
   });
 
   it("settles an early cloned response-stream failure without leaking its cause", async () => {
