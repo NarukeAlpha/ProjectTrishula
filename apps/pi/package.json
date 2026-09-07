@@ -12,6 +12,7 @@
     "auth:codex": "node dist/auth/codex-cli.js",
     "start": "node dist/start.js",
     "test": "vitest run",
+    "test:personality": "vitest run test/personality-shadow.test.ts test/discord-compaction.test.ts test/discord-conversations.test.ts test/discord-contracts.test.ts test/discord-runner.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

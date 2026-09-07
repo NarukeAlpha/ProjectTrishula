@@ -380,6 +380,118 @@ export const durableConversationContextSchema = z
   })
   .strict();
 
+export const discordPortableCheckpointIdentitySchema = z
+  .object({
+    ownerId: stableId,
+    ownerBindingVersion: z.number().int().positive(),
+    guildId: snowflake,
+    conversationId: z.string().regex(/^discord:\d{1,32}$/),
+    epoch: z.number().int().nonnegative(),
+    generation: z.number().int().positive(),
+    routingGeneration: z.number().int().positive(),
+    revision: z.number().int().positive(),
+    personalityVersion: stableId,
+    systemPromptHash: z.string().regex(/^[a-f0-9]{64}$/),
+    capabilityProfileHash: z.string().regex(/^[a-f0-9]{64}$/),
+    activeCheckpointId: stableId.optional(),
+  })
+  .strict()
+  .superRefine((identity, context) => {
+    if (identity.conversationId !== `discord:${identity.guildId}`) {
+      context.addIssue({
+        code: "custom",
+        path: ["conversationId"],
+        message: "Conversation ID must match the trusted guild ID.",
+      });
+    }
+  });
+
+export const discordPortableCheckpointEventSchema = z
+  .object({
+    eventId: stableId,
+    ordinal: z.number().int().positive(),
+    role: z.enum(["human", "assistant"]),
+    authorId: snowflake.optional(),
+    displayName: z.string().trim().min(1).max(100).optional(),
+    content: z.string().max(8_000),
+    createdAt: z.iso.datetime({ offset: true }),
+    freshness: z.enum(["current", "limited", "unknown"]).optional(),
+  })
+  .strict();
+
+export const discordPortableCheckpointRequestSchema = z
+  .object({
+    profile: z.literal("portable_checkpoint"),
+    requestId: stableId,
+    conversation: discordPortableCheckpointIdentitySchema,
+    sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
+    compactedThroughOrdinal: z.number().int().positive(),
+    previousSummary: portableConversationSummarySchema.optional(),
+    sourceEvents: z.array(discordPortableCheckpointEventSchema).min(1).max(5_000),
+    retainedRecentEventIds: z.array(stableId).max(2_000),
+    inputEstimatedTokens: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    const eventIds = new Set<string>();
+    let previousOrdinal = 0;
+    for (const [index, event] of request.sourceEvents.entries()) {
+      if (event.ordinal <= previousOrdinal || event.ordinal > request.compactedThroughOrdinal) {
+        context.addIssue({
+          code: "custom",
+          path: ["sourceEvents", index, "ordinal"],
+          message: "Checkpoint source event ordinals must increase through the compaction boundary.",
+        });
+      }
+      if (eventIds.has(event.eventId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["sourceEvents", index, "eventId"],
+          message: "Checkpoint source event IDs must be unique.",
+        });
+      }
+      eventIds.add(event.eventId);
+      previousOrdinal = event.ordinal;
+    }
+    if (request.sourceEvents.at(-1)?.ordinal !== request.compactedThroughOrdinal) {
+      context.addIssue({
+        code: "custom",
+        path: ["compactedThroughOrdinal"],
+        message: "The compaction boundary must be the last supplied source event.",
+      });
+    }
+    if (new Set(request.retainedRecentEventIds).size !== request.retainedRecentEventIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["retainedRecentEventIds"],
+        message: "Retained recent event IDs must be unique.",
+      });
+    }
+    if (request.retainedRecentEventIds.some((eventId) => eventIds.has(eventId))) {
+      context.addIssue({
+        code: "custom",
+        path: ["retainedRecentEventIds"],
+        message: "Compacted and retained event IDs must not overlap.",
+      });
+    }
+  });
+
+export const discordPortableCheckpointResponseSchema = z
+  .object({
+    profile: z.literal("portable_checkpoint"),
+    checkpointId: stableId,
+    portableSummary: portableConversationSummarySchema,
+    estimator: z.object({
+      exact: z.literal(false),
+      version: z.literal("utf8-bytes-div-3-plus-message-overhead:v1"),
+      inputEstimatedTokens: z.number().int().positive(),
+      outputEstimatedTokens: z.number().int().nonnegative(),
+      estimatedSavedTokens: z.number().int(),
+      serializedBytes: z.number().int().positive().max(512 * 1_024),
+    }).strict(),
+  })
+  .strict();
+
 export const frontmanResearchRequestSchema = z
   .object({
     question: z.string().trim().min(1).max(1_000),
@@ -646,6 +758,7 @@ export const discordFrontmanResumeResponseSchema = z
   });
 
 export const discordAgentRequestSchema = z.union([
+  discordPortableCheckpointRequestSchema,
   discordFrontmanPlanRequestSchema,
   discordSolResearchRequestSchema,
   discordFrontmanResumeRequestSchema,
@@ -655,6 +768,7 @@ export const discordAgentRequestSchema = z.union([
 ]);
 
 export const discordAgentResponseSchema = z.union([
+  discordPortableCheckpointResponseSchema,
   discordFrontmanPlanResponseSchema,
   discordSolResearchResponseSchema,
   discordFrontmanResumeResponseSchema,
@@ -669,6 +783,12 @@ export const discordAgentJobParamsSchema = z
 
 export type DiscordAgentRequest = z.infer<typeof discordAgentRequestSchema>;
 export type DiscordAgentResponse = z.infer<typeof discordAgentResponseSchema>;
+export type DiscordPortableCheckpointRequest = z.infer<
+  typeof discordPortableCheckpointRequestSchema
+>;
+export type DiscordPortableCheckpointResponse = z.infer<
+  typeof discordPortableCheckpointResponseSchema
+>;
 export type DiscordTriageRequest = z.infer<typeof discordTriageRequestSchema>;
 export type DiscordTriageResponse = z.infer<typeof discordTriageResponseSchema>;
 export type DiscordResearchRequest = z.infer<

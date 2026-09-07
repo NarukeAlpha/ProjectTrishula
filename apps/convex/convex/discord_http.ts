@@ -134,6 +134,23 @@ export const discordGateway = httpAction(async (ctx, request) => {
         const { operation, ...args } = body;
         return success(operation, await ctx.runMutation(internal.discord.listRunnable, withoutUndefined(args)));
       }
+      case "nextPortableCheckpoint": {
+        const { operation, ...args } = body;
+        return success(operation, await ctx.runMutation(
+          internal.discord.nextPortableCheckpoint,
+          args,
+        ));
+      }
+      case "storePortableCheckpoint": {
+        const { operation, ...args } = body;
+        const result = await ctx.runMutation(
+          internal.discord.storePortableCheckpoint,
+          args,
+        );
+        return result.accepted
+          ? success(operation, result)
+          : json({ ok: false, operation, error: result.reason }, 409);
+      }
       case "enqueueReply": {
         const { operation, ...args } = body;
         const result = await ctx.runMutation(internal.discord.enqueueReply, withoutUndefined(args));

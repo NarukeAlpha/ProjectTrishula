@@ -70,7 +70,7 @@ const demoDiscord: DiscordControlPlaneReadModel = {
           },
           sol: {
             model: "gpt-5.6-sol",
-            reasoningEffort: "ultra",
+            reasoningEffort: "max",
             serviceTier: "priority",
           },
         },

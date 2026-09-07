@@ -7,6 +7,7 @@ import {
   parseDiscordAgentOutput,
 } from "../src/discord/runner.js";
 import { DiscordAgentOutputError } from "../src/discord/errors.js";
+import { validateLockedDiscordProviderTransport } from "../src/assistant/profiles.js";
 import type { DiscordAgentRequest } from "../src/discord/contracts.js";
 import { discordChannel, discordMessages } from "./discord-contracts.test.js";
 
@@ -31,7 +32,7 @@ const validTriageOutput = JSON.stringify({
 });
 
 describe("Discord Pi agent profiles", () => {
-  it("pins Luna xhigh and Sol ultra to priority with the approved tool boundaries", () => {
+  it("pins Luna xhigh and Sol max to priority with the approved tool boundaries", () => {
     expect(DISCORD_AGENT_PROFILES.frontman_plan).toMatchObject({
       modelId: "gpt-5.6-luna",
       thinkingLevel: "xhigh",
@@ -46,8 +47,7 @@ describe("Discord Pi agent profiles", () => {
     });
     expect(DISCORD_AGENT_PROFILES.research).toMatchObject({
       modelId: "gpt-5.6-sol",
-      thinkingLevel: "ultra",
-      piThinkingLevel: "max",
+      thinkingLevel: "max",
       serviceTier: "priority",
       toolNames: [
         "public_web_search",
@@ -56,6 +56,26 @@ describe("Discord Pi agent profiles", () => {
         "generate_market_chart",
       ],
     });
+  });
+
+  it("locks the provider payload mapping to the live-accepted Sol max value", () => {
+    const models = {
+      luna: {
+        id: "gpt-5.6-luna",
+        contextWindow: 272_000,
+        thinkingLevelMap: { xhigh: "xhigh" },
+      },
+      sol: {
+        id: "gpt-5.6-sol",
+        contextWindow: 272_000,
+        thinkingLevelMap: { max: "max" },
+      },
+    };
+    expect(() => validateLockedDiscordProviderTransport(models, 272_000)).not.toThrow();
+    expect(() => validateLockedDiscordProviderTransport({
+      ...models,
+      sol: { ...models.sol, thinkingLevelMap: { max: "ultra" } },
+    }, 272_000)).toThrow(/provider catalog/);
   });
 
   it("separates market evidence from dynamic chart generation", async () => {

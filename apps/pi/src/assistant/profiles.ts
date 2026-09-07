@@ -19,25 +19,33 @@ export const LOCKED_DISCORD_MODEL_PROFILES = {
   },
   sol: {
     modelId: "gpt-5.6-sol",
-    thinkingLevel: "ultra",
-    piThinkingLevel: "max",
+    thinkingLevel: "max",
     serviceTier: "priority",
     maximumOutputCharacters: 16_384,
     profileVersion: "sol-research-v1",
   },
 } as const;
 
-/** Pi 0.84 exposes `max`; the Codex provider maps that harness level to the locked `ultra` value. */
-export function withLockedSolReasoningMapping<
-  Model extends { thinkingLevelMap?: Record<string, string | null> },
->(model: Model): Model {
-  return {
-    ...model,
-    thinkingLevelMap: {
-      ...model.thinkingLevelMap,
-      max: LOCKED_DISCORD_MODEL_PROFILES.sol.thinkingLevel,
-    },
-  };
+interface ProviderModelTransport {
+  id: string;
+  contextWindow: number;
+  thinkingLevelMap?: Record<string, string | null>;
+}
+
+export function validateLockedDiscordProviderTransport(
+  models: { luna: ProviderModelTransport; sol: ProviderModelTransport },
+  contextWindow: number,
+): void {
+  if (
+    models.luna.id !== LOCKED_DISCORD_MODEL_PROFILES.luna.modelId
+    || models.sol.id !== LOCKED_DISCORD_MODEL_PROFILES.sol.modelId
+    || models.luna.contextWindow !== contextWindow
+    || models.sol.contextWindow !== contextWindow
+    || models.luna.thinkingLevelMap?.xhigh !== "xhigh"
+    || models.sol.thinkingLevelMap?.max !== "max"
+  ) {
+    throw new Error("The locked Discord model transport does not match the verified provider catalog.");
+  }
 }
 
 const DISCORD_CAPABILITY_POLICY = `Discord is public-research only. You have no brokerage, account, credential-vault, order, shell, process, code-execution, filesystem, or private-network capability. Never claim access to positions, balances, orders, private filings, or private user data. Never place an order, claim an order was placed, or create an executable order proposal. You may offer public analysis of catalysts, scenarios, risks, levels, and invalidation conditions. Keep participant-specific holdings, preferences, risk tolerance, corrections, and commitments attributed to the author who stated them.`;

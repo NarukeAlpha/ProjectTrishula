@@ -12,6 +12,7 @@ import { ChartImgClient } from "./media/chart-img.js";
 import { ConvexMarketResearchPublicationClient } from "./market-research/convex-client.js";
 import { ForumPublisher } from "./market-research/forum-publisher.js";
 import { ChannelLoopOrchestrator } from "./orchestrator/channel-loop.js";
+import { PortableCheckpointCoordinator } from "./orchestrator/portable-checkpoints.js";
 import {
   OutboxDispatcher,
   type OutboxDispatcherDependencies,
@@ -53,6 +54,7 @@ export class DiscordGatewayService {
   private readonly convex: ConvexDiscordClient;
   private readonly orchestrator: ChannelLoopOrchestrator;
   private readonly gateway: DiscordGateway;
+  private readonly checkpoints: PortableCheckpointCoordinator;
   private readonly outbox: OutboxDispatcher;
   private readonly marketResearchPublisher: ForumPublisher;
   private readonly app: Express;
@@ -63,6 +65,11 @@ export class DiscordGatewayService {
   constructor(private readonly config: DiscordGatewayConfig) {
     this.convex = new ConvexDiscordClient(config, this.instanceId);
     const pi = new PiAgentClient(config);
+    this.checkpoints = new PortableCheckpointCoordinator({
+      enabled: config.portableCheckpointsEnabled,
+      convex: this.convex,
+      pi,
+    });
     this.orchestrator = new ChannelLoopOrchestrator({
       convex: this.convex,
       pi,
@@ -127,6 +134,7 @@ export class DiscordGatewayService {
   async stop(): Promise<void> {
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
+    await this.checkpoints.dispose();
     await this.gateway.stop();
     if (this.server !== null) {
       const server = this.server;
@@ -190,6 +198,7 @@ export class DiscordGatewayService {
         });
       }
       await this.outbox.dispatch(work.replies);
+      this.checkpoints.schedule();
     } catch {
       logger.error("Runnable Discord work polling failed.", {
         code: "work_poll_failed",

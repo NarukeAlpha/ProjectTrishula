@@ -27,12 +27,13 @@ const environmentSchema = z.object({
   TRISHULA_LUNA_REASONING_EFFORT: z.literal("xhigh").default("xhigh"),
   TRISHULA_LUNA_SERVICE_TIER: z.literal("priority").default("priority"),
   TRISHULA_SOL_MODEL: z.literal("gpt-5.6-sol").default("gpt-5.6-sol"),
-  TRISHULA_SOL_REASONING_EFFORT: z.literal("ultra").default("ultra"),
+  TRISHULA_SOL_REASONING_EFFORT: z.literal("max").default("max"),
   TRISHULA_SOL_SERVICE_TIER: z.literal("priority").default("priority"),
   TRISHULA_PERSONALITY_VERSION: z.literal("trishula-discord-v1").default("trishula-discord-v1"),
   TRISHULA_LUNA_PROFILE_VERSION: z.literal("luna-frontman-v1").default("luna-frontman-v1"),
   TRISHULA_SOL_PROFILE_VERSION: z.literal("sol-research-v1").default("sol-research-v1"),
-  TRISHULA_MODEL_CONTEXT_WINDOW: positiveInteger.min(64_000).default(400_000),
+  TRISHULA_MODEL_CONTEXT_WINDOW: z.coerce.number().refine((value) => value === 272_000)
+    .default(272_000),
   TRISHULA_LUNA_MAX_OUTPUT_TOKENS: positiveInteger.max(32_000).default(8_000),
   TRISHULA_SOL_MAX_OUTPUT_TOKENS: positiveInteger.max(64_000).default(16_000),
   TRISHULA_RESEARCH_PACKET_TOKEN_TARGET: positiveInteger.max(8_000).default(2_500),
@@ -49,9 +50,8 @@ const environmentSchema = z.object({
     .transform((value) => value === "true"),
   TRISHULA_HOT_SESSION_REUSE_ENABLED: z.enum(["true", "false"]).default("true")
     .transform((value) => value === "true"),
-  // Portable checkpoint generation stays off until its execution and storage gates pass.
-  TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: z.literal("false").default("false")
-    .transform((): false => false),
+  TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: z.enum(["true", "false"]).default("false")
+    .transform((value) => value === "true"),
   // Native opaque compaction is locked off until the Pi 0.84.1 Codex OAuth spike passes.
   TRISHULA_NATIVE_COMPACTION_ENABLED: z.literal("false").default("false")
     .transform((): false => false),
@@ -92,7 +92,7 @@ export interface AppConfig {
   trishulaLunaReasoningEffort: "xhigh";
   trishulaLunaServiceTier: "priority";
   trishulaSolModel: "gpt-5.6-sol";
-  trishulaSolReasoningEffort: "ultra";
+  trishulaSolReasoningEffort: "max";
   trishulaSolServiceTier: "priority";
   trishulaPersonalityVersion: "trishula-discord-v1";
   trishulaLunaProfileVersion: "luna-frontman-v1";
@@ -111,7 +111,7 @@ export interface AppConfig {
   trishulaHotSessionIdleMs: number;
   trishulaDurableConversationsEnabled: boolean;
   trishulaHotSessionReuseEnabled: boolean;
-  trishulaPortableCheckpointsEnabled: false;
+  trishulaPortableCheckpointsEnabled: boolean;
   trishulaNativeCompactionEnabled: false;
   brokerMode: "mock" | "robinhood";
   robinhoodOAuthRedirectUri: string;

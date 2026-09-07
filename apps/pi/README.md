@@ -35,10 +35,11 @@ The durable gateway path submits these profiles. Shared Zod request and response
 | Profile | Role | Locked provider tuple | Tools |
 | --- | --- | --- | --- |
 | `frontman_plan` | Plan a direct reply, clarification, silence, or research | `gpt-5.6-luna` / `xhigh` / `priority` | None |
-| `research` | Produce a bounded public evidence packet | `gpt-5.6-sol` / `ultra` / `priority` | Public web search, public HTTPS fetch, public market data, and trusted chart request |
+| `research` | Produce a bounded public evidence packet | `gpt-5.6-sol` / `max` / `priority` | Public web search, public HTTPS fetch, public market data, and trusted chart request |
 | `frontman_resume` | Reconcile newest context and send, suppress, or recheck | `gpt-5.6-luna` / `xhigh` / `priority` | None |
+| `portable_checkpoint` | Build an isolated, source-bound replacement summary | `gpt-5.6-luna` / `xhigh` / `priority` | None |
 
-Pi `0.84.1` names its maximum harness thinking level `max`. The Codex model mapping converts that level to the locked Sol provider effort `ultra`. Configuration validation rejects a different model, reasoning-effort, or service-tier tuple.
+The pinned Pi `0.84.1` Codex catalog maps Sol `max` to the provider value `max`. A 2026-09-07 OAuth smoke test accepted `max` and rejected the unsupported literal `ultra`. Startup validates the 272,000-token catalog window and the reasoning maps before it marks Discord agents ready.
 
 Each Discord guild owns one durable logical Luna conversation. Convex supplies its trusted owner binding, `conversationId`, epoch, revision, policy hashes, portable summary when available, and recent canonical tail. Pi can reuse one compatible hot Luna `AgentSession` across jobs and turns. The session is only a cache. Disabling hot reuse, restarting Pi, or evicting an idle session reconstructs the same logical conversation from Convex.
 
@@ -70,11 +71,11 @@ Convex persists plan, research, resume, and outbox state. A gateway restart skip
 | `TRISHULA_HOT_SESSION_REUSE_ENABLED` | `true` | Reuse compatible in-memory Luna sessions. `false` keeps durable Convex continuity and forces cold reconstruction. |
 | `TRISHULA_HOT_SESSION_IDLE_MS` | `3600000` | Evict an idle hot Luna cache after one hour by default. |
 | `TRISHULA_NATIVE_COMPACTION_ENABLED` | `false` only | Hard-disables opaque server compaction for Discord. Any other value fails configuration. |
-| `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` | `false` only | Hard-disables automatic portable checkpoint generation and activation. Any other value fails configuration. |
+| `TRISHULA_PORTABLE_CHECKPOINTS_ENABLED` | `false` | Enables the isolated portable checkpoint profile when set to `true`. Keep Pi and gateway values aligned. |
 
-Native opaque compaction remains off because the reviewed adapter has not passed the Pi `0.84.1` Codex OAuth compatibility spike. Portable checkpoint schemas, size checks, retention, restore validation, and privacy deletion exist, but no automatic checkpoint execution path is enabled. Stored checkpoint protection is labeled `platform_default_unverified`. Do not claim verified encryption until backend evidence or application-layer authenticated encryption and rotation tests pass.
+Native opaque compaction remains off because the pinned Pi Codex provider does not expose a validated bridge to the official server-compaction contract. The first-party portable path triggers at 190,400 estimated tokens, keeps a contiguous 20,000-token recent tail, generates a full evidence-bound summary in a fresh Luna session, and activates it only through a stable revision fence. Stored checkpoint protection is labeled `platform_default_unverified`. Keep this path off until live continuity and storage-protection evidence pass.
 
-Current restart continuity comes from canonical Convex history and a raw tail budget of 20,000 estimated tokens. It does not depend on a process-local JSONL file or Railway volume.
+Before the first checkpoint, restart continuity comes from canonical Convex history up to the 190,400-token compaction threshold. After activation, it comes from the portable summary plus a contiguous 20,000-token raw tail. It does not depend on a process-local JSONL file or Railway volume.
 
 ## Codex authentication
 
@@ -113,12 +114,12 @@ These keys are parsed and tested. Literal profile values provide deployment visi
 | `TRISHULA_LUNA_PROFILE_VERSION` | `luna-frontman-v1` |
 | `TRISHULA_LUNA_MAX_OUTPUT_TOKENS` | `8000` |
 | `TRISHULA_SOL_MODEL` | `gpt-5.6-sol` |
-| `TRISHULA_SOL_REASONING_EFFORT` | `ultra` |
+| `TRISHULA_SOL_REASONING_EFFORT` | `max` |
 | `TRISHULA_SOL_SERVICE_TIER` | `priority` |
 | `TRISHULA_SOL_PROFILE_VERSION` | `sol-research-v1` |
 | `TRISHULA_SOL_MAX_OUTPUT_TOKENS` | `16000` |
 | `TRISHULA_PERSONALITY_VERSION` | `trishula-discord-v1` |
-| `TRISHULA_MODEL_CONTEXT_WINDOW` | `400000` |
+| `TRISHULA_MODEL_CONTEXT_WINDOW` | `272000` only |
 | `TRISHULA_RESEARCH_PACKET_TOKEN_TARGET` | `2500` |
 | `TRISHULA_RESEARCH_PACKET_MAX_BYTES` | `16384` only |
 | `TRISHULA_RECENT_TAIL_TOKEN_BUDGET` | `20000` only |

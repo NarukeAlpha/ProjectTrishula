@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
 import type { JsonValue } from "@earendil-works/pi-ai";
+import {
+  discordPortableCheckpointResponseSchema,
+  portableConversationSummarySchema,
+  type DiscordPortableCheckpointRequest,
+  type DiscordPortableCheckpointResponse,
+} from "./contracts.js";
+import { DiscordAgentOutputError } from "./errors.js";
 
 export const DISCORD_RECENT_TAIL_TARGET_TOKENS = 20_000;
 export const DISCORD_MAX_CHECKPOINT_BYTES = 512 * 1_024;
@@ -64,4 +71,90 @@ export function validCheckpointSize(value: JsonValue): boolean {
 
 export function checkpointExpired(createdAt: number, now: number): boolean {
   return createdAt + DISCORD_CHECKPOINT_RETENTION_MS <= now;
+}
+
+type PortableSummary = ReturnType<typeof portableConversationSummarySchema.parse>;
+
+export function portableSummarySourceEventIds(summary: PortableSummary): Set<string> {
+  return new Set([
+    ...summary.acceptedFacts.flatMap((entry) => entry.sourceEventIds),
+    ...summary.corrections.flatMap((entry) => entry.sourceEventIds),
+    ...summary.unresolvedQuestions.flatMap((entry) => entry.sourceEventIds),
+    ...summary.commitments.flatMap((entry) => entry.sourceEventIds),
+    ...summary.conversationPreferences.flatMap((entry) => entry.sourceEventIds),
+    ...summary.sourceFreshnessNotes.flatMap((entry) => entry.sourceEventIds),
+  ]);
+}
+
+function portableSummaryAuthorIds(summary: PortableSummary): Set<string> {
+  const result = new Set(summary.participants.map((participant) => participant.authorId));
+  for (const fact of summary.acceptedFacts) {
+    if (fact.subjectAuthorId !== undefined) result.add(fact.subjectAuthorId);
+    if (fact.assertedByAuthorId !== undefined) result.add(fact.assertedByAuthorId);
+  }
+  for (const correction of summary.corrections) {
+    if (correction.correctedByAuthorId !== undefined) result.add(correction.correctedByAuthorId);
+  }
+  for (const question of summary.unresolvedQuestions) result.add(question.askedByAuthorId);
+  for (const commitment of summary.commitments) {
+    if (commitment.owner.kind === "participant") result.add(commitment.owner.authorId);
+  }
+  for (const preference of summary.conversationPreferences) result.add(preference.authorId);
+  return result;
+}
+
+/**
+ * Builds the only checkpoint artifact that can cross the Pi boundary. The
+ * provider supplies the typed summary only. Identity and token accounting stay
+ * deterministic and service-owned.
+ */
+export function buildPortableCheckpointResponse(
+  request: DiscordPortableCheckpointRequest,
+  rawSummary: JsonValue,
+): DiscordPortableCheckpointResponse {
+  const parsedSummary = portableConversationSummarySchema.safeParse(rawSummary);
+  if (!parsedSummary.success) {
+    throw new DiscordAgentOutputError("invalid_response_schema");
+  }
+  const summary = parsedSummary.data;
+  const allowedSourceEventIds = new Set(request.sourceEvents.map((event) => event.eventId));
+  if (request.previousSummary !== undefined) {
+    for (const eventId of portableSummarySourceEventIds(request.previousSummary)) {
+      allowedSourceEventIds.add(eventId);
+    }
+  }
+  if ([...portableSummarySourceEventIds(summary)].some((eventId) => !allowedSourceEventIds.has(eventId))) {
+    throw new DiscordAgentOutputError("invalid_response_schema");
+  }
+
+  const allowedAuthorIds = new Set(
+    request.sourceEvents.flatMap((event) => event.authorId === undefined ? [] : [event.authorId]),
+  );
+  if (request.previousSummary !== undefined) {
+    for (const authorId of portableSummaryAuthorIds(request.previousSummary)) {
+      allowedAuthorIds.add(authorId);
+    }
+  }
+  if ([...portableSummaryAuthorIds(summary)].some((authorId) => !allowedAuthorIds.has(authorId))) {
+    throw new DiscordAgentOutputError("invalid_response_schema");
+  }
+
+  const serializedBytes = Buffer.byteLength(JSON.stringify(summary), "utf8");
+  if (serializedBytes > DISCORD_MAX_CHECKPOINT_BYTES) {
+    throw new DiscordAgentOutputError("invalid_response_schema");
+  }
+  const outputEstimatedTokens = Math.ceil(serializedBytes / 3) + 8;
+  return discordPortableCheckpointResponseSchema.parse({
+    profile: "portable_checkpoint",
+    checkpointId: request.requestId,
+    portableSummary: summary,
+    estimator: {
+      exact: false,
+      version: "utf8-bytes-div-3-plus-message-overhead:v1",
+      inputEstimatedTokens: request.inputEstimatedTokens,
+      outputEstimatedTokens,
+      estimatedSavedTokens: request.inputEstimatedTokens - outputEstimatedTokens,
+      serializedBytes,
+    },
+  });
 }

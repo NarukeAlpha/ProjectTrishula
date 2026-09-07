@@ -3,6 +3,7 @@ import {
   DISCORD_CHECKPOINT_RETENTION_MS,
   DISCORD_MAX_CHECKPOINT_BYTES,
   checkpointExpired,
+  buildPortableCheckpointResponse,
   compatibleCheckpoint,
   discordCompactionThreshold,
   validCheckpointSize,
@@ -11,10 +12,10 @@ import {
 describe("portable Discord checkpoint policy", () => {
   it("uses the documented model reserve and 70 percent threshold", () => {
     expect(discordCompactionThreshold({
-      contextWindow: 400_000,
+      contextWindow: 272_000,
       maxOutputTokens: 8_000,
       maxResearchHandoffTokens: 2_500,
-    })).toEqual({ reserve: 32_000, threshold: 280_000 });
+    })).toEqual({ reserve: 32_000, threshold: 190_400 });
   });
 
   it("requires the full owner, guild, epoch, model, and policy identity", () => {
@@ -41,5 +42,74 @@ describe("portable Discord checkpoint policy", () => {
     expect(validCheckpointSize(`${exact}x`)).toBe(false);
     expect(checkpointExpired(1_000, 1_000 + DISCORD_CHECKPOINT_RETENTION_MS - 1)).toBe(false);
     expect(checkpointExpired(1_000, 1_000 + DISCORD_CHECKPOINT_RETENTION_MS)).toBe(true);
+  });
+
+  it("builds an evidence-bound deterministic checkpoint envelope", () => {
+    const request = {
+      profile: "portable_checkpoint" as const,
+      requestId: "checkpoint:123:1:2:abc",
+      conversation: {
+        ownerId: "owner_1",
+        ownerBindingVersion: 1,
+        guildId: "123",
+        conversationId: "discord:123",
+        epoch: 1,
+        generation: 2,
+        routingGeneration: 1,
+        revision: 2,
+        personalityVersion: "trishula-discord-v1",
+        systemPromptHash: "a".repeat(64),
+        capabilityProfileHash: "b".repeat(64),
+      },
+      sourceContextHash: "c".repeat(64),
+      compactedThroughOrdinal: 2,
+      sourceEvents: [{
+        eventId: "event:2",
+        ordinal: 2,
+        role: "human" as const,
+        authorId: "456",
+        displayName: "Mira",
+        content: "Keep answers concise.",
+        createdAt: "2026-09-07T12:00:00.000Z",
+      }],
+      retainedRecentEventIds: ["event:3"],
+      inputEstimatedTokens: 120,
+    };
+    const summary = {
+      participants: [{ authorId: "456", displayName: "Mira" }],
+      acceptedFacts: [],
+      corrections: [],
+      unresolvedQuestions: [],
+      commitments: [],
+      conversationPreferences: [{
+        statement: "Keep answers concise.",
+        authorId: "456",
+        sourceEventIds: ["event:2"],
+      }],
+      sourceFreshnessNotes: [],
+    };
+    const first = buildPortableCheckpointResponse(request, summary);
+    const second = buildPortableCheckpointResponse(request, summary);
+    expect(second).toEqual(first);
+    expect(first).toMatchObject({
+      profile: "portable_checkpoint",
+      checkpointId: request.requestId,
+      estimator: {
+        exact: false,
+        inputEstimatedTokens: 120,
+        estimatedSavedTokens: 120 - first.estimator.outputEstimatedTokens,
+      },
+    });
+    expect(() => buildPortableCheckpointResponse(request, {
+      ...summary,
+      conversationPreferences: [{
+        ...summary.conversationPreferences[0],
+        sourceEventIds: ["event:invented"],
+      }],
+    })).toThrow();
+    expect(() => buildPortableCheckpointResponse(request, {
+      ...summary,
+      participants: [{ authorId: "999", displayName: "Invented" }],
+    })).toThrow();
   });
 });

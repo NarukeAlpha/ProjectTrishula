@@ -3,6 +3,7 @@ import {
   discordAgentRequestSchema,
   discordFrontmanPlanRequestSchema,
   discordFrontmanPlanResponseSchema,
+  discordPortableCheckpointRequestSchema,
   discordSolResearchResponseSchema,
   discordSolResearchRequestSchema,
   discordReplyResponseSchema,
@@ -91,6 +92,44 @@ describe("Discord agent contracts", () => {
     expect(discordSolResearchRequestSchema.safeParse({
       ...sol,
       durableContext,
+    }).success).toBe(false);
+  });
+
+  it("accepts only ordered, non-overlapping portable checkpoint evidence", () => {
+    const checkpoint = {
+      profile: "portable_checkpoint",
+      requestId: "checkpoint:1",
+      conversation: {
+        ownerId: conversation.ownerId,
+        ownerBindingVersion: conversation.ownerBindingVersion,
+        guildId: conversation.guildId,
+        conversationId: conversation.conversationId,
+        epoch: conversation.epoch,
+        generation: conversation.generation,
+        routingGeneration: conversation.routingGeneration,
+        revision: conversation.revision,
+        personalityVersion: conversation.personalityVersion,
+        systemPromptHash: conversation.systemPromptHash,
+        capabilityProfileHash: conversation.capabilityProfileHash,
+      },
+      sourceContextHash: "c".repeat(64),
+      compactedThroughOrdinal: 2,
+      sourceEvents: [{
+        eventId: "event:2",
+        ordinal: 2,
+        role: "human",
+        authorId: discordMessages[0]?.authorId,
+        content: "Keep this attributed.",
+        createdAt: "2026-09-07T12:00:00.000Z",
+      }],
+      retainedRecentEventIds: ["event:3"],
+      inputEstimatedTokens: 100,
+    };
+    expect(discordPortableCheckpointRequestSchema.safeParse(checkpoint).success).toBe(true);
+    expect(discordAgentRequestSchema.safeParse(checkpoint).success).toBe(true);
+    expect(discordPortableCheckpointRequestSchema.safeParse({
+      ...checkpoint,
+      retainedRecentEventIds: ["event:2"],
     }).success).toBe(false);
   });
 

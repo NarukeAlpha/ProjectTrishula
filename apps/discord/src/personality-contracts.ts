@@ -123,6 +123,104 @@ export const durableConversationContextSchema = z.object({
   }).strict(),
 }).strict();
 
+export const portableCheckpointIdentitySchema = z.object({
+  ownerId: stableIdSchema,
+  ownerBindingVersion: z.number().int().positive(),
+  guildId: snowflakeSchema,
+  conversationId: z.string().regex(/^discord:\d{1,32}$/),
+  epoch: z.number().int().nonnegative(),
+  generation: z.number().int().positive(),
+  routingGeneration: z.number().int().positive(),
+  revision: z.number().int().positive(),
+  personalityVersion: stableIdSchema,
+  systemPromptHash: z.string().regex(/^[a-f0-9]{64}$/),
+  capabilityProfileHash: z.string().regex(/^[a-f0-9]{64}$/),
+  activeCheckpointId: stableIdSchema.optional(),
+}).strict().superRefine((identity, context) => {
+  if (identity.conversationId !== `discord:${identity.guildId}`) {
+    context.addIssue({ code: "custom", path: ["conversationId"], message: "Guild conversation mismatch." });
+  }
+});
+
+export const portableCheckpointEventSchema = z.object({
+  eventId: stableIdSchema,
+  ordinal: z.number().int().positive(),
+  role: z.enum(["human", "assistant"]),
+  authorId: snowflakeSchema.optional(),
+  displayName: z.string().trim().min(1).max(100).optional(),
+  content: z.string().max(8_000),
+  createdAt: isoDateTime,
+  freshness: z.enum(["current", "limited", "unknown"]).optional(),
+}).strict();
+
+export const portableCheckpointRequestSchema = z.object({
+  profile: z.literal("portable_checkpoint"),
+  requestId: stableIdSchema,
+  conversation: portableCheckpointIdentitySchema,
+  sourceContextHash: z.string().regex(/^[a-f0-9]{64}$/),
+  compactedThroughOrdinal: z.number().int().positive(),
+  previousSummary: portableConversationSummarySchema.optional(),
+  sourceEvents: z.array(portableCheckpointEventSchema).min(1).max(5_000),
+  retainedRecentEventIds: z.array(stableIdSchema).max(2_000),
+  inputEstimatedTokens: z.number().int().positive(),
+}).strict().superRefine((request, context) => {
+  const eventIds = new Set<string>();
+  let previousOrdinal = 0;
+  for (const [index, event] of request.sourceEvents.entries()) {
+    if (event.ordinal <= previousOrdinal || event.ordinal > request.compactedThroughOrdinal) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceEvents", index, "ordinal"],
+        message: "Checkpoint source event ordinals must increase through the boundary.",
+      });
+    }
+    if (eventIds.has(event.eventId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceEvents", index, "eventId"],
+        message: "Checkpoint source event IDs must be unique.",
+      });
+    }
+    eventIds.add(event.eventId);
+    previousOrdinal = event.ordinal;
+  }
+  if (request.sourceEvents.at(-1)?.ordinal !== request.compactedThroughOrdinal) {
+    context.addIssue({
+      code: "custom",
+      path: ["compactedThroughOrdinal"],
+      message: "The boundary must be the last supplied source event.",
+    });
+  }
+  if (new Set(request.retainedRecentEventIds).size !== request.retainedRecentEventIds.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["retainedRecentEventIds"],
+      message: "Retained recent event IDs must be unique.",
+    });
+  }
+  if (request.retainedRecentEventIds.some((eventId) => eventIds.has(eventId))) {
+    context.addIssue({
+      code: "custom",
+      path: ["retainedRecentEventIds"],
+      message: "Compacted and retained event IDs must not overlap.",
+    });
+  }
+});
+
+export const portableCheckpointResponseSchema = z.object({
+  profile: z.literal("portable_checkpoint"),
+  checkpointId: stableIdSchema,
+  portableSummary: portableConversationSummarySchema,
+  estimator: z.object({
+    exact: z.literal(false),
+    version: z.literal("utf8-bytes-div-3-plus-message-overhead:v1"),
+    inputEstimatedTokens: z.number().int().positive(),
+    outputEstimatedTokens: z.number().int().nonnegative(),
+    estimatedSavedTokens: z.number().int(),
+    serializedBytes: z.number().int().positive().max(512 * 1_024),
+  }).strict(),
+}).strict();
+
 export const frontmanResearchRequestSchema = z.object({
   question: z.string().trim().min(1).max(1_000),
   decisionContext: z.string().trim().min(1).max(2_000),
@@ -363,6 +461,8 @@ export const durableTurnRecoverySchema = z.object({
 });
 
 export type ConversationIdentity = z.infer<typeof conversationIdentitySchema>;
+export type PortableCheckpointRequest = z.infer<typeof portableCheckpointRequestSchema>;
+export type PortableCheckpointResponse = z.infer<typeof portableCheckpointResponseSchema>;
 export type DurableConversationContext = z.infer<typeof durableConversationContextSchema>;
 export type FrontmanResearchRequest = z.infer<typeof frontmanResearchRequestSchema>;
 export type FrontmanPlanRequest = z.infer<typeof frontmanPlanRequestSchema>;

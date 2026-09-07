@@ -28,6 +28,8 @@ import {
   frontmanPlanResponseSchema,
   frontmanResearchRequestSchema,
   frontmanResumeResponseSchema,
+  portableCheckpointRequestSchema,
+  portableCheckpointResponseSchema,
   researchFailureSchema,
   solResearchResponseSchema,
   type DurableTurnRecovery,
@@ -35,6 +37,8 @@ import {
   type FrontmanResearchRequest,
   type FrontmanResumeResponse,
   type ResearchFailure,
+  type PortableCheckpointRequest,
+  type PortableCheckpointResponse,
   type SolResearchResponse,
 } from "../personality-contracts.js";
 import {
@@ -56,6 +60,8 @@ const operationSchema = z.enum([
   "completeLoop",
   "heartbeat",
   "listRunnable",
+  "nextPortableCheckpoint",
+  "storePortableCheckpoint",
   "enqueueReply",
   "beginReplyDelivery",
   "acknowledgeReply",
@@ -325,6 +331,19 @@ const acknowledgeResponseSchema = z
 const durableStageResponseSchema = z.object({
   accepted: z.literal(true),
   duplicate: z.boolean(),
+}).passthrough();
+const portableCheckpointCandidateResponseSchema = z.discriminatedUnion("available", [
+  z.object({ available: z.literal(false) }).strict(),
+  z.object({
+    available: z.literal(true),
+    request: portableCheckpointRequestSchema,
+  }).strict(),
+]);
+const portableCheckpointStoreResponseSchema = z.object({
+  accepted: z.literal(true),
+  duplicate: z.boolean(),
+  checkpointId: stableIdSchema,
+  status: z.enum(["active", "superseded", "invalid", "expired"]),
 }).passthrough();
 
 export interface MonitoredChannelCursor extends ChannelReference {
@@ -1078,6 +1097,57 @@ export class ConvexDiscordClient {
       channels: result.channels,
       replies: result.replies.map(toOutboxItem),
     };
+  }
+
+  async nextPortableCheckpoint(
+    signal?: AbortSignal,
+  ): Promise<PortableCheckpointRequest | null> {
+    const result = await this.request(
+      "nextPortableCheckpoint",
+      { actorId: this.config.discordOwnerId },
+      portableCheckpointCandidateResponseSchema,
+      signal,
+    );
+    return result.available ? result.request : null;
+  }
+
+  async storePortableCheckpoint(
+    request: PortableCheckpointRequest,
+    response: PortableCheckpointResponse,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const validatedRequest = portableCheckpointRequestSchema.parse(request);
+    const validatedResponse = portableCheckpointResponseSchema.parse(response);
+    if (
+      validatedResponse.checkpointId !== validatedRequest.requestId
+      || validatedResponse.estimator.inputEstimatedTokens
+        !== validatedRequest.inputEstimatedTokens
+    ) {
+      throw new Error("Portable checkpoint response identity does not match its candidate.");
+    }
+    await this.request(
+      "storePortableCheckpoint",
+      {
+        actorId: this.config.discordOwnerId,
+        guildId: validatedRequest.conversation.guildId,
+        conversationId: validatedRequest.conversation.conversationId,
+        epoch: validatedRequest.conversation.epoch,
+        expectedRevision: validatedRequest.conversation.revision,
+        expectedGeneration: validatedRequest.conversation.generation,
+        expectedRoutingGeneration: validatedRequest.conversation.routingGeneration,
+        checkpointId: validatedResponse.checkpointId,
+        sourceContextHash: validatedRequest.sourceContextHash,
+        toolPolicyHash: validatedRequest.conversation.capabilityProfileHash,
+        compactedThroughOrdinal: validatedRequest.compactedThroughOrdinal,
+        portableSummary: JSON.stringify(validatedResponse.portableSummary),
+        retainedRecentEventIds: validatedRequest.retainedRecentEventIds,
+        inputTokens: validatedResponse.estimator.inputEstimatedTokens,
+        outputTokens: validatedResponse.estimator.outputEstimatedTokens,
+        estimatedSavedTokens: validatedResponse.estimator.estimatedSavedTokens,
+      },
+      portableCheckpointStoreResponseSchema,
+      signal,
+    );
   }
 
   async acknowledgeReply(

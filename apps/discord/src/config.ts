@@ -61,6 +61,7 @@ const environmentSchema = z
       .min(1_000)
       .max(60_000)
       .default(5_000),
+    TRISHULA_PORTABLE_CHECKPOINTS_ENABLED: booleanFlag.default(false),
   })
   .superRefine((value, context) => {
     if (value.CONVEX_DISCORD_SHARED_SECRET === value.PI_DISCORD_SHARED_SECRET) {
@@ -94,6 +95,7 @@ export interface DiscordGatewayConfig {
   marketResearchEnabled: boolean;
   marketResearchChartsEnabled: boolean;
   marketResearchPollIntervalMs: number;
+  portableCheckpointsEnabled: boolean;
 }
 
 function normalizeBaseUrl(raw: string, label: string): string {
@@ -161,5 +163,6 @@ export function loadConfig(
     marketResearchEnabled: value.MARKET_RESEARCH_ENABLED,
     marketResearchChartsEnabled: value.MARKET_RESEARCH_CHARTS_ENABLED,
     marketResearchPollIntervalMs: value.MARKET_RESEARCH_POLL_INTERVAL_MS,
+    portableCheckpointsEnabled: value.TRISHULA_PORTABLE_CHECKPOINTS_ENABLED,
   };
 }

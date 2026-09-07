@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "test": "vitest run",
+    "test:personality": "vitest run test/personality-contracts.test.ts test/portable-checkpoints.test.ts test/channel-loop.test.ts test/outbox.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

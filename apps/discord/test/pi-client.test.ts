@@ -28,6 +28,7 @@ const config: DiscordGatewayConfig = {
   marketResearchEnabled: false,
   marketResearchChartsEnabled: false,
   marketResearchPollIntervalMs: 5_000,
+  portableCheckpointsEnabled: false,
 };
 
 const triageRequest: TriageRequest = {
