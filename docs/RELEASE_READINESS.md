@@ -5,6 +5,14 @@ and verify that the owner can test them through the website and Discord.
 
 ## Current checkpoint
 
+- The follow-up control fix is deployed at web `72478d8e5547df56f7972b0657f41e1b0c30ec54` (Railway deployment `82b13db3-6a1c-41e2-bdc0-4c59b900ddda`, `SUCCESS`). Web build inputs match tested source `300f2cf6e5dcb50080e4322d92167ced049488ec`. Retry, reconciliation, and cancellation controls were removed from the newspaper form; backend recovery APIs remain intact.
+- The latest validation passed 669 application tests (177 Convex, 312 Pi, 101 Discord, 79 web), four deployment-source tests, formatting, lint, typechecks, builds, and browser bundle checks. New regressions cover failed/partial/queued/retrying editions and clear disabled-service messages.
+- The signed-in production browser verified the three requested actions and the clear setup failure message, including removal of the redundant raw-code preview summary. No Save, Test, or Schedule action was clicked; the existing forum, timezone, and time remained selected.
+- A fresh Railway check confirms that `MARKET_RESEARCH_ENABLED` is unset on Pi and Discord, so both use their disabled default. Pi's `EXA_API_KEY` is also unset. The owner already supplied a key in the feature document; provisioning it was missed. Do not ask the owner to supply it again or print it.
+- The local Railway repair plan sets only Pi and Discord `MARKET_RESEARCH_ENABLED` to `true`. Approval to copy the supplied key into Pi's secret store and apply that exact plan was requested. It has not been applied. Forum, time, schedule, trading access, numerical-provider approvals, and chart runtime access remain unchanged.
+
+## Prior coordinated release
+
 - The owner approved deployment and the Convex source-analysis upload. The full-edition newspaper workflow and pending integrated backend fixes are deployed. All service build inputs match tested source `72ec93d1d030c781f768de21e787c70dc4c2ff5c`.
 - Railway reports `SUCCESS` for Convex functions and web at `ad5ee58e923c9e68d3a61ce28f4a6cc64f28b2ec`, Pi at `02b1a39ae91835cd18bf667e184f93c893916c38`, and Discord at `6d69b9f0c8c6f3c9f81c26adc8039525568e02c1`. The final all-service readiness and private credential-binding check passed.
 - Pi `/health` returned HTTP 200 with execution and Discord agents ready. Discord `/ready` returned HTTP 200 and connected. The Convex deployer emitted its success marker. The approved code-generation dry run and typecheck passed; the exact generated API declarations are committed.

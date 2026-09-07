@@ -1,8 +1,9 @@
 # Newspaper controls
 
-The revised workflow is deployed. All four service build inputs match tested
-source `72ec93d1d030c781f768de21e787c70dc4c2ff5c`. Railway reports successful
-deployments, and the signed-in production page shows the new controls.
+The revised workflow is deployed. The control correction is live at web
+`72478d8e5547df56f7972b0657f41e1b0c30ec54`, with build inputs matching tested
+source `300f2cf6e5dcb50080e4322d92167ced049488ec`. Backend services retain the
+coordinated release described in `RELEASE_READINESS.md`.
 
 ## Settings
 
@@ -27,9 +28,13 @@ deployments, and the signed-in production page shows the new controls.
 - **Schedule now** saves and schedules the current form. It becomes disabled
   **Scheduled** only after success. An edit makes it available again.
 
+These are the only form actions, including when an edition fails or is queued.
+Backend recovery APIs remain available internally; the form has no extra Retry,
+Reconcile, or Cancel button.
+
 ## Verification
 
-`npm run check` passed: 177 Convex, 312 Pi, 101 Discord, and 72 web tests,
+`npm run check` passed: 177 Convex, 312 Pi, 101 Discord, and 79 web tests,
 plus formatter, lint, typechecks, builds, browser bundle checks, and four
 deployment-source tests. The built-in browser verified the local demo layout
 and Scheduled-to-Schedule-now state change, then the signed-in production form.
@@ -38,6 +43,8 @@ Convex, Pi, and Discord were deployed before the web client. The approved Convex
 source-analysis/typecheck passed, and its generated API inventory is committed.
 Pi and Discord both returned HTTP 200 from their readiness endpoints.
 
-Live research/publication was not tested. Pi still lacks the Exa credential,
-and both research runtimes remain disabled. Deployment did not change those
-settings or the owner's forum, timezone, time, or inactive schedule.
+Live research/publication was not tested. Pi's Railway secret store still lacks
+the Exa key already supplied in the feature document. Both research runtimes use
+their disabled default. A two-flag enablement plan and secure key provisioning
+await approval; no key value belongs in the infrastructure source. Deployment
+did not change the owner's forum, timezone, time, or inactive schedule.
