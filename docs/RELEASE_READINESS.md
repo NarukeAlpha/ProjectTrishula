@@ -44,11 +44,17 @@ and verify that the owner can test them through the website and Discord.
 - Native-compaction audit found predecessor identity, source-lineage, terminal-stream, usage-evidence, and portable-fallback defects. Those fixes and Convex native persistence are in progress. No live native attestation has been issued.
 - The owner reported unstyled newspaper controls. The responsive fix passed all 59 web tests and the web format/lint/typecheck/build/bundle gates. Built-in browser checks at 834-pixel desktop and 390-pixel phone widths showed aligned labels, contained controls, and no horizontal overflow. Console warnings/errors were empty. The UI-only fix is pushed at `90f28de`; deployment verification is pending.
 - The Railway plan after adding preservation for the native live-probe attestation reported no drift. No feature switch was enabled.
+- The spacing deployment succeeded at `90f28de`. The follow-up newspaper simplification is live at `4ba745f700b6213f1af9d8f9f7dd05732f97a616` (Railway deployment `55f84b0c-a807-458e-8988-d036251c1ccd`, `SUCCESS`). Exact web build inputs match tested root source `46f8e988918d4125d18b4cfb20879664baedb469`.
+- Newspaper settings now use one chart choice (Off/1/2/3), explicit timezone selection without a second confirmation control, and two schedule checkboxes. Provider and ranked-setup limits are under a closed Advanced disclosure. Existing saved values, forum ownership, and service activation checks are preserved.
+- The simplified form passed built-in browser checks at 1280-pixel desktop and 390-pixel phone widths without horizontal overflow. The authenticated live control panel shows the new controls and 44-pixel inputs. No forum, schedule, or other production setting was changed during QA.
+- The full root `npm run check` passed at `46f8e988918d4125d18b4cfb20879664baedb469`: Convex 145, Pi 282, Discord 76, and web 67 tests (570 total), plus four deployment-source tests, formatting, lint, typechecks, builds, and bundle boundaries. The final native adapter/rejection audit found no remaining concrete static blocker for deployment with compaction disabled.
+- Native persistence is deployed in Convex at `b9c207e`. The resume-revision invalidation fix and native Pi/Discord follow-ups remain to be deployed. No native live probe or attestation has run.
+- A deployed Convex codegen dry run previously exited successfully and reported that `_generated/api.d.ts` would change. The follow-up debug analysis upload was denied by approval review before execution. Do not retry that upload without explicit owner approval; generated-inventory normalization remains pending.
 
 ## Remaining release work
 
 1. Finish the native compaction adapter, persistence, and synthetic continuation/restart verification.
-2. Verify the newspaper spacing deployment; the portable-summary retry and durable cost-ledger follow-up are complete.
+2. Newspaper spacing and simplified controls are deployed and verified. The portable-summary retry and durable cost-ledger follow-up are also complete.
 3. Preserve durable delivery, owner boundaries, and existing control-page actions through the final checkpoints.
 4. Run the root `npm run check` gate and inspect the combined diff.
 5. Review the Railway plan and sync required runtime configuration without exposing secrets.
