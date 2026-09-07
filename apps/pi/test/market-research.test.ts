@@ -85,7 +85,7 @@ function preferences(overrides: Partial<MarketResearchPreferencesV1> = {}): Mark
       dataQuality: true,
       sources: true,
     },
-    maximumRankedSetups: 5,
+    maximumRankedSetups: 10,
     editionDepth: "full",
     includeWeekends: true,
     includeCharts: false,
@@ -137,6 +137,12 @@ const slot = buildResearchPlan(
 ).slots[0];
 
 describe("market research contracts and planning", () => {
+  it("accepts at most ten ranked setups and retains legacy frozen edition settings", () => {
+    expect(preferences().maximumRankedSetups).toBe(10);
+    expect(() => preferences({ maximumRankedSetups: 11 })).toThrow();
+    expect(preferences({ editionDepth: "concise" }).editionDepth).toBe("concise");
+  });
+
   it("keeps chart opt-in independent from the retained legacy acceptance field", () => {
     expect(preferences({ includeCharts: true }).includeCharts).toBe(true);
     expect(() => marketResearchPreferencesSchema.parse({ ...preferences(), unknown: true })).toThrow();

@@ -5,6 +5,7 @@ import {
   marketResearchEvidenceItemSchema,
   marketResearchJobRequestSchema,
   marketResearchPreferencesSchema,
+  morningPaperEditionSchema,
   morningPaperEvidenceSchema,
   type MarketResearchEvidenceItem,
   type MarketResearchJobResult,
@@ -12,6 +13,7 @@ import {
   type MorningPaperEditionV1,
   type MorningPaperEvidenceV1,
 } from "../src/market-research/contracts.js";
+import { materializeDeliveryParts } from "../src/market-research/delivery.js";
 import type { MarketResearchCallbacks } from "../src/market-research/convex-client.js";
 import type { MarketResearchExaClient } from "../src/market-research/exa-client.js";
 import { MarketResearchJobRegistry } from "../src/market-research/jobs.js";
@@ -82,7 +84,7 @@ function request(
       dataQuality: true,
       sources: true,
     },
-    maximumRankedSetups: 5,
+    maximumRankedSetups: 10,
     editionDepth: "full",
     includeWeekends: true,
     includeCharts: false,
@@ -341,6 +343,156 @@ function harness(
   const runner = createMarketResearchRunner(runnerOptions);
   return { runner, searchNews, callbacks, composer, completed: () => completed };
 }
+
+type RankedSetup = MorningPaperEditionV1["primaryBoard"][number];
+
+function rankedSetup(symbol: string, label: RankedSetup["label"] = "TOP WATCH"): RankedSetup {
+  const cited = { text: "Market evidence is available.", sourceIds: ["exa-collection-complete"] };
+  const components = {
+    catalyst: label === "TOP WATCH" || label === "EXIT-RISK" ? 20 : label === "WATCH" ? 10 : 0,
+    liquidityAndSpread: 15,
+    dailyAndHourlyBias: label === "AVOID" ? 5 : 15,
+    premarketStructure: 10,
+    levelQualityAndProximity: 20,
+    indexAndSectorConfirmation: 10,
+  };
+  return {
+    symbol,
+    label,
+    score: Object.values(components).reduce((total, value) => total + value, 0),
+    components,
+    deductions: [],
+    thesisLabel: label === "EXIT-RISK" ? "AT RISK" : "NO PRIOR THESIS",
+    trigger: cited,
+    invalidation: cited,
+    firstResistanceOrTarget: cited,
+    rewardToRisk: cited,
+    noChase: cited,
+    indexOrSectorCondition: cited,
+    eventRisk: cited,
+    sourceIds: cited.sourceIds,
+  };
+}
+
+function rankedChart(symbol = "AAPL"): MorningPaperEditionV1["chartRequests"][number] {
+  return {
+    chartRequestId: "chart-1",
+    editionId: "edition-1",
+    sectionId: "primary-board",
+    symbol,
+    timeframe: "daily",
+    start: "2026-08-01T12:00:00.000Z",
+    end: "2026-09-01T12:00:00.000Z",
+    session: "regular",
+    overlays: [],
+    annotations: [],
+    reason: "Show the qualified setup.",
+    priority: 90,
+    sourceEvidenceIds: ["exa-collection-complete"],
+    dataAsOf: "2026-09-01T12:00:00.000Z",
+  };
+}
+
+async function rankedEditionFixture() {
+  const marker = collectionMarker();
+  const test = harness([marker]);
+  await test.runner.run(request([marker.evidenceId]));
+  const result = test.completed();
+  if (!result) throw new Error("Missing completed fixture.");
+  return { evidence: result.evidence, edition: composedEdition(result.evidence) };
+}
+
+describe("full newspaper ranked output", () => {
+  it("accepts a legacy concise job without rewriting its frozen settings or hash", async () => {
+    const legacy = request();
+    legacy.preferences.editionDepth = "concise";
+    const parsed = marketResearchJobRequestSchema.parse(legacy);
+    expect(parsed.preferences).toEqual(legacy.preferences);
+    expect(parsed.configurationSnapshotHash).toBe(legacy.configurationSnapshotHash);
+    const test = harness([]);
+    await test.runner.run(parsed);
+    expect(test.callbacks.complete).toHaveBeenCalledOnce();
+    expect(test.callbacks.fail).not.toHaveBeenCalled();
+  });
+
+  it.each(["TOP WATCH", "WATCH"] as const)("accepts charts for %s primary-board setups", async (label) => {
+    const { evidence, edition } = await rankedEditionFixture();
+    const value = { ...edition, primaryBoard: [rankedSetup("AAPL", label)], chartRequests: [rankedChart()] };
+    expect(validateComposedEdition(value, evidence, { ...request().preferences, includeCharts: true })).toEqual(value);
+    expect(materializeDeliveryParts(morningPaperEditionSchema.parse(value))[1]?.chartAttachmentIds).toEqual(["chart-1"]);
+  });
+
+  it.each(["WAIT FOR CONFIRMATION", "AVOID", "EXIT-RISK"] as const)("rejects charts for %s setups", async (label) => {
+    const { edition } = await rankedEditionFixture();
+    expect(() => morningPaperEditionSchema.parse({
+      ...edition,
+      primaryBoard: [rankedSetup("AAPL", label)],
+      chartRequests: [rankedChart()],
+    })).toThrow("positive ranked setup");
+  });
+
+  it.each(["AT RISK", "INVALIDATED"] as const)("rejects charts for a positive score with an %s thesis", async (thesisLabel) => {
+    const { edition } = await rankedEditionFixture();
+    expect(() => morningPaperEditionSchema.parse({
+      ...edition,
+      primaryBoard: [{ ...rankedSetup("AAPL"), thesisLabel }],
+      chartRequests: [rankedChart()],
+    })).toThrow("positive ranked setup");
+  });
+
+  it("rejects challenger and context charts unless the symbol has a positive primary-board setup", async () => {
+    const { edition } = await rankedEditionFixture();
+    for (const symbol of ["DIA", "SPY"]) {
+      expect(() => morningPaperEditionSchema.parse({
+        ...edition,
+        primaryBoard: [rankedSetup("AAPL")],
+        challengers: [rankedSetup("DIA")],
+        chartRequests: [rankedChart(symbol)],
+      })).toThrow("positive ranked setup");
+    }
+    expect(morningPaperEditionSchema.parse({
+      ...edition,
+      primaryBoard: [rankedSetup("SPY")],
+      chartRequests: [rankedChart("SPY")],
+    }).chartRequests).toHaveLength(1);
+  });
+
+  it("does not attach an eligible chart to a broad market-context section", async () => {
+    const { edition } = await rankedEditionFixture();
+    expect(() => morningPaperEditionSchema.parse({
+      ...edition,
+      primaryBoard: [rankedSetup("AAPL")],
+      sections: [
+        { sectionId: "context", kind: "index_sector", heading: "Market context", markdown: "Market evidence is available.", sequence: 0, sourceIds: edition.sourceIds },
+        ...edition.sections.map((section) => ({ ...section, sequence: section.sequence + 1 })),
+      ],
+      chartRequests: [{ ...rankedChart(), sectionId: "context" }],
+    })).toThrow("positive ranked setup");
+  });
+
+  it("accepts ten configured setups and includes all ten in the starter", async () => {
+    const { evidence, edition } = await rankedEditionFixture();
+    const primarySymbols = [...request().preferences.primarySymbols, "TEST"];
+    const value = {
+      ...edition,
+      primaryBoard: primarySymbols.map((symbol) => rankedSetup(symbol)),
+      tickerDossiers: [...edition.tickerDossiers, { ...edition.tickerDossiers[0], symbol: "TEST" }],
+    };
+    const parsed = validateComposedEdition(value, evidence, { ...request().preferences, primarySymbols });
+    expect(parsed.primaryBoard).toHaveLength(10);
+    const starter = materializeDeliveryParts(parsed)[0]?.content;
+    for (const symbol of primarySymbols) expect(starter).toContain(`- ${symbol}: TOP WATCH`);
+    expect(starter?.length).toBeLessThanOrEqual(2_000);
+  });
+
+  it("rejects eleven setups, duplicate ranked symbols, and unconfigured watchlist symbols", async () => {
+    const { evidence, edition } = await rankedEditionFixture();
+    const primaryBoard = [...request().preferences.primarySymbols, "TEST", "OTHER"].map((symbol) => rankedSetup(symbol));
+    expect(() => morningPaperEditionSchema.parse({ ...edition, primaryBoard })).toThrow();
+    expect(() => morningPaperEditionSchema.parse({ ...edition, primaryBoard: [rankedSetup("AAPL"), rankedSetup("AAPL")] })).toThrow("must be unique");
+    expect(() => validateComposedEdition({ ...edition, primaryBoard: [rankedSetup("TEST")] }, evidence, request().preferences)).toThrow("composition_schema_invalid");
+  });
+});
 
 describe("market-research durable collection recovery", () => {
   it("reuses a complete Exa checkpoint without repeating paid Search calls", async () => {

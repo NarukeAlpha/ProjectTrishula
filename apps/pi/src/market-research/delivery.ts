@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   MorningPaperEditionV1,
 } from "./contracts.js";
-import { deliveryPartSchema, type MarketResearchJobResult } from "./contracts.js";
+import { deliveryPartSchema, MARKET_RESEARCH_MAX_RANKED_SETUPS, type MarketResearchJobResult } from "./contracts.js";
 import { neutralizeUntrustedDiscordMarkdown, splitSemanticContent } from "./semantic-chunker.js";
 
 const MAX_REPLY_BODY_CHARACTERS = 1_850;
@@ -14,7 +14,7 @@ function sha256(value: string): string {
 function starterContent(edition: MorningPaperEditionV1): string {
   const stories = edition.topStories.slice(0, 5).map((story) => `- ${story.text}`).join("\n");
   const events = edition.scheduledEvents.slice(0, 5).map((event) => `- ${event.text}`).join("\n") || "- No confirmed high-risk event";
-  const setups = edition.primaryBoard.slice(0, 5).map((setup) => `- ${setup.symbol}: ${setup.label} (${setup.score})`).join("\n") || "- No qualified setup";
+  const setups = edition.primaryBoard.slice(0, MARKET_RESEARCH_MAX_RANKED_SETUPS).map((setup) => `- ${setup.symbol}: ${setup.label} (${setup.score})`).join("\n") || "- No qualified setup";
   const dataWarning = edition.dataQuality[0]?.text;
   return [
     `${edition.editionLabel} - ${edition.editionDate}`,
