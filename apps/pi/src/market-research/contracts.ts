@@ -6,6 +6,7 @@ import { isNonPublicHostname } from "./public-url.js";
 export const MARKET_RESEARCH_SCHEMA_VERSION = 1 as const;
 export const MARKET_RESEARCH_MAX_EVIDENCE_BYTES = 256 * 1024;
 export const MARKET_RESEARCH_MAX_CHECKPOINT_BYTES = 64 * 1024;
+export const MARKET_RESEARCH_MAX_CHECKPOINT_ITEMS = 64;
 export const MARKET_RESEARCH_MAX_HIGHLIGHT_CHARACTERS = 2_000;
 export const MARKET_RESEARCH_MAX_RANKED_SETUPS = 10;
 

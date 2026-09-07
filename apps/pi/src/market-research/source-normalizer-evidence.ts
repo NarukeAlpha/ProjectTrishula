@@ -1,5 +1,6 @@
 import {
   MARKET_RESEARCH_MAX_CHECKPOINT_BYTES,
+  MARKET_RESEARCH_MAX_CHECKPOINT_ITEMS,
   MARKET_RESEARCH_MAX_EVIDENCE_BYTES,
   assertEvidencePacketSize,
   jsonByteLength,
@@ -64,11 +65,14 @@ export function evidenceCheckpoints(
   const checkpoints: MarketResearchEvidenceItem[][] = [];
   let current: MarketResearchEvidenceItem[] = [];
   for (const item of evidence) {
-    if (jsonByteLength(item) > MARKET_RESEARCH_MAX_CHECKPOINT_BYTES) {
+    if (jsonByteLength([item]) > MARKET_RESEARCH_MAX_CHECKPOINT_BYTES) {
       throw new Error("evidence_below_minimum");
     }
     const next = [...current, item];
-    if (current.length > 0 && jsonByteLength(next) > MARKET_RESEARCH_MAX_CHECKPOINT_BYTES) {
+    if (current.length > 0 && (
+      next.length > MARKET_RESEARCH_MAX_CHECKPOINT_ITEMS
+      || jsonByteLength(next) > MARKET_RESEARCH_MAX_CHECKPOINT_BYTES
+    )) {
       checkpoints.push(current);
       current = [item];
     } else current = next;

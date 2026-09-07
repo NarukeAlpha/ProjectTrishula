@@ -4,6 +4,7 @@ import { AgentRunFailedError } from "exa-js";
 import type { Logger } from "../src/runtime/logger.js";
 import {
   MARKET_RESEARCH_MAX_CHECKPOINT_BYTES,
+  MARKET_RESEARCH_MAX_CHECKPOINT_ITEMS,
   REQUESTED_SOURCES,
   marketResearchEvidenceItemSchema,
   marketResearchFingerprint,
@@ -723,7 +724,59 @@ describe("evidence and deterministic analytics", () => {
     const records = Array.from({ length: 100 }, (_, index) => ({ ...baseEvidence, evidenceId: `evidence-${index}` }));
     const checkpoints = evidenceCheckpoints(records);
     expect(checkpoints.length).toBeGreaterThan(1);
-    for (const checkpoint of checkpoints) expect(Buffer.byteLength(JSON.stringify(checkpoint))).toBeLessThanOrEqual(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+    expect(checkpoints.flat()).toEqual(records);
+    for (const checkpoint of checkpoints) {
+      expect(checkpoint.length).toBeLessThanOrEqual(MARKET_RESEARCH_MAX_CHECKPOINT_ITEMS);
+      expect(Buffer.byteLength(JSON.stringify(checkpoint))).toBeLessThanOrEqual(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+    }
+  });
+
+  it.each([
+    [0, []], [64, [64]], [65, [64, 1]], [128, [64, 64]], [129, [64, 64, 1]],
+  ] as const)("splits %i compact checkpoint records at the record limit without reordering", (count, sizes) => {
+    const records = Array.from({ length: count }, (_, index) => marketResearchEvidenceItemSchema.parse({
+      evidenceId: `compact-${index}`,
+      kind: "source_status",
+      provider: "Exa",
+      sourcePolicy: "approved",
+      retrievedAt: "2026-09-01T12:00:00.000Z",
+      freshness: "fresh",
+      contentStatus: "available",
+      highlights: [],
+      normalizedClaims: [],
+      contentHash: "a".repeat(64),
+    }));
+    // Every fixture fits in one byte-limited chunk, so only the item cap can split it.
+    expect(Buffer.byteLength(JSON.stringify(records))).toBeLessThan(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+    const checkpoints = evidenceCheckpoints(records);
+    expect(checkpoints.map((checkpoint) => checkpoint.length)).toEqual(sizes);
+    expect(checkpoints.flat()).toEqual(records);
+    for (const checkpoint of checkpoints) {
+      expect(checkpoint.length).toBeLessThanOrEqual(MARKET_RESEARCH_MAX_CHECKPOINT_ITEMS);
+      expect(Buffer.byteLength(JSON.stringify(checkpoint))).toBeLessThanOrEqual(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+    }
+  });
+
+  it("includes array framing in the single-record checkpoint byte limit", () => {
+    const record = {
+      evidenceId: "byte-boundary",
+      kind: "news" as const,
+      provider: "Exa",
+      sourcePolicy: "approved" as const,
+      retrievedAt: "2026-09-01T12:00:00.000Z",
+      freshness: "fresh" as const,
+      contentStatus: "available" as const,
+      highlights: [""],
+      normalizedClaims: [],
+      contentHash: "a".repeat(64),
+    };
+    const remainingBytes = MARKET_RESEARCH_MAX_CHECKPOINT_BYTES - Buffer.byteLength(JSON.stringify([record]));
+    record.highlights = ["x".repeat(remainingBytes)];
+    expect(Buffer.byteLength(JSON.stringify([record]))).toBe(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+    expect(evidenceCheckpoints([record])).toEqual([[record]]);
+    record.highlights[0] += "x";
+    expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThan(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+    expect(() => evidenceCheckpoints([record])).toThrow("evidence_below_minimum");
   });
 
   it("reconciles every source reference after optional evidence is trimmed", () => {

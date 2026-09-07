@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConvexMarketResearchClient } from "../../pi/src/market-research/convex-client.js";
 import {
+  MARKET_RESEARCH_MAX_CHECKPOINT_BYTES,
   marketResearchEvidenceItemSchema,
   marketResearchJobRequestSchema,
 } from "../../pi/src/market-research/contracts.js";
+import { evidenceCheckpoints } from "../../pi/src/market-research/source-normalizer-evidence.js";
 import { claimResearch, manualTrigger, saveControlSettings } from "../convex/market_research.js";
 import { marketResearchPi, marketResearchPiRequestSchema } from "../convex/market_research_http.js";
 import { convexMutationFixture, invokeMutation } from "./helpers/convex-fixture.js";
@@ -143,6 +145,30 @@ describe("full Pi job to strict Convex callback contract", () => {
     }
     expect(test.runMutation).not.toHaveBeenCalled();
     expect(test.runQuery).not.toHaveBeenCalled();
+  });
+
+  it.each([65, 129])("sends all %i compact records through the actual HTTP record cap", async (count) => {
+    const job = await fullJobRequest();
+    const test = callbackFixture();
+    const records = Array.from({ length: count }, (_, index) => ({
+      ...evidence, evidenceId: `compact-source-${index}`,
+    }));
+    expect(Buffer.byteLength(JSON.stringify(records))).toBeLessThan(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+    const checkpoints = evidenceCheckpoints(records);
+    for (const [sequence, checkpoint] of checkpoints.entries()) {
+      await expect(test.client.appendEvidence(job, sequence, checkpoint)).resolves.toBe(true);
+    }
+    expect(test.runMutation).toHaveBeenCalledTimes(Math.ceil(count / 64));
+    const sentRecords = test.bodies.flatMap((body, sequence) => {
+      const payload = marketResearchPiRequestSchema.parse(JSON.parse(body));
+      if (payload.operation !== "appendEvidence") throw new Error("Unexpected fixture operation.");
+      expect(payload.sequence).toBe(sequence);
+      expect(payload.evidence.length).toBeLessThanOrEqual(64);
+      expect(Buffer.byteLength(JSON.stringify(payload.evidence))).toBeLessThanOrEqual(MARKET_RESEARCH_MAX_CHECKPOINT_BYTES);
+      return payload.evidence;
+    });
+    expect(sentRecords).toEqual(records);
+    expect(test.logger.error).not.toHaveBeenCalled();
   });
 
   it("keeps cost accounting bound to its explicitly projected owner and lease", async () => {
