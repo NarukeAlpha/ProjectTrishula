@@ -583,21 +583,27 @@ Use compaction only for Luna. Sol is already bounded by a single research reques
 
 OpenAI's [compaction guide](https://developers.openai.com/api/docs/guides/compaction) documents server-side compaction through Responses API `context_management` and `compact_threshold`. A compaction item is opaque and can be used as replacement context. The official API also documents a stateless input-array pattern.
 
-The external [pi-openai-server-compaction](https://github.com/algal/pi-openai-server-compaction) project is a useful reference and possible adapter. The following repository facts were verified on 2026-08-31. They are baseline evidence, not permanent claims. `TASK-080` must refresh PR status and compatibility before selecting an implementation. Do not install a moving main branch without that review:
+The external [pi-openai-server-compaction](https://github.com/algal/pi-openai-server-compaction) project is a useful reference and possible adapter. Its pinned snapshot was reviewed on 2026-08-31, and its relevant pull requests were refreshed on 2026-09-07. These are dated facts, not permanent claims. Do not install a moving main branch without a new review:
 
 - The [reviewed snapshot](https://github.com/algal/pi-openai-server-compaction/tree/8a3de2f3b0c178fdd6f73f2f94172dfc3943e466) was commit `8a3de2f3b0c178fdd6f73f2f94172dfc3943e466` from 2026-07-23.
 - That snapshot declares Pi peer compatibility below `0.81.0`; this repository uses Pi `0.84.1`.
-- [PR 11](https://github.com/algal/pi-openai-server-compaction/pull/11) addresses Pi 0.84 nullable provider headers and credential restoration. It was open and unmerged on 2026-08-31.
-- [PR 18](https://github.com/algal/pi-openai-server-compaction/pull/18) preserves Pi context messages and unanswered trailing user or custom messages in replacement history. It was open and unmerged on 2026-08-31.
+- [PR 11](https://github.com/algal/pi-openai-server-compaction/pull/11) addresses Pi 0.84 nullable provider headers and credential restoration. It remained open and unmerged when refreshed on 2026-09-07; the reviewed head was `9271ff9`.
+- [PR 18](https://github.com/algal/pi-openai-server-compaction/pull/18) preserves Pi context messages and unanswered trailing user or custom messages in replacement history. It remained open and unmerged when refreshed on 2026-09-07; the reviewed head was `cf30a9f`.
 
 Choose one of these implementations after the spike:
 
 1. A narrow first-party adapter around the current Pi/OpenAI-Codex runtime and official server-compaction contract.
 2. A pinned fork of the external extension with the required Pi 0.84 and replacement-history fixes audited and covered by local tests.
 
-Implementation decision on 2026-09-07: keep native opaque compaction locked off. The pinned Pi `0.84.1` package exposes local `AgentSession.compact()`, but its Codex provider does not expose a validated first-party bridge to the official `POST /responses/compact` replacement artifact. Treating Pi's local lossy summary as the official opaque artifact would invent compatibility that has not passed section 9.6.
+Implementation decision on 2026-09-07: use a narrow first-party adapter, version `responses-compaction-v2-pi-0_84_1-v1`. The pinned Pi `0.84.1` runtime publicly exposes `ModelRuntime.completeSimple`, `onPayload`, injectable `fetch`, `transformHeaders`, and forced SSE transport. The adapter uses those boundaries with the reviewed Codex `/backend-api/codex/responses` remote-compaction route and `remote_compaction_v2` feature. It does not install the moving extension, call Pi's lossy local compactor, or access private session rewrite fields.
 
-The repository now has a separate first-party portable path, `portable-summary-v1`. At a stable boundary, Convex selects canonical evidence above the 190,400-token trigger and a contiguous 20,000-token recent tail. A fresh tool-free Luna job creates a typed replacement summary. Pi rejects invented source-event and author IDs. Convex then rechecks the source hash, full revision and generation fence, evidence references, exact recent tail, byte limit, and token accounting before activation. This path defaults off and is not an opaque server-compaction implementation.
+The adapter requires one final opaque `compaction` item and one successful terminal SSE event. It preserves the provider-owned JSON without interpreting private fields. It requires exact nonnegative usage with a consistent total, records only bounded usage and request evidence, and hashes and measures the exact replacement history. It preserves nullable header deletion markers, current context input, and the unanswered trailing user message. Restart injection requires the active checkpoint ID, owner binding, guild, conversation, epoch, compacted ordinal, source revision and hash, model, implementation, personality, prompt, and capability identities to match. A corrupt or incompatible artifact is not injected. A provider rejection retries the full original visible-turn prompt once from the portable summary and recent canonical tail. Discord requests a fenced durable invalidation and emits only content-free operator warnings. A transient invalidation failure does not discard the valid portable result.
+
+Discord negotiates native fields with `x-trishula-discord-protocol: native-v2`. During a rolling deployment, Convex projects native and source-lineage fields out of `durable-v1` responses and preserves the strict no-header legacy shapes. Deploy Convex before Pi and Discord.
+
+Native activation still defaults off. Configuration accepts it only when portable fallback is also enabled and the exact live-probe attestation is present. The deterministic adapter and restart fixtures pass locally, but that attestation must not be set until the deployment owner captures the OAuth same-process and fresh-runtime probe. The long-threshold, privacy, storage protection, quality, token, cost, and latency rows in section 9.6 also remain rollout gates. This conditional implementation is not a claim that every server-compaction acceptance row has passed.
+
+The repository now has a separate first-party portable path, `portable-summary-v1`. At a stable boundary, Convex selects canonical evidence above the 190,400-token trigger and a contiguous 20,000-token recent tail. A fresh tool-free Luna job creates a typed replacement summary. Pi rejects invented source-event and author IDs and binds author attribution to the cited author evidence. Convex then rechecks the source hash, full revision and generation fence, evidence references, exact recent tail, byte limit, and token accounting before activation. For large backlogs, it advances bounded contiguous candidate stages and keeps the active checkpoint unchanged until the final stage is complete. This path defaults off and is not an opaque server-compaction implementation.
 
 Do not select an implementation from benchmark headline quality alone. In the reviewed snapshot's [product-defaults validation](https://github.com/algal/pi-openai-server-compaction/blob/8a3de2f3b0c178fdd6f73f2f94172dfc3943e466/VALIDATION.md), full context scored 100%, the extension's native policy scored 78%, and Pi default scored 48% on its retained Sol fixture. Native used 4.58 times Pi's mean compaction output tokens, 2.52 times its compaction cost, and 1.29 times its downstream input tokens. Its artifact allocation was also variable. This shows better aggregate recall in that fixture, not better accuracy at an equal token budget or guaranteed savings for Discord. Measure this app's real workload.
 
@@ -1250,6 +1256,8 @@ Acceptance:
 - A rejected option has a written reason.
 - No production flag is enabled by this spike alone.
 
+Implementation status on 2026-09-07: the first-party adapter, dependency decision, upstream refresh, nullable-header regression, replacement-history regression, strict SSE parser, portable fallback, synthetic same-process/fresh-runtime harness, and gated configuration are complete offline. The service-owned OAuth native probe, full Pi process restart, fixed long-threshold comparison, storage-protection decision, backup-erasure evidence, and live cost, token, latency, privacy, and quality measurements remain open. Therefore `TASK-080` is implemented but has not passed its live acceptance gates.
+
 ### `TASK-090`: Persist and activate compaction checkpoints
 
 Depends on `TASK-080`.
@@ -1599,7 +1607,7 @@ Record fixture definitions, sample size, model and prompt versions, raw token co
 
 The dated evidence, commands, passed checks, and remaining live gates are in [personality-rollout-readiness.md](personality-rollout-readiness.md). Run `npm run check:personality` for the deterministic, login-independent shadow, restart, checkpoint, orchestration, and contract harness. This command does not send a Discord message.
 
-The native opaque flag remains hard false. The portable flag accepts `true` but defaults false in both Pi and the gateway. Do not enable it in a pilot until the storage-protection and live long-context rows in the readiness record pass.
+The native opaque flag and portable flag both default false. Native accepts `true` only when portable fallback is enabled and the exact reviewed live-probe attestation is present. Do not enable either path in a pilot until its storage-protection, privacy, live long-context, continuity, and measurement rows in the readiness record pass.
 
 ## 19. References
 
@@ -1612,10 +1620,10 @@ The native opaque flag remains hard false. The portable flag accepts `true` but 
 - Current Convex Discord state and routing: `apps/convex/convex/discord.ts`
 - Current Convex schema: `apps/convex/convex/schema.ts`
 - Current outbox delivery: `apps/discord/src/outbox/dispatcher.ts`
-- [OpenAI compaction guide](https://developers.openai.com/api/docs/guides/compaction), accessed 2026-08-31
+- [OpenAI compaction guide](https://developers.openai.com/api/docs/guides/compaction), checked 2026-09-07
 - [OpenAI compact response endpoint](https://developers.openai.com/api/reference/resources/responses/methods/compact), checked 2026-09-07
 - [Discord Create Message contract](https://docs.discord.com/developers/resources/message#create-message), accessed 2026-08-31
 - [Reviewed pi-openai-server-compaction snapshot](https://github.com/algal/pi-openai-server-compaction/tree/8a3de2f3b0c178fdd6f73f2f94172dfc3943e466), commit `8a3de2f3b0c178fdd6f73f2f94172dfc3943e466`, reviewed 2026-08-31
 - [Reviewed extension validation report](https://github.com/algal/pi-openai-server-compaction/blob/8a3de2f3b0c178fdd6f73f2f94172dfc3943e466/VALIDATION.md), reviewed 2026-08-31
-- [Pi 0.84 header compatibility PR](https://github.com/algal/pi-openai-server-compaction/pull/11), status checked 2026-08-31
-- [Replacement-history preservation PR](https://github.com/algal/pi-openai-server-compaction/pull/18), status checked 2026-08-31
+- [Pi 0.84 header compatibility PR](https://github.com/algal/pi-openai-server-compaction/pull/11), open head `9271ff9`, status checked 2026-09-07
+- [Replacement-history preservation PR](https://github.com/algal/pi-openai-server-compaction/pull/18), open head `cf30a9f`, status checked 2026-09-07
