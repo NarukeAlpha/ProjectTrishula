@@ -32,7 +32,7 @@ const validTriageOutput = JSON.stringify({
 });
 
 describe("Discord Pi agent profiles", () => {
-  it("pins Luna xhigh and Sol max to priority with the approved tool boundaries", () => {
+  it("pins Luna xhigh and Astra max to priority with the approved tool boundaries", () => {
     expect(DISCORD_AGENT_PROFILES.frontman_plan).toMatchObject({
       modelId: "gpt-5.6-luna",
       thinkingLevel: "xhigh",
@@ -46,7 +46,7 @@ describe("Discord Pi agent profiles", () => {
       toolNames: [],
     });
     expect(DISCORD_AGENT_PROFILES.research).toMatchObject({
-      modelId: "gpt-5.6-sol",
+      modelId: "gpt-6-astra",
       thinkingLevel: "max",
       serviceTier: "priority",
       toolNames: [
@@ -58,7 +58,7 @@ describe("Discord Pi agent profiles", () => {
     });
   });
 
-  it("locks the provider payload mapping to the live-accepted Sol max value", () => {
+  it("keeps the research provider payload at max when migrating to Astra", () => {
     const models = {
       luna: {
         id: "gpt-5.6-luna",
@@ -66,7 +66,7 @@ describe("Discord Pi agent profiles", () => {
         thinkingLevelMap: { xhigh: "xhigh" },
       },
       sol: {
-        id: "gpt-5.6-sol",
+        id: "gpt-6-astra",
         contextWindow: 272_000,
         thinkingLevelMap: { max: "max" },
       },

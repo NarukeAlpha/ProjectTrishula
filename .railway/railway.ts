@@ -191,7 +191,7 @@ export default defineRailway(() => {
       PI_CREDENTIAL_KEY_VERSION: preserve(),
       PI_DISCORD_SHARED_SECRET: preserve(),
       PI_MODEL: preserve(),
-      PI_MARKET_RESEARCH_MODEL: "gpt-5.6-sol",
+      PI_MARKET_RESEARCH_MODEL: "gpt-6-astra",
       // Retain retired dashboard values; Discord profiles use TRISHULA_*.
       PI_LUNA_MODEL: preserve(),
       PI_SOL_MODEL: preserve(),
@@ -218,7 +218,7 @@ export default defineRailway(() => {
       TRISHULA_RESEARCH_PACKET_TOKEN_TARGET: preserve(),
       TRISHULA_AMBIENT_MIN_ADDITIVE_VALUE: preserve(),
       TRISHULA_AMBIENT_MIN_CONFIDENCE: preserve(),
-      TRISHULA_SOL_MODEL: preserve(),
+      TRISHULA_SOL_MODEL: "gpt-6-astra",
       TRISHULA_SOL_MAX_OUTPUT_TOKENS: preserve(),
       TRISHULA_SOL_PROFILE_VERSION: preserve(),
       TRISHULA_SOL_REASONING_EFFORT: preserve(),

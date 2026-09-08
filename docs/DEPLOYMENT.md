@@ -123,7 +123,7 @@ The runtime supplies defaults for the locked profile values below. Set them expl
 | `TRISHULA_LUNA_SERVICE_TIER` | `priority` |
 | `TRISHULA_LUNA_PROFILE_VERSION` | `luna-frontman-v1` |
 | `TRISHULA_LUNA_MAX_OUTPUT_TOKENS` | `8000` |
-| `TRISHULA_SOL_MODEL` | `gpt-5.6-sol` |
+| `TRISHULA_SOL_MODEL` | `gpt-6-astra` |
 | `TRISHULA_SOL_REASONING_EFFORT` | `max` |
 | `TRISHULA_SOL_SERVICE_TIER` | `priority` |
 | `TRISHULA_SOL_PROFILE_VERSION` | `sol-research-v1` |
@@ -138,7 +138,9 @@ The runtime supplies defaults for the locked profile values below. Set them expl
 | `TRISHULA_AMBIENT_MIN_ADDITIVE_VALUE` | `0.9` |
 | `TRISHULA_HOT_SESSION_IDLE_MS` | `3600000` |
 
-The visible provider tuples are Luna `gpt-5.6-luna` / `xhigh` / `priority` and Sol `gpt-5.6-sol` / `max` / `priority`. The pinned provider catalog and the 2026-09-07 OAuth smoke test both use the wire value `max`. The literal `ultra` is invalid for this transport.
+The visible provider tuples are Luna `gpt-5.6-luna` / `xhigh` / `priority` and research `gpt-6-astra` / `max` / `priority`. The newspaper uses `PI_MARKET_RESEARCH_MODEL=gpt-6-astra` at `xhigh` / `priority`. The Astra catalog entry extends the pinned Pi runtime without replacing Codex OAuth. The existing 272,000-token application context cap stays in place. The literal `ultra` is invalid for this transport; preserve the effective wire value `max`.
+
+After deploying the Astra model change, run the owner-scoped internal `discord:migrateResearchModelToAstra` with the configured owner as `actorId`. It updates only saved conversation metadata whose research model is exactly `gpt-5.6-sol`. It preserves reasoning effort, service tier, conversation history, checkpoints, fences, and historical research artifacts. The mutation is idempotent. Legacy `sol` field names and estimator versions are compatibility identifiers, not active model selections.
 
 ## Rollout order
 

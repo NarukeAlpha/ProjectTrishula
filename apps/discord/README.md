@@ -2,13 +2,13 @@
 
 This Railway service holds the Discord bot token and the live Gateway connection. It stores guild, channel, message, lease, and outbox state in Convex. It sends agent work to the private Pi service.
 
-Pi agent calls use short, authenticated job requests. The gateway submits a stage, polls its job status, and retries transient poll failures. A minute-scale Sol run does not depend on one long-lived HTTP response.
+Pi agent calls use short, authenticated job requests. The gateway submits a stage, polls its job status, and retries transient poll failures. A minute-scale Astra research run does not depend on one long-lived HTTP response. Luna remains the frontman; the research model is `gpt-6-astra` at `max` reasoning with `priority` processing. Internal `sol` field names remain for stored-data compatibility.
 
 The service never sends the Discord token, CHART-IMG key, or Pi Codex OAuth data to the browser or Convex. Convex records fixed activity events for the web control page, but it does not copy message text, model prompts, credentials, or hidden reasoning into that feed.
 
 ## Typing feedback
 
-Luna shows typing in the conversation's reply channel while it reviews a new message or writes its reply. The indicator starts with the model call and refreshes about every eight seconds. It is not refreshed during Sol-only research or when replaying a saved result.
+Luna shows typing in the conversation's reply channel while it reviews a new message or writes its reply. The indicator starts with the model call and refreshes about every eight seconds. It is not refreshed during Astra-only research or when replaying a saved result.
 
 Typing is best-effort and does not delay or fail agent work. Refreshes stop on completion, silence, failure, lease cancellation, or service shutdown. In-flight typing requests are cancelled. Discord can keep the last indicator visible until its normal ten-second expiry; there is no separate stop-typing request. See [Discord's typing endpoint](https://docs.discord.com/developers/resources/channel#trigger-typing-indicator).
 

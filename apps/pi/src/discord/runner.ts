@@ -15,6 +15,7 @@ import { Type } from "typebox";
 import { z } from "zod";
 import type { ExecutorReadiness } from "../execution/executor.js";
 import type { CodexRuntime } from "../pi/codex-runtime.js";
+import { withAstraServiceTier } from "../pi/codex-transport.js";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../runtime/logger.js";
 import { composeDurableConversationContext } from "../assistant/context.js";
@@ -1209,7 +1210,7 @@ class PiDiscordAgentRunner implements DiscordAgentRunner {
               ),
             }
           : { ...options, serviceTier: profile.serviceTier };
-        return standardStream(activeModel, context, priorityOptions);
+        return standardStream(activeModel, context, withAstraServiceTier(activeModel, priorityOptions));
       };
       const activeToolNames = session.getActiveToolNames().sort();
       const expectedToolNames = [...profile.toolNames].sort();

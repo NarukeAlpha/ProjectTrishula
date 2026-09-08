@@ -54,7 +54,7 @@ function controlPlane(
               serviceTier: "priority",
             },
             sol: {
-              model: "gpt-5.6-sol",
+              model: "gpt-6-astra",
               reasoningEffort: "max",
               serviceTier: "priority",
             },
@@ -1148,8 +1148,10 @@ describe("Discord control surface", () => {
       within(status).getByText("gpt-5.6-luna · xhigh · priority"),
     ).toBeVisible();
     expect(
-      within(status).getByText("gpt-5.6-sol · max · priority"),
+      within(status).getByText("gpt-6-astra · max · priority"),
     ).toBeVisible();
+    expect(within(status).getByText("Research")).toBeVisible();
+    expect(within(status).queryByText("Sol research")).not.toBeInTheDocument();
     expect(
       within(status).queryByText("discord:guild_1"),
     ).not.toBeInTheDocument();

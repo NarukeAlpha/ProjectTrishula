@@ -37,17 +37,19 @@ The durable gateway path submits these profiles. Shared Zod request and response
 | Profile | Role | Locked provider tuple | Tools |
 | --- | --- | --- | --- |
 | `frontman_plan` | Plan a direct reply, clarification, silence, or research | `gpt-5.6-luna` / `xhigh` / `priority` | None |
-| `research` | Produce a bounded public evidence packet | `gpt-5.6-sol` / `max` / `priority` | Public web search, public HTTPS fetch, public market data, and trusted chart request |
+| `research` | Produce a bounded public evidence packet | `gpt-6-astra` / `max` / `priority` | Public web search, public HTTPS fetch, public market data, and trusted chart request |
 | `frontman_resume` | Reconcile newest context and send, suppress, or recheck | `gpt-5.6-luna` / `xhigh` / `priority` | None |
 | `portable_checkpoint` | Build an isolated, source-bound replacement summary | `gpt-5.6-luna` / `xhigh` / `priority` | None |
 
-The pinned Pi `0.84.1` Codex catalog maps Sol `max` to the provider value `max`. A 2026-09-07 OAuth smoke test accepted `max` and rejected the unsupported literal `ultra`. Startup validates the 272,000-token catalog window and the reasoning maps before it marks Discord agents ready.
+The pinned Pi `0.84.1` catalog is extended through its public model-registration API to add `gpt-6-astra`. The existing Codex OAuth provider, other models, 272,000-token application context cap, and output caps stay unchanged. Astra maps `xhigh` to `xhigh` and `max` to `max`, as supported by the [official model documentation](https://developers.openai.com/api/docs/models/gpt-6-astra). Startup validates those mappings before it marks Discord agents ready. Catalog costs use [published API-equivalent rates](https://developers.openai.com/api/docs/pricing); they are not Codex subscription charges. A successful live Astra smoke test is still required after deployment.
+
+The pinned SDK omits `serviceTier` when it converts simple stream options. Astra calls use a shared payload hook to retain the requested tier while preserving existing hooks. Other models' transports are unchanged.
 
 Each Discord guild owns one durable logical Luna conversation. Convex supplies its trusted owner binding, `conversationId`, epoch, revision, policy hashes, portable summary when available, and recent canonical tail. Pi can reuse one compatible hot Luna `AgentSession` across jobs and turns. The session is only a cache. Disabling hot reuse, restarting Pi, or evicting an idle session reconstructs the same logical conversation from Convex.
 
 Luna uses one identity and voice for planning, direct answers, acknowledgments, and researched answers. The plan and resume stages do not create separate visible personalities or separate conversation histories. After a researched turn, Pi rebases or rebuilds hot context from canonical sent-only history so internal plan JSON and evidence packets do not accumulate.
 
-Sol gets one fresh isolated session for each research request. It receives the normalized request and limited public context. It returns a validated packet with a 2,500 estimated-token target and a hard 16,384-byte transport limit. Pi pins the estimator to `js-tiktoken@1.0.21`, `o200k_base`, and the versioned `gpt-5.6-sol` estimate mapping. Sol's transcript, hidden reasoning, invalid output, and repair prompt do not enter Luna history.
+The Astra research worker gets one fresh isolated session for each request. It receives the normalized request and limited public context. It returns a validated packet with a 2,500 estimated-token target and a hard 16,384-byte transport limit. Pi keeps the versioned `js-tiktoken@1.0.21`, `o200k_base`, `gpt-5.6-sol-estimate` metadata for stored-packet compatibility; this remains an estimate, not an exact Astra tokenizer claim. The research worker's transcript, hidden reasoning, invalid output, and repair prompt do not enter Luna history.
 
 The job registry uses `requestId` as its idempotency key. A reused ID with different validated input returns a conflict. Completed and failed jobs expire after 15 minutes. The registry accepts at most eight active jobs and 256 live or retained jobs. It stops a job that runs longer than nine minutes. Shutdown stops intake, aborts running jobs, and waits for session cleanup.
 
@@ -116,7 +118,7 @@ These keys are parsed and tested. Literal profile values provide deployment visi
 | `TRISHULA_LUNA_SERVICE_TIER` | `priority` |
 | `TRISHULA_LUNA_PROFILE_VERSION` | `luna-frontman-v1` |
 | `TRISHULA_LUNA_MAX_OUTPUT_TOKENS` | `8000` |
-| `TRISHULA_SOL_MODEL` | `gpt-5.6-sol` |
+| `TRISHULA_SOL_MODEL` | `gpt-6-astra` |
 | `TRISHULA_SOL_REASONING_EFFORT` | `max` |
 | `TRISHULA_SOL_SERVICE_TIER` | `priority` |
 | `TRISHULA_SOL_PROFILE_VERSION` | `sol-research-v1` |
@@ -129,6 +131,8 @@ These keys are parsed and tested. Literal profile values provide deployment visi
 | `TRISHULA_MAX_AUTONOMOUS_RECHECKS` | `2` only |
 | `TRISHULA_AMBIENT_MIN_CONFIDENCE` | `0.85` |
 | `TRISHULA_AMBIENT_MIN_ADDITIVE_VALUE` | `0.9` |
+
+The `TRISHULA_SOL_*` names and `sol-research-v1` profile ID remain compatibility identifiers for the research role. Its active model is Astra. During rolling deployment, legacy `gpt-5.6-sol` values in `TRISHULA_SOL_MODEL`, `PI_MARKET_RESEARCH_MODEL`, or `PI_MODEL` resolve to Astra. Other configured models are unchanged. The newspaper keeps `xhigh` reasoning and priority processing.
 
 ## Other runtime variables
 
@@ -151,7 +155,7 @@ These keys are parsed and tested. Literal profile values provide deployment visi
 | `ROBINHOOD_OAUTH_CLIENT_ID` | unset; MCP dynamic registration is used when supported |
 | `LIVE_TRADING_ENABLED` | `false` |
 | `MARKET_RESEARCH_ENABLED` | `false` |
-| `PI_MARKET_RESEARCH_MODEL` | `gpt-5.6-sol` |
+| `PI_MARKET_RESEARCH_MODEL` | `gpt-6-astra` |
 | `EXA_SEARCH_CONCURRENCY` | `2` |
 | `EXA_CONTENTS_CONCURRENCY` | `5` |
 | `EXA_REQUEST_TIMEOUT_MS` | `20000` |

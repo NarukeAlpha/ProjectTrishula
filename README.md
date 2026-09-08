@@ -14,7 +14,7 @@ Pi uses the pinned official `exa-js` `2.19.0` client and the existing Codex OAut
 
 - `apps/web`: WorkOS-protected chat, Discord routing, server conversation status, reset, and privacy-deletion controls.
 - `apps/convex`: canonical Discord history, guild conversation leases, durable turn stages, research artifacts, outbox state, delivery reconciliation, and the redacted activity feed.
-- `apps/pi`: the durable Luna frontman and fresh Sol research workers.
+- `apps/pi`: the durable Luna frontman and fresh Astra research workers.
 - `apps/discord`: Discord Gateway ingestion, turn coordination, restart recovery, and outbox delivery.
 - `infra/railway/convex-backend`: self-hosted Convex backend.
 - `infra/railway/convex-dashboard`: self-hosted Convex dashboard.
@@ -36,12 +36,12 @@ The durable path is:
 2. Convex grants one fenced guild-conversation lease and returns a token-budgeted canonical tail.
 3. Luna plans one action: stay silent for an ambient message, reply, clarify, or request research. Explicit mentions and replies cannot end in silence.
 4. For research, Luna may write one specific acknowledgment. Convex persists the plan and acknowledgment state.
-5. Sol starts a fresh isolated session with bounded public research tools. It returns only a validated evidence packet. Its hidden reasoning and tool transcript do not enter Luna history.
+5. Astra starts a fresh isolated session with bounded public research tools. It returns only a validated evidence packet. Its hidden reasoning and tool transcript do not enter Luna history.
 6. Convex persists the research result and returns the newest eligible context. The same logical Luna conversation resumes, sends, suppresses, or requests one bounded recheck.
 7. Convex persists the resume result and creates an idempotent outbox record. The gateway sends it with an enforced nonce and with Discord mentions disabled.
 8. Only human messages and Discord-confirmed assistant messages enter canonical visible history. Recovery reuses completed plan, research, resume, and delivery stages.
 
-Luna is locked to `gpt-5.6-luna`, `xhigh`, and the priority service tier. Sol is locked to `gpt-5.6-sol`, `max`, and the priority service tier. Final replies can contain at most 2,000 Unicode code points. Research acknowledgments can contain at most 320. No delivery path silently truncates text.
+Luna is locked to `gpt-5.6-luna`, `xhigh`, and the priority service tier. Discord research uses `gpt-6-astra`, `max`, and the priority service tier. The morning newspaper uses Astra at its existing `xhigh` effort and priority tier. Internal `sol` field names and historical estimator IDs remain for compatibility; they do not select the old model. Final replies can contain at most 2,000 Unicode code points. Research acknowledgments can contain at most 320. No delivery path silently truncates text.
 
 ## Continuity controls
 

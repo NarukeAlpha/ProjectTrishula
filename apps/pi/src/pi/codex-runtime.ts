@@ -1,4 +1,5 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { registerCodexResearchModel } from "./codex-catalog.js";
 
 /**
  * Owns the one Codex OAuth runtime used by both the existing chat executor and
@@ -30,6 +31,7 @@ export class CodexRuntime {
       modelsPath: null,
       refreshOnCreate: true,
     });
+    registerCodexResearchModel(runtime);
     if (!runtime.hasConfiguredAuth("openai-codex")) {
       throw new Error(`OpenAI Codex auth is not configured at ${this.authPath}.`);
     }

@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { discordCompactionThreshold } from "./discord/compaction.js";
 import { DISCORD_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION } from "./discord/native-compaction.js";
+import { ASTRA_CODEX_MODEL_ID } from "./pi/codex-catalog.js";
 
 const positiveInteger = z.coerce.number().int().positive();
 const nonnegativeMoney = z.coerce.number().finite().nonnegative();
 const positiveMoney = z.coerce.number().finite().positive();
 const stableActorId = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
+const migrateSolModel = (model: string) => model === "gpt-5.6-sol" ? ASTRA_CODEX_MODEL_ID : model;
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
@@ -24,11 +26,11 @@ const environmentSchema = z.object({
   PI_AUTH_PATH: z.string().trim().min(1).default("/data/auth.json"),
   PI_CREDENTIAL_ENCRYPTION_KEY: z.string().trim().min(32).optional(),
   PI_CREDENTIAL_KEY_VERSION: positiveInteger.max(1_000_000).default(1),
-  PI_MODEL: z.string().trim().min(1).default("gpt-5.6-terra"),
+  PI_MODEL: z.string().trim().min(1).default("gpt-5.6-terra").transform(migrateSolModel),
   TRISHULA_LUNA_MODEL: z.literal("gpt-5.6-luna").default("gpt-5.6-luna"),
   TRISHULA_LUNA_REASONING_EFFORT: z.literal("xhigh").default("xhigh"),
   TRISHULA_LUNA_SERVICE_TIER: z.literal("priority").default("priority"),
-  TRISHULA_SOL_MODEL: z.literal("gpt-5.6-sol").default("gpt-5.6-sol"),
+  TRISHULA_SOL_MODEL: z.enum([ASTRA_CODEX_MODEL_ID, "gpt-5.6-sol"]).default(ASTRA_CODEX_MODEL_ID).transform((): typeof ASTRA_CODEX_MODEL_ID => ASTRA_CODEX_MODEL_ID),
   TRISHULA_SOL_REASONING_EFFORT: z.literal("max").default("max"),
   TRISHULA_SOL_SERVICE_TIER: z.literal("priority").default("priority"),
   TRISHULA_PERSONALITY_VERSION: z.literal("trishula-discord-v1").default("trishula-discord-v1"),
@@ -77,7 +79,7 @@ const environmentSchema = z.object({
     "rejected",
   ]).default("pending"),
   EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST: positiveMoney.max(100).optional(),
-  PI_MARKET_RESEARCH_MODEL: z.string().trim().min(1).default("gpt-5.6-sol"),
+  PI_MARKET_RESEARCH_MODEL: z.string().trim().min(1).default(ASTRA_CODEX_MODEL_ID).transform(migrateSolModel),
 });
 
 export interface AppConfig {
@@ -101,7 +103,7 @@ export interface AppConfig {
   trishulaLunaModel: "gpt-5.6-luna";
   trishulaLunaReasoningEffort: "xhigh";
   trishulaLunaServiceTier: "priority";
-  trishulaSolModel: "gpt-5.6-sol";
+  trishulaSolModel: typeof ASTRA_CODEX_MODEL_ID;
   trishulaSolReasoningEffort: "max";
   trishulaSolServiceTier: "priority";
   trishulaPersonalityVersion: "trishula-discord-v1";

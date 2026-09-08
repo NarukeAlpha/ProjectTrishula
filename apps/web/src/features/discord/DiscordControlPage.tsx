@@ -1143,7 +1143,7 @@ function ConversationStatusCard({
               <code>{modelProfileLabel(conversation.models.luna)}</code>
             </div>
             <div>
-              <span>Sol research</span>
+              <span>Research</span>
               <code>{modelProfileLabel(conversation.models.sol)}</code>
             </div>
           </div>

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ASTRA_CODEX_MODEL_ID } from "../pi/codex-catalog.js";
 import {
   TRISHULA_BASE_IDENTITY,
   TRISHULA_PERSONALITY_VERSION,
@@ -18,7 +19,7 @@ export const LOCKED_DISCORD_MODEL_PROFILES = {
     profileVersion: "luna-frontman-v1",
   },
   sol: {
-    modelId: "gpt-5.6-sol",
+    modelId: ASTRA_CODEX_MODEL_ID,
     thinkingLevel: "max",
     serviceTier: "priority",
     maximumOutputCharacters: 16_384,

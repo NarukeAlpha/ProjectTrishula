@@ -2049,6 +2049,34 @@ export const transferGuildConversationOwnership = mutation({
   },
 });
 
+export const migrateResearchModelToAstra = internalMutation({
+  args: { actorId: serviceId },
+  handler: async (ctx, args) => {
+    const ownerId = requireDiscordOwnerId(args.actorId);
+    const conversations = await ctx.db.query("discordAssistantConversations")
+      .withIndex("by_owner_guild", (index) => index.eq("ownerId", ownerId))
+      .collect();
+    let updated = 0;
+    let alreadyAstra = 0;
+    for (const conversation of conversations) {
+      if (conversation.solModel === "gpt-5.6-sol") {
+        // Only the active research-model metadata changes. Existing conversation
+        // fences, reasoning settings, checkpoints, and historical artifacts remain intact.
+        await ctx.db.patch(conversation._id, { solModel: "gpt-6-astra" });
+        updated += 1;
+      } else if (conversation.solModel === "gpt-6-astra") {
+        alreadyAstra += 1;
+      }
+    }
+    return {
+      scanned: conversations.length,
+      updated,
+      alreadyAstra,
+      unchanged: conversations.length - updated - alreadyAstra,
+    };
+  },
+});
+
 export const nextPortableCheckpoint = internalMutation({
   args: { actorId: serviceId, nativeCompactionSupported: v.optional(v.boolean()) },
   handler: async (ctx, args) => {

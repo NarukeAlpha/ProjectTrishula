@@ -47,7 +47,7 @@ export const DISCORD_PERSONALITY_PROFILE = {
   lunaModel: "gpt-5.6-luna",
   lunaReasoningEffort: "xhigh",
   lunaServiceTier: "priority",
-  solModel: "gpt-5.6-sol",
+  solModel: "gpt-6-astra",
   solReasoningEffort: "max",
   solServiceTier: "priority",
 } as const;

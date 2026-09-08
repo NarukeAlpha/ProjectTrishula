@@ -11,6 +11,7 @@ import type { StopReason } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { ExecutorReadiness } from "../execution/executor.js";
 import type { CodexRuntime } from "../pi/codex-runtime.js";
+import { withAstraServiceTier } from "../pi/codex-transport.js";
 import {
   morningPaperEditionSchema,
   isPositiveRankedSetup,
@@ -290,7 +291,7 @@ class PiMorningPaperComposer implements MorningPaperComposer {
     const standardStream = session.agent.streamFunction;
     session.agent.streamFunction = (model, context, options) => {
       const priorityOptions = { ...options, serviceTier: "priority" };
-      return standardStream(model, context, priorityOptions);
+      return standardStream(model, context, withAstraServiceTier(model, priorityOptions));
     };
     const abort = () => { void session.abort(); };
     signal?.addEventListener("abort", abort, { once: true });

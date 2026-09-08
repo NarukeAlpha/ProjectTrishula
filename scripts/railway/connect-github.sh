@@ -121,7 +121,7 @@ railway variable set \
   'TRISHULA_LUNA_MODEL=gpt-5.6-luna' \
   'TRISHULA_LUNA_REASONING_EFFORT=xhigh' \
   'TRISHULA_LUNA_SERVICE_TIER=priority' \
-  'TRISHULA_SOL_MODEL=gpt-5.6-sol' \
+  'TRISHULA_SOL_MODEL=gpt-6-astra' \
   'TRISHULA_SOL_REASONING_EFFORT=max' \
   'TRISHULA_SOL_SERVICE_TIER=priority' >/dev/null
 

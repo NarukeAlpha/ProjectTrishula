@@ -69,7 +69,7 @@ const demoDiscord: DiscordControlPlaneReadModel = {
             serviceTier: "priority",
           },
           sol: {
-            model: "gpt-5.6-sol",
+            model: "gpt-6-astra",
             reasoningEffort: "max",
             serviceTier: "priority",
           },

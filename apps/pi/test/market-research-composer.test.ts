@@ -126,7 +126,7 @@ function chart(symbol = "AMD"): MorningPaperEditionV1["chartRequests"][number] {
 function assistant(text: string): AssistantMessage {
   return {
     role: "assistant", content: [{ type: "text", text }], api: "openai-codex-responses",
-    provider: "openai-codex", model: "gpt-5.6-sol", stopReason: "stop", timestamp: Date.parse(now),
+    provider: "openai-codex", model: "gpt-6-astra", stopReason: "stop", timestamp: Date.parse(now),
     usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   };
 }
@@ -179,11 +179,11 @@ function harness(options: {
   const createSession = vi.fn<MorningPaperSessionFactory>().mockResolvedValue({ session });
   const runtime = new CodexRuntime("/unused-auth-fixture");
   // SAFETY: The injected session factory only observes this model's identity; it never contacts a provider.
-  const model = { id: "gpt-5.6-sol" } as Awaited<ReturnType<CodexRuntime["requireModel"]>>;
+  const model = { id: "gpt-6-astra" } as Awaited<ReturnType<CodexRuntime["requireModel"]>>;
   vi.spyOn(runtime, "requireModel").mockResolvedValue(model);
   // SAFETY: The injected session factory does not use modelRuntime; this sentinel avoids credentials and I/O.
   vi.spyOn(runtime, "get").mockResolvedValue({} as Awaited<ReturnType<CodexRuntime["get"]>>);
-  const composer = createMorningPaperComposer(runtime, "gpt-5.6-sol", createSession);
+  const composer = createMorningPaperComposer(runtime, "gpt-6-astra", createSession);
   return { composer, initial, research, createSession, session, runtime, model, standardStream };
 }
 
@@ -202,7 +202,7 @@ describe("agent-led morning newspaper composer", () => {
       model: test.model, thinkingLevel: "xhigh", noTools: "all",
       tools: ["exa_read", "exa_search", "request_chart", "update_thesis"], customTools: test.research.tools,
     }));
-    expect(test.runtime.requireModel).toHaveBeenCalledWith("gpt-5.6-sol");
+    expect(test.runtime.requireModel).toHaveBeenCalledWith("gpt-6-astra");
     expect(test.session.dispose).toHaveBeenCalledOnce();
     expect(test.session.prompt).toHaveBeenCalledOnce();
   });

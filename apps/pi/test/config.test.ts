@@ -32,7 +32,7 @@ describe("loadConfig", () => {
       trishulaLunaModel: "gpt-5.6-luna",
       trishulaLunaReasoningEffort: "xhigh",
       trishulaLunaServiceTier: "priority",
-      trishulaSolModel: "gpt-5.6-sol",
+      trishulaSolModel: "gpt-6-astra",
       trishulaSolReasoningEffort: "max",
       trishulaSolServiceTier: "priority",
       trishulaPersonalityVersion: "trishula-discord-v1",
@@ -54,6 +54,15 @@ describe("loadConfig", () => {
       trishulaPortableCheckpointsEnabled: false,
       trishulaNativeCompactionEnabled: false,
     });
+  });
+
+  it("migrates active Sol settings to Astra without changing efforts or other models", () => {
+    const config = loadConfig({ ...base, TRISHULA_SOL_MODEL: "gpt-5.6-sol", PI_MARKET_RESEARCH_MODEL: "gpt-5.6-sol", PI_MODEL: "gpt-5.6-sol" });
+    expect(config).toMatchObject({ trishulaSolModel: "gpt-6-astra", marketResearchModel: "gpt-6-astra", piModel: "gpt-6-astra", trishulaSolReasoningEffort: "max", trishulaSolServiceTier: "priority", trishulaLunaModel: "gpt-5.6-luna", trishulaLunaReasoningEffort: "xhigh", trishulaModelContextWindow: 272_000 });
+    expect(loadConfig(base).marketResearchModel).toBe("gpt-6-astra");
+    expect(loadConfig({ ...base, TRISHULA_SOL_MODEL: "gpt-6-astra" }).trishulaSolModel).toBe("gpt-6-astra");
+    expect(loadConfig({ ...base, PI_MARKET_RESEARCH_MODEL: "gpt-5.6-luna" }).marketResearchModel).toBe("gpt-5.6-luna");
+    expect(() => loadConfig({ ...base, TRISHULA_SOL_MODEL: "gpt-5.6-terra" })).toThrow(/TRISHULA_SOL_MODEL/);
   });
 
   it("rejects model drift and gates opaque compaction on a reviewed live probe", () => {
