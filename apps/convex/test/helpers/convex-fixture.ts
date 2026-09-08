@@ -33,6 +33,12 @@ export function convexMutationFixture(ownerId = "owner_1") {
         order(value: string) { descending = value === "desc"; return query; },
         async collect() { return found(); },
         async take(count: number) { return found().slice(0, count); },
+        async paginate(options: { cursor: string | null; numItems: number }) {
+          const start = options.cursor === null ? 0 : Number(options.cursor);
+          const matches = found();
+          const page = matches.slice(start, start + options.numItems);
+          return { page, isDone: start + page.length >= matches.length, continueCursor: String(start + page.length) };
+        },
         async first() { return found()[0] ?? null; },
         async unique() {
           const matches = found();

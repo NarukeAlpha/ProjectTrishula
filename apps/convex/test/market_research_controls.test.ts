@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { manualTrigger, saveControlSettings, savePreferences } from "../convex/market_research.js";
+import { checkDueEditions, manualTrigger, saveControlSettings, savePreferences, setEnabled } from "../convex/market_research.js";
 import { scheduledEditionKey } from "../convex/lib/market_research.js";
 import { convexMutationFixture, invokeMutation } from "./helpers/convex-fixture.js";
 
@@ -102,13 +102,16 @@ describe("fixed full-edition newspaper controls", () => {
       .toMatchObject({ enabled: true, localHour: 9, revision: 3 });
   });
 
-  it("does not bypass owner, calendar, or forum gates when scheduling", async () => {
+  it("keeps owner, timezone, forum and publication-permission checks when scheduling", async () => {
     const db = fixture();
-    await expect(invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true }))
-      .rejects.toThrow("market_session_calendar_stale");
-    addCalendar(db);
     await expect(invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true, forumChannelId: null }))
-      .rejects.toThrow("An enabled schedule requires");
+      .rejects.toThrow("forum_not_configured");
+    await expect(invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true, timezoneConfirmed: false }))
+      .rejects.toThrow("schedule_timezone_unconfirmed");
+    db.rows("discordChannels")[0]!.canSendInThreads = false;
+    await expect(invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true }))
+      .rejects.toThrow("forum_permissions_incomplete");
+    db.rows("discordChannels")[0]!.canSendInThreads = true;
     vi.stubEnv("MARKET_RESEARCH_OWNER_ID", "other_owner");
     await expect(invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true }))
       .rejects.toThrow("market_research_disabled");
@@ -122,6 +125,110 @@ describe("fixed full-edition newspaper controls", () => {
       .toMatchObject({ enabled: true, includeCharts: true });
     expect(await invokeMutation(manualTrigger, db.ctx, { ...publish, requestId: "text-fallback" }))
       .toMatchObject({ kind: "edition", duplicate: false });
+  });
+
+  it.each([
+    [{ timezone: "not-a-timezone" }, "schedule_timezone_invalid"],
+    [{ timezoneConfirmed: false }, "schedule_timezone_unconfirmed"],
+    [{ localHour: 24 }, "schedule_time_invalid"],
+    [{ localMinute: -1 }, "schedule_time_invalid"],
+    [{ forumChannelId: null }, "forum_not_configured"],
+  ] as const)("returns a safe structured scheduling error for %s", async (changed, code) => {
+    const db = fixture();
+    await expect(invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true, ...changed }))
+      .rejects.toMatchObject({ data: { code } });
+    expect(db.rows("marketResearchPreferences")).toHaveLength(0);
+  });
+
+  it("returns safe forum and owner codes instead of redacted plain errors", async () => {
+    const db = fixture();
+    await invokeMutation(saveControlSettings, db.ctx, settings);
+    db.rows("discordChannels")[0]!.type = "text";
+    await expect(invokeMutation(setEnabled, db.ctx, { guildId: "guild_1", enabled: true }))
+      .rejects.toMatchObject({ data: { code: "forum_wrong_channel_type" } });
+    db.rows("discordChannels")[0]!.type = "forum";
+    db.rows("discordChannels")[0]!.canSendInThreads = false;
+    await expect(invokeMutation(manualTrigger, db.ctx, publish))
+      .rejects.toMatchObject({ data: { code: "forum_permissions_incomplete" } });
+    vi.stubEnv("MARKET_RESEARCH_OWNER_ID", "other_owner");
+    await expect(invokeMutation(setEnabled, db.ctx, { guildId: "guild_1", enabled: true }))
+      .rejects.toMatchObject({ data: { code: "market_research_disabled" } });
+  });
+});
+
+describe("scheduling with optional market-session calendar context", () => {
+  function calendarState(db: ReturnType<typeof fixture>, state: "missing" | "stale" | "partial" | "fresh") {
+    if (state === "missing") return;
+    addCalendar(db);
+    const calendar = db.rows("marketSessionCalendars")[0]!;
+    if (state === "stale") calendar.retrievedAt = now - 46 * 86_400_000;
+    if (state === "partial") calendar.effectiveEnd = "2026-09-07";
+  }
+
+  it.each(["missing", "stale", "partial", "fresh"] as const)("all enablement entry points accept a %s calendar", async (state) => {
+    const db = fixture();
+    calendarState(db, state);
+    const saved = await invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true });
+    expect(saved.enabled).toBe(true);
+    const { configurationSnapshotHash: _, ...preferences } = saved;
+    expect(await invokeMutation(savePreferences, db.ctx, { preferences: { ...preferences, enabled: true } }))
+      .toMatchObject({ enabled: true });
+    await invokeMutation(setEnabled, db.ctx, { guildId: "guild_1", enabled: false });
+    expect(await invokeMutation(setEnabled, db.ctx, { guildId: "guild_1", enabled: true }))
+      .toMatchObject({ enabled: true });
+    expect(db.rows("marketResearchPreferences")[0]?.enabled).toBe(true);
+    expect(db.scheduled).toHaveLength(0);
+  });
+
+  it("enables legacy null-provider preferences without adding or approving a numerical provider", async () => {
+    const db = fixture();
+    const saved = await invokeMutation(saveControlSettings, db.ctx, settings);
+    const { configurationSnapshotHash: _, ...preferences } = saved;
+    expect(await invokeMutation(savePreferences, db.ctx, {
+      preferences: { ...preferences, marketDataProviderId: null, enabled: true },
+    })).toMatchObject({ enabled: true, marketDataProviderId: null });
+    await invokeMutation(setEnabled, db.ctx, { guildId: "guild_1", enabled: false });
+    expect(await invokeMutation(setEnabled, db.ctx, { guildId: "guild_1", enabled: true }))
+      .toMatchObject({ enabled: true });
+    expect(db.rows("marketResearchPreferences")[0]?.marketDataProviderId).toBeNull();
+    expect(db.rows("marketDataProviderEvaluations")).toHaveLength(0);
+    vi.setSystemTime(Date.parse("2026-09-08T12:00:00Z"));
+    expect(await invokeMutation(checkDueEditions, db.ctx, {})).toMatchObject({ created: 1 });
+    expect(db.rows("marketResearchEditions")[0]?.configurationSnapshot)
+      .toMatchObject({ enabled: true, marketDataProviderId: null });
+  });
+
+  it.each(["missing", "stale", "partial"] as const)("queues one due edition with unknown session context for a %s calendar", async (state) => {
+    const db = fixture();
+    calendarState(db, state);
+    vi.setSystemTime(Date.parse("2026-09-08T12:00:00Z"));
+    await invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true });
+    expect(await invokeMutation(checkDueEditions, db.ctx, {}))
+      .toMatchObject({ scanned: 1, created: 1, skipped: 0, existing: 0, hasMore: false });
+    expect(db.rows("marketResearchEditions")).toHaveLength(1);
+    expect(db.rows("marketResearchEditions")[0]).toMatchObject({
+      trigger: "scheduled", status: "queued", sessionType: "UNKNOWN", editionDate: "2026-09-08",
+      previousSessionDate: null, previousSessionClose: null, nextSessionDate: null,
+    });
+    expect(db.rows("marketResearchEvidence")).toHaveLength(1);
+    expect(db.rows("marketResearchEvidence")[0]).toMatchObject({
+      kind: "calendar", sourcePolicy: "unavailable", contentStatus: "failed", sessionLabel: "unknown",
+    });
+    expect(db.scheduled).toHaveLength(1);
+    expect(await invokeMutation(checkDueEditions, db.ctx, {}))
+      .toMatchObject({ scanned: 1, created: 0, skipped: 0, existing: 1, hasMore: false });
+    expect(db.rows("marketResearchEditions")).toHaveLength(1);
+    expect(db.scheduled).toHaveLength(1);
+  });
+
+  it("still uses reviewed fresh calendar evidence when it is available", async () => {
+    const db = fixture();
+    calendarState(db, "fresh");
+    vi.setSystemTime(Date.parse("2026-09-08T12:00:00Z"));
+    await invokeMutation(saveControlSettings, db.ctx, { ...settings, enabled: true });
+    expect(await invokeMutation(checkDueEditions, db.ctx, {})).toMatchObject({ created: 1 });
+    expect(db.rows("marketResearchEditions")[0]).toMatchObject({ sessionType: "CLOSED", calendarVersion: "test-calendar" });
+    expect(db.rows("marketResearchEvidence")[0]).toMatchObject({ sourcePolicy: "approved", contentStatus: "available" });
   });
 });
 

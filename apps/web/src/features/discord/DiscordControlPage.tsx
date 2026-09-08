@@ -16,6 +16,7 @@ import type {
 } from "../../convex/types";
 import { formatAge } from "../../shared/formatting/values";
 import { discordInstallUrl } from "./discordInstall";
+import { newspaperActionError } from "./newspaperActionError";
 import {
   newspaperFailureMessage,
   newspaperPreviewSummary,
@@ -428,20 +429,20 @@ function MarketResearchSettings({
     setSavedOverride({ revision: preferences?.revision, settings });
   }
 
-  async function save(scheduleEnabled: boolean) {
+  async function save(action: "save" | "schedule") {
     setBusy(true);
     setMessage(null);
     try {
-      await persist(scheduleEnabled);
+      await persist(action === "schedule" || scheduled);
       setMessage(
-        scheduleEnabled
+        action === "schedule"
           ? "Newspaper scheduled."
-          : "Settings saved. Click Schedule now to apply the schedule.",
+          : scheduled
+            ? "Settings saved. Schedule unchanged."
+            : "Settings saved. Click Schedule now to apply the schedule.",
       );
-    } catch {
-      setMessage(
-        "Could not save the newspaper. Check the selected forum and time. The research service must be ready before scheduling.",
-      );
+    } catch (error) {
+      setMessage(newspaperActionError(action, error));
     } finally {
       setBusy(false);
     }
@@ -450,17 +451,19 @@ function MarketResearchSettings({
   async function runTest() {
     setBusy(true);
     setMessage(null);
+    let settingsSaved = false;
     try {
       const requestId = newspaperTestRequestId(controlSettings(scheduled));
       await persist(scheduled);
+      settingsSaved = true;
       await onTest(guild.guildId, requestId);
       acknowledgeNewspaperTest(guild.guildId, requestId);
       setMessage(
         "Test queued. Research will post in the selected forum. The scheduled edition is separate.",
       );
-    } catch {
+    } catch (error) {
       setMessage(
-        "Could not queue the newspaper. Check forum access and research service readiness, then retry.",
+        newspaperActionError(settingsSaved ? "test" : "test_save", error),
       );
     } finally {
       setBusy(false);
@@ -614,7 +617,7 @@ function MarketResearchSettings({
           type="button"
           aria-label="Save morning newspaper"
           disabled={busy}
-          onClick={() => void save(scheduled)}
+          onClick={() => void save("save")}
         >
           Save
         </button>
@@ -628,7 +631,7 @@ function MarketResearchSettings({
         <button
           type="button"
           disabled={busy || !scheduleReady || scheduled}
-          onClick={() => void save(true)}
+          onClick={() => void save("schedule")}
         >
           {scheduled ? "Scheduled" : "Schedule now"}
         </button>

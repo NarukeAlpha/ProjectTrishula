@@ -52,16 +52,16 @@ The pinned SDK does not expose Search or Contents cancellation. Pi closes the ed
 
 The Pi service preserves `EXA_API_KEY` and `EXA_MAX_COST_USD_PER_EDITION`; it does not define their values. Set them only in the Railway service secret store. Pi requires the Exa key only when its feature flag is true. Health returns only `exaConfigured: true|false`; it does not return a prefix, suffix, length, hash, fingerprint, header, or request object.
 
-The current Pi runtime constructs `DisabledMarketDataProvider`. Saving a `marketDataProviderId` in Convex does not activate market data. Integrate and approve a licensed adapter before you enable a schedule. Until then, the runner can produce only a visible `Data unavailable` operational edition with no setup scores or market conclusion. Do not use that safe degradation as evidence that the numerical data gate passed.
+The current Pi runtime uses agent-selected Exa searches and reads. It does not construct the optional numerical-data adapter. Saving a legacy `marketDataProviderId` in Convex does not activate that adapter. Missing numerical fields stay explicit while sourced qualitative research can publish.
 
-Keep the defaults false until the Exa, licensed market-data, current-and-next-year NYSE calendar, private Discord forum, restart, real 08:00, and three-edition acceptance gates pass. Keep the existing **Market Research** automation active. Pause it only after explicit owner approval; never delete it as part of deployment.
+The current agent-led newspaper needs enabled research/publication services, Exa access, working model authentication, and a usable Discord forum. A licensed numerical adapter and stored NYSE calendar are not scheduling prerequisites. Keep any existing **Market Research** automation unchanged unless the owner explicitly approves a cutover; never delete it as part of deployment.
 
 Use this order for a controlled rollout:
 
 1. Plan and review Railway infrastructure. Do not include secret values in the plan output.
-2. Load and review an official calendar snapshot. It must cover the current date through the end of the next calendar year and be no more than 45 days old at enablement.
-3. Configure the Exa secret and reviewed cost ceiling. Run the live Exa smoke test and the opt-in Financial Datasets evaluation without changing the account's Zero Data Retention setting.
-4. Integrate and validate the licensed market-data adapter. Prove current premarket timestamps and session labels for every primary symbol.
+2. Optionally load a reviewed official calendar snapshot for session context. Without valid coverage, research proceeds with an unknown session. The saved timezone and local publish time control scheduling independently.
+3. Configure the Exa secret and reviewed cost ceiling. Run the live Exa smoke test without changing the account's Zero Data Retention setting.
+4. Verify sourced research and explicit missing-data handling. A separate numerical-provider evaluation is needed only if that optional integration is requested.
 5. Keep the preference schedule and Discord publication disabled. Temporarily enable Pi only for an isolated private preview. The preview uses an `MRP-` ID and cannot create an edition, scheduled key, delivery, or forum thread.
 6. Validate unattended composition after a Pi restart. Then enable Discord publication in a private forum and test reconciliation, partial delivery, permissions, mention suppression, and optional charts.
 7. Observe one real scheduled 08:00 edition and accept three consecutive scheduled editions before the owner considers cutover.

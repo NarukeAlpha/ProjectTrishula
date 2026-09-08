@@ -1067,9 +1067,9 @@ For U.S. equities, use versioned NYSE-published holiday and early-close schedule
 
 Calendar policy:
 
-- Load the current and next calendar year before production enablement.
+- Calendar snapshots are optional research context, not a prerequisite for scheduling or publication.
 - Refresh the official calendar snapshot at least monthly and when an exchange notice changes a session.
-- Fail closed to `session_unknown` when the required date is outside the reviewed range.
+- When the date is outside the reviewed range, freeze an unknown session and let research continue with the limitation visible. Do not invent session times.
 - Do not infer a holiday only because quotes are missing.
 - Test observed holidays, Monday after a holiday, ad-hoc closures, early closes, year boundaries, and both daylight-saving transitions.
 

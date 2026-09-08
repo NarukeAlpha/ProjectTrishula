@@ -2,6 +2,14 @@
 
 The morning market newspaper is a separate scheduled system. It does not use a Discord message, a conversation-loop cursor, `discordLoopRuns`, `discordOutbox`, or the `/discord` Pi route.
 
+## Current scheduling behavior
+
+**Save** stores the server settings. **Test now** saves them and publishes a separate research edition. **Schedule now** enables the saved local-time schedule; unchanged enabled settings show **Scheduled**. Scheduling requires the configured owner, a confirmed valid timezone and time, and a usable forum route. It does not require a stored exchange calendar or a licensed numerical feed. The active Pi runner researches through Exa and can publish sourced qualitative analysis with missing data disclosed.
+
+An absent, stale, or incomplete calendar leaves the frozen session unknown. It does not block schedule enablement, the due-edition cron, or publication. Valid calendar evidence remains available as optional context. Calendar upload and override validation still protect session facts. Expected control errors return safe codes so the page can distinguish scheduling, saving, and test failures without exposing server details.
+
+The legacy numerical-provider rollout guidance below applies only to that optional adapter, not to enabling the current agent-led newspaper.
+
 Each process defaults its service-level market-research gate to disabled when the related environment variable is absent. Railway preserves the deployed values. The control page cannot change these service-level gates.
 
 Repository implementation is not production readiness. The Exa, calendar, composition, market-data, Discord, schedule, and cutover gates need live evidence that repository tests cannot provide. Pi contains an Exa Financial Datasets adapter, but it stays unavailable unless the runtime gate, recorded owner decision, explicit cost cap, and frozen server preference all select it. The repository does not contain a live Financial Datasets evaluation result.
@@ -44,7 +52,7 @@ Pi retains the last 128 cost observations in memory and submits each observation
 
 The durable observed-cost fields are separate from the accepted evidence-derived `exaCostUsd`. A known cost increases `exaObservedCostUsd`. A missing cost increases `exaUnknownCostEventCount`. This delivery is not a disk spool, so process termination before a successful delivery can lose an observation. An abandoned observation and its later settlement do not share a provider attempt ID. The unknown count therefore remains conservative even when a later event records a known cost. Review both cost records and provider billing before an owner requests a manual retry.
 
-An owner can save settings and run a preview with no forum. Enabling a schedule fails closed unless it has a confirmed timezone, a valid forum and tag configuration, a reviewed market-session calendar, and a configured market-data provider identifier.
+An owner can save settings and run a preview with no forum. Enabling a schedule requires a confirmed timezone and a valid forum and tag configuration. The legacy provider identifier is supplied internally; it does not require a numerical-provider account or activation.
 
 A configured provider identifier is not an approval. Pi constructs the Financial Datasets adapter only when the server preference is `exa_financial_datasets`, `MARKET_DATA_PROVIDER_ID=exa_financial_datasets`, `EXA_FINANCIAL_DATASETS_OWNER_DECISION=approved`, and a positive per-request cap is configured. Every other combination uses the unavailable provider. Keep the schedule disabled until the live data gate passes.
 
@@ -69,7 +77,7 @@ Do not use `--confirm-zdr-disabled` when the account state is enabled or unknown
 
 The runtime adapter supports grounded current price, grounded prior close, grounded daily and weekly OHLCV bars, and grounded corporate actions when Financial Datasets returns them. It does not claim support for 5-minute, 15-minute, or 60-minute bars, premarket high or low, premarket volume, bid, ask, spread, a market-movers feed, or an exchange calendar. It uses the reviewed frozen Convex calendar. Unsupported values remain unavailable and cannot be inferred from prior-close or daily data.
 
-After an approved evaluation and independent comparison, set the three Pi provider controls to the values described above. Then select **Exa Connect Financial Datasets** in the server settings. A saved server choice does not change the Pi runtime or owner decision. Run a preview before publication. Enable the saved schedule only after the owner also confirms the timezone, selects the forum and tag, and completes the calendar and publication gates.
+For an optional Financial Datasets integration, an approved evaluation and independent comparison must precede provider activation. The current control page does not expose provider selection. This separate adapter evaluation does not block the agent-led newspaper schedule.
 
 ## Required production gates
 
@@ -78,7 +86,7 @@ Complete these gates outside this repository before the production schedule and 
 1. Approve Exa source rights, cost, redaction, retention, and Zero Data Retention behavior. Record an explicit production policy for FinancialJuice, Barchart, ForexFactory, Yahoo, and TradingView. A source without permission must remain visibly unavailable, and no local scraper can bypass the decision. Run an opt-in live Search and Contents smoke test. Retain only safe request IDs, HTTPS sources, bounded highlights, statuses, and returned cost. Do not print or fingerprint the key.
 2. Run the opt-in Financial Datasets evaluation command at the configured 08:00 instant on a regular market day. Record the configured local time and Eastern market time, access result, per-field support, citations, cost, latency, and independent price and prior-close comparison. If the account rejects `dataSources` because of Zero Data Retention, record `exa_connect_zdr_incompatible`. Do not change the account setting automatically. The owner must record `approved`, `partial`, or `rejected`.
 3. Approve the implemented Financial Datasets adapter only for fields that the live evaluation proves. Verify every primary symbol's price, prior close, supported bars, timestamps, session labels, entitlement, delay, grounding, and conflict behavior on a regular market day. Keep the unsupported fields listed above unavailable. A mocked adapter test or a completed CLI process does not satisfy this gate.
-4. Load a reviewed NYSE calendar snapshot from an approved official host. At enablement, it must be no more than 45 days old and cover the current date through December 31 of the next calendar year. Store the official URL, retrieval time, effective range, hash, version, and bounded daily sessions. Use an immutable owner override for an emergency closure.
+4. Optionally load a reviewed NYSE calendar snapshot from an approved official host. Store the official URL, retrieval time, effective range, hash, version, and bounded daily sessions. Use an immutable owner override for an emergency closure. Missing calendar coverage is disclosed, not a scheduling blocker.
 5. Prove unattended composition readiness. Restart Pi before a staging run and confirm that the mounted Codex authentication works without an interactive login. Exercise authentication-required, provider-not-ready, timeout, bad-schema, and unknown-citation failures.
 6. Grant the bot View Channel, Send Messages, Create Posts, Send Messages in Threads, Read Message History, and Attach Files when charts are enabled. Select a valid non-moderated required tag.
 7. Run an isolated preview and a published edition in a private forum. Test Pi restart during research, Discord restart after partial replies, permission removal and restoration, rate limiting, ambiguous thread creation, duplicate reconciliation, mention suppression, chart fallback, and secret redaction. If charts are planned, enable both chart controls for this controlled private-forum acceptance run. Keep the saved schedule off until the run passes.
@@ -97,7 +105,7 @@ On success, Convex stores a result fingerprint and a bounded quality summary. Th
 
 On failure, Convex stores only the safe failure and a short operator summary. When the provider gates do not match or supported grounded numerical fields are unavailable, the runner instead produces a visible `Data unavailable` operational edition with no setup scores or market conclusion. A completed degraded preview proves the isolated path and strict contract. It does not satisfy the licensed numerical-data gate.
 
-Use **Run preview** for this path. Preview can initialize an unscheduled settings draft and run without a selected forum. It still requires the Pi service gate, Exa credential, reviewed calendar, and any selected provider's matching runtime gates. Use **Publish now** only after the forum and all data gates pass. **Cancel queued edition** never cancels a running preview or edition. **Retry edition** preserves the existing edition and durable evidence. **Reconcile forum thread** searches external Discord state and cannot create a second starter.
+The internal preview path can run without a selected forum or reviewed calendar; it requires the research runtime and Exa credential. The current page uses **Test now**, which publishes a separate edition and therefore requires a usable forum. Recovery APIs preserve edition identity and durable evidence; reconciliation searches external Discord state and cannot create a second starter.
 
 ## Calendar operations
 
@@ -105,7 +113,7 @@ Use the owner-authenticated Convex functions `market_research:saveSessionCalenda
 
 Calendar writes reject duplicate dates, invalid time fields, private or credential-bearing URLs, oversized snapshots, invalid effective ranges, and a reused version with a different hash. Overrides are immutable. Their stable ID binds the owner, calendar, date, status, reason, source, and effective interval.
 
-Schedule enablement requires a reviewed calendar from an approved official host. It must have been retrieved within the prior 45 days and cover the current date through the end of the next calendar year. Runtime resolution also requires the edition date to remain inside the reviewed effective range. If any runtime requirement fails, Convex freezes `UNKNOWN` with the `Data unavailable` label instead of inferring a session from missing quotes.
+Calendar context is optional. To use a stored snapshot as session evidence, it must come from an approved official host, have been retrieved within the prior 45 days, and cover the edition date. Otherwise, Convex freezes `UNKNOWN` instead of inferring a session from missing quotes. Research and publication continue; the public report uses the ordinary market-research fallback title when the internal label is `Data unavailable`.
 
 Convex applies a matching immutable owner override before it freezes the session. It also freezes the previous and next open session dates, calendar version, edition date, configured timezone, and schedule instant. Weekend, holiday, late, and ordinary labels come from this frozen context. Pi can report a provider conflict, but it cannot replace the frozen session. A provider-calendar session conflict removes market conclusions and remains visible in data quality.
 
@@ -186,7 +194,7 @@ Common operator actions are:
 | `edition_lease_lost` | Discard the stale worker result. Let the fenced recovery path claim a new generation. |
 | `market_data_not_configured` | Keep the schedule disabled. Complete the licensed-provider gate. |
 | `market_data_stale`, `market_data_conflict`, or `market_data_unavailable` | Inspect timestamps, session labels, entitlement, and provider health. Do not infer or average a replacement value. |
-| `market_session_calendar_stale` | Load and review the required official calendar range. |
+| `market_session_calendar_stale` | Check an optional calendar upload or override. Missing calendar coverage does not block scheduling. |
 | `session_unknown` | Repair the reviewed calendar or immutable override. Do not infer the session from quotes. |
 | `exa_not_configured` or `exa_auth_failed` | Repair the Pi-only secret. Do not print it. |
 | `exa_budget_exhausted` | Review the returned edition cost and approved ceiling before changing the cap. |

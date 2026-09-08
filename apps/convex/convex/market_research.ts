@@ -1,5 +1,5 @@
 /* oxlint-disable anti-slop/no-conditional-empty-object-spread, anti-slop/require-safety-comment-for-type-assertion, anti-slop/no-unknown-parameters, anti-slop/no-known-value-widening -- Convex mutations validate untrusted Pi JSON with strict Zod schemas and omit absent exact optional fields before persistence. */
-import { v, type Infer } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { z } from "zod";
 import { internal } from "./_generated/api.js";
 import type { Doc } from "./_generated/dataModel.js";
@@ -32,7 +32,6 @@ import {
   dueScheduleDecision,
   firstMissingDeliverySequence,
   hasCompleteCalendarDateCoverage,
-  hasConfirmedPriorSession,
   isNonPublicHostname,
   manualEditionDisposition,
   manualTestEditionKey,
@@ -79,7 +78,7 @@ function isConfiguredMarketResearchOwner(ownerId: string): boolean {
 }
 
 function requireConfiguredMarketResearchOwner(ownerId: string): void {
-  if (!isConfiguredMarketResearchOwner(ownerId)) throw new Error("market_research_disabled");
+  if (!isConfiguredMarketResearchOwner(ownerId)) throw new ConvexError({ code: "market_research_disabled" });
 }
 const PROHIBITED_BROKERAGE_LANGUAGE = /\b(?:placed|submitted|executed|bought|sold|entered|exited|cancelled|canceled|modified)\s+(?:an?\s+)?(?:order|position|trade)\b/i;
 const REQUESTED_SOURCES = ["FinancialJuice", "Barchart", "ForexFactory", "Yahoo", "TradingView"] as const;
@@ -232,7 +231,7 @@ function validateTimezone(timezone: string): void {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(0));
   } catch {
-    throw new Error("The market-research timezone is invalid.");
+    throw new ConvexError({ code: "schedule_timezone_invalid" });
   }
 }
 
@@ -248,7 +247,7 @@ function validatePreferences(value: Preferences, ownerId: string): Preferences {
     value.localHour < 0 || value.localHour > 23 || !Number.isSafeInteger(value.localHour)
     || value.localMinute < 0 || value.localMinute > 59 || !Number.isSafeInteger(value.localMinute)
     || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value.lateEditionCutoffLocalTime)
-  ) throw new Error("The market-research schedule is invalid.");
+  ) throw new ConvexError({ code: "schedule_time_invalid" });
   if (
     value.primarySymbols.length < 1 || value.primarySymbols.length > 10
     || value.sectorSymbols.length > 20
@@ -275,9 +274,8 @@ function validatePreferences(value: Preferences, ownerId: string): Preferences {
     || value.maximumRankedSetups < 1 || value.maximumRankedSetups > 10
     || value.maximumCharts < 0 || value.maximumCharts > 3
   ) throw new Error("Market-research budgets are invalid.");
-  if (value.enabled && (!value.timezoneConfirmed || value.forumChannelId === null || value.marketDataProviderId === null)) {
-    throw new Error("An enabled schedule requires confirmed timezone, forum, and market-data provider.");
-  }
+  if (value.enabled && !value.timezoneConfirmed) throw new ConvexError({ code: "schedule_timezone_unconfirmed" });
+  if (value.enabled && value.forumChannelId === null) throw new ConvexError({ code: "forum_not_configured" });
   if (value.forumTagIds.length > 5 || !unique(value.forumTagIds)) throw new Error("Forum tags are invalid.");
   if (value.durableTheses.length > 50) throw new Error("Durable theses are invalid.");
   return { ...value, editionDepth: "full" };
@@ -289,7 +287,7 @@ async function validateForum(
   requireAttachmentPermission = false,
 ): Promise<void> {
   if (preferences.forumChannelId === null) {
-    if (preferences.enabled) throw new Error("forum_not_configured");
+    if (preferences.enabled) throw new ConvexError({ code: "forum_not_configured" });
     return;
   }
   const channel = await ctx.db
@@ -299,8 +297,8 @@ async function validateForum(
       .eq("guildId", preferences.guildId)
       .eq("channelId", preferences.forumChannelId ?? ""))
     .unique();
-  if (!channel?.available) throw new Error("forum_not_configured");
-  if (channel.type !== "forum") throw new Error("forum_wrong_channel_type");
+  if (!channel?.available) throw new ConvexError({ code: "forum_not_configured" });
+  if (channel.type !== "forum") throw new ConvexError({ code: "forum_wrong_channel_type" });
   const capabilities = normalizeDiscordForumCapabilities(channel);
   if (
     !channel.canView
@@ -308,13 +306,13 @@ async function validateForum(
     || !capabilities.canSendInThreads
     || !capabilities.canReadThreadHistory
     || (requireAttachmentPermission && preferences.includeCharts && !capabilities.canAttachFiles)
-  ) throw new Error("forum_permissions_incomplete");
+  ) throw new ConvexError({ code: "forum_permissions_incomplete" });
   const tags = new Map(capabilities.availableTags.map((tag) => [tag.id, tag]));
   for (const tagId of preferences.forumTagIds) {
     const tag = tags.get(tagId);
-    if (!tag || tag.moderated) throw new Error("forum_permissions_incomplete");
+    if (!tag || tag.moderated) throw new ConvexError({ code: "forum_permissions_incomplete" });
   }
-  if (capabilities.requiresTag && preferences.forumTagIds.length === 0) throw new Error("forum_permissions_incomplete");
+  if (capabilities.requiresTag && preferences.forumTagIds.length === 0) throw new ConvexError({ code: "forum_permissions_incomplete" });
 }
 
 async function preferenceByOwnerGuild(
@@ -391,32 +389,6 @@ async function currentCalendarForOwner(
       .eq("calendarId", calendarId))
     .order("desc")
     .first();
-}
-
-async function requireCalendarEnablementGate(
-  ctx: { db: DatabaseReader },
-  calendar: Doc<"marketSessionCalendars"> | null,
-  preferences: Preferences,
-  now: number,
-): Promise<void> {
-  const currentDate = dueScheduleDecision(preferences, now).editionDate;
-  const nextYearEnd = `${Number(currentDate.slice(0, 4)) + 1}-12-31`;
-  if (!calendarSnapshotMeetsRequirements(calendar, {
-    now,
-    maximumAgeMs: MARKET_RESEARCH_CALENDAR_MAX_AGE_MS,
-    effectiveStart: currentDate,
-    effectiveEnd: nextYearEnd,
-    officialHosts: OFFICIAL_CALENDAR_HOSTS,
-  })) throw new Error("market_session_calendar_stale");
-  const overrides = await boundedCalendarOverrides(ctx, preferences.ownerId, preferences.marketSessionCalendarId, calendar);
-  try {
-    const window = resolveCalendarWindow(calendar, currentDate, now, preferences.timezone, overrides);
-    if (!hasConfirmedPriorSession(window)) {
-      throw new Error("market_session_calendar_stale");
-    }
-  } catch {
-    throw new Error("market_session_calendar_stale");
-  }
 }
 
 async function boundedCalendarOverrides(
@@ -868,14 +840,6 @@ export const savePreferences = mutation({
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
     const preferences = validatePreferences(args.preferences, actor.id);
     await validateForum(ctx, preferences, true);
-    if (preferences.enabled) {
-      const calendar = await currentCalendarForOwner(
-        ctx,
-        actor.id,
-        preferences.marketSessionCalendarId,
-      );
-      await requireCalendarEnablementGate(ctx, calendar, preferences, Date.now());
-    }
     const existing = await preferenceByOwnerGuild(ctx, actor.id, preferences.guildId);
     const nowIso = new Date().toISOString();
     const revision = existing === null ? 0 : existing.revision + 1;
@@ -1081,13 +1045,9 @@ export const setEnabled = mutation({
   handler: async (ctx, args) => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
     const existing = await preferenceByOwnerGuild(ctx, actor.id, requireId(args.guildId, "guildId"));
-    if (!existing) throw new Error("forum_not_configured");
+    if (!existing) throw new ConvexError({ code: "forum_not_configured" });
     const next = validatePreferences({ ...storedPreferences(existing), enabled: args.enabled }, actor.id);
     await validateForum(ctx, next);
-    if (next.enabled) {
-      const calendar = await currentCalendarForOwner(ctx, actor.id, next.marketSessionCalendarId);
-      await requireCalendarEnablementGate(ctx, calendar, next, Date.now());
-    }
     const updatedAt = new Date().toISOString();
     const revision = existing.revision + 1;
     const snapshot: Preferences = { ...next, revision, updatedAt };
@@ -1140,14 +1100,6 @@ export const saveControlSettings = mutation({
       maximumRankedSetups: args.maximumRankedSetups,
     }, actor.id);
     await validateForum(ctx, next);
-    if (next.enabled) {
-      const calendar = await currentCalendarForOwner(
-        ctx,
-        actor.id,
-        next.marketSessionCalendarId,
-      );
-      await requireCalendarEnablementGate(ctx, calendar, next, Date.now());
-    }
     if (existing && canonicalJson(next) === canonicalJson(base)) {
       return { ...base, configurationSnapshotHash: existing.configurationSnapshotHash };
     }
@@ -1273,7 +1225,7 @@ export const manualTrigger = mutation({
       throw new Error("A test request must publish a new edition.");
     }
     const preferences = await preferenceByOwnerGuild(ctx, actor.id, requireId(args.guildId, "guildId"));
-    if (!preferences) throw new Error("market_research_disabled");
+    if (!preferences) throw new ConvexError({ code: "market_research_disabled" });
     const now = Date.now();
     const decision = dueScheduleDecision(preferences, now);
     if (args.dryRun) {
@@ -1318,7 +1270,7 @@ export const manualTrigger = mutation({
         status: "queued" as const,
       };
     }
-    if (preferences.forumChannelId === null) throw new Error("forum_not_configured");
+    if (preferences.forumChannelId === null) throw new ConvexError({ code: "forum_not_configured" });
     await validateForum(ctx, preferences);
     const manualDecision = {
       ...decision,

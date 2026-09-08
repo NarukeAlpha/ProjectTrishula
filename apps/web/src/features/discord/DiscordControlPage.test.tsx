@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConvexError } from "convex/values";
 import type {
   DiscordConversationPrivacyDeletionReadModel,
   DiscordConversationResetReadModel,
@@ -577,7 +578,9 @@ describe("Discord control surface", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Test now" }));
     await waitFor(() =>
-      expect(screen.getByText(/Could not queue/)).toBeVisible(),
+      expect(
+        screen.getByText(/Could not save the settings for the test/),
+      ).toBeVisible(),
     );
     expect(onAction).not.toHaveBeenCalled();
   });
@@ -600,7 +603,9 @@ describe("Discord control surface", () => {
     const test = screen.getByRole("button", { name: "Test now" });
     fireEvent.click(test);
     await waitFor(() =>
-      expect(screen.getByText(/Could not queue/)).toBeVisible(),
+      expect(
+        screen.getByText(/Could not confirm the test was queued/),
+      ).toBeVisible(),
     );
     fireEvent.click(test);
     await waitFor(() => expect(screen.getByText(/Test queued/)).toBeVisible());
@@ -628,7 +633,9 @@ describe("Discord control surface", () => {
     const first = render(view());
     fireEvent.click(screen.getByRole("button", { name: "Test now" }));
     await waitFor(() =>
-      expect(screen.getByText(/Could not queue/)).toBeVisible(),
+      expect(
+        screen.getByText(/Could not confirm the test was queued/),
+      ).toBeVisible(),
     );
     first.unmount();
     render(view());
@@ -706,25 +713,134 @@ describe("Discord control surface", () => {
   });
 
   it("does not claim Scheduled when the backend rejects scheduling", async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error("unavailable"));
     render(
       <DiscordControlView
         model={controlPlane()}
         marketResearch={[readyNewspaperStatus()]}
         onSetGuildRouting={vi.fn()}
-        onSaveMarketResearch={vi
-          .fn()
-          .mockRejectedValue(new Error("unavailable"))}
+        onSaveMarketResearch={onSave}
         onResetGuildConversation={resetGuildConversation}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Schedule now" }));
     await waitFor(() =>
-      expect(screen.getByText(/Could not save/)).toBeVisible(),
+      expect(
+        screen.getByText(/Could not schedule the newspaper/),
+      ).toBeVisible(),
+    );
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true }),
     );
     expect(
       screen.queryByRole("button", { name: "Scheduled" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Schedule now" })).toBeEnabled();
+  });
+
+  it.each([
+    ["forum_not_configured", "Select an available forum in this server."],
+    [
+      "forum_permissions_incomplete",
+      "Check the bot's forum posting and history permissions",
+    ],
+    ["market_research_disabled", "Research is unavailable for this account."],
+    ["schedule_timezone_invalid", "Choose a valid schedule timezone."],
+    [
+      "schedule_timezone_unconfirmed",
+      "Choose and confirm the schedule timezone.",
+    ],
+    ["schedule_time_invalid", "Choose a valid local publish time."],
+  ])(
+    "shows the actionable %s reason when scheduling is rejected",
+    async (code, reason) => {
+      render(
+        <DiscordControlView
+          model={controlPlane()}
+          marketResearch={[readyNewspaperStatus()]}
+          onSetGuildRouting={vi.fn()}
+          onSaveMarketResearch={vi
+            .fn()
+            .mockRejectedValue(
+              new ConvexError({ code, detail: "private-backend-detail" }),
+            )}
+          onResetGuildConversation={resetGuildConversation}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Schedule now" }));
+      await waitFor(() =>
+        expect(screen.getByText((text) => text.includes(reason))).toBeVisible(),
+      );
+      expect(
+        screen.getByText(/Could not schedule the newspaper/),
+      ).not.toHaveTextContent("private-backend-detail");
+      expect(
+        screen.queryByRole("button", { name: "Scheduled" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Schedule now" }),
+      ).toBeEnabled();
+    },
+  );
+
+  it("identifies a Save failure even when preserving an existing schedule", async () => {
+    const status = readyNewspaperStatus();
+    status.preferences.enabled = true;
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[status]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi
+          .fn()
+          .mockRejectedValue(
+            new ConvexError({ code: "forum_wrong_channel_type" }),
+          )}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save morning newspaper" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Could not save the settings. Select a Discord forum, not a text channel.",
+        ),
+      ).toBeVisible(),
+    );
+    expect(screen.getByRole("button", { name: "Scheduled" })).toBeDisabled();
+    expect(screen.queryByText(/Could not schedule/)).not.toBeInTheDocument();
+  });
+
+  it("identifies a Test now rejection without exposing unexpected backend details", async () => {
+    render(
+      <DiscordControlView
+        model={controlPlane()}
+        marketResearch={[readyNewspaperStatus()]}
+        onSetGuildRouting={vi.fn()}
+        onSaveMarketResearch={vi.fn().mockResolvedValue(undefined)}
+        onTestMarketResearch={vi
+          .fn()
+          .mockRejectedValue(
+            new Error("private-server-stack bearer-secret-value"),
+          )}
+        onResetGuildConversation={resetGuildConversation}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Test now" }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Could not confirm the test was queued. Check the latest edition, then retry.",
+        ),
+      ).toBeVisible(),
+    );
+    expect(
+      screen.queryByText(/private-server-stack|bearer-secret-value/),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Test queued\./)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Test now" })).toBeEnabled();
   });
 
   it("uses new server revisions to clear an outdated Scheduled state without resetting the draft", () => {
