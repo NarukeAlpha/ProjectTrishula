@@ -76,6 +76,7 @@ export class DiscordGatewayService {
       workerId: this.workerId,
       heartbeatIntervalMs: config.leaseHeartbeatIntervalMs,
       durableConversationsEnabled: config.durableConversationsEnabled,
+      typing: { start: (channel, signal) => this.gateway.typing.start(channel, signal) },
     });
     this.gateway = new DiscordGateway({
       config,
@@ -134,6 +135,7 @@ export class DiscordGatewayService {
   async stop(): Promise<void> {
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
+    this.gateway.typing.dispose();
     await this.checkpoints.dispose();
     await this.gateway.stop();
     if (this.server !== null) {

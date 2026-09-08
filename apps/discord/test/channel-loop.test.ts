@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DiscordTypingIndicatorManager } from "../src/discord/typing.js";
 import type {
   CompleteLoopResult,
   EnqueueReplyInput,
@@ -509,6 +510,7 @@ function orchestrator(
   convex: FakeConvex,
   pi: FakePi,
   durableConversationsEnabled = false,
+  typing?: DiscordTypingIndicatorManager,
 ): ChannelLoopOrchestrator {
   return new ChannelLoopOrchestrator({
     convex,
@@ -516,6 +518,7 @@ function orchestrator(
     workerId: "worker-1",
     heartbeatIntervalMs: 60_000,
     durableConversationsEnabled,
+    typing: typing ?? new DiscordTypingIndicatorManager(async () => undefined),
   });
 }
 
@@ -672,10 +675,13 @@ describe("ChannelLoopOrchestrator", () => {
       eligibleContextHash: "eligible-context",
     };
 
-    orchestrator(convex, pi, true).schedule(channel);
+    const sendTyping = vi.fn(async () => undefined);
+    const typing = new DiscordTypingIndicatorManager(sendTyping);
+    orchestrator(convex, pi, true, typing).schedule(channel);
 
     await vi.waitFor(() => expect(convex.queued.some((item) => item.replyKind === "final")).toBe(true));
     expect(pi.durableCalls).toEqual([]);
+    expect(sendTyping).not.toHaveBeenCalled();
     expect(convex.durableWrites).toEqual([]);
     expect(convex.queued.find((item) => item.replyKind === "final")?.content)
       .toBe("The issuer update led the late-session move.");
@@ -972,5 +978,146 @@ describe("ChannelLoopOrchestrator", () => {
         retryable: false,
       },
     });
+  });
+});
+
+describe("Luna typing windows in the real channel loop", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it.each([false, true])("types only around active Luna calls, not Sol research (durable=%s)", async (durable) => {
+    const convex = new FakeConvex();
+    const pi = new FakePi();
+    const signals: AbortSignal[] = [];
+    const send = vi.fn(async (_channel: ChannelReference, signal: AbortSignal) => { signals.push(signal); });
+    const typing = new DiscordTypingIndicatorManager(send);
+    const planGate = Promise.withResolvers<void>();
+    const researchGate = Promise.withResolvers<void>();
+    const resumeGate = Promise.withResolvers<void>();
+    let modelsStarted = 0;
+    const luna = async <T>(gate: Promise<void>, run: () => Promise<T>): Promise<T> => {
+      expect(signals.at(-1)?.aborted).toBe(false);
+      modelsStarted += 1;
+      await gate;
+      return run();
+    };
+    const sol = async <T>(run: () => Promise<T>): Promise<T> => {
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      modelsStarted += 1;
+      await researchGate.promise;
+      return run();
+    };
+    if (durable) {
+      const plan = pi.frontmanPlan.bind(pi), research = pi.solResearch.bind(pi), resume = pi.frontmanResume.bind(pi);
+      pi.frontmanPlan = (input) => luna(planGate.promise, () => plan(input));
+      pi.solResearch = (input) => sol(() => research(input));
+      pi.frontmanResume = (input) => luna(resumeGate.promise, () => resume(input));
+    } else {
+      const plan = pi.triage.bind(pi), research = pi.research.bind(pi), resume = pi.reply.bind(pi);
+      pi.triage = (input) => luna(planGate.promise, () => plan(input));
+      pi.research = (input) => sol(() => research(input));
+      pi.reply = (input) => luna(resumeGate.promise, () => resume(input));
+    }
+    const loop = orchestrator(convex, pi, durable, typing);
+    loop.schedule(channel);
+    await vi.waitFor(() => expect(modelsStarted).toBe(1));
+    expect(send).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(send).toHaveBeenCalledTimes(2);
+    planGate.resolve();
+    await vi.waitFor(() => expect(modelsStarted).toBe(2));
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(send).toHaveBeenCalledTimes(2);
+    researchGate.resolve();
+    await vi.waitFor(() => expect(modelsStarted).toBe(3));
+    expect(send).toHaveBeenCalledTimes(3);
+    resumeGate.resolve();
+    await vi.waitFor(() => expect(loop.isLocallyRunning(channel)).toBe(false));
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])("cleans up silence and model failures (durable=%s)", async (durable) => {
+    for (const outcome of ["silent", "error"] as const) {
+      const convex = new FakeConvex();
+      const pi = new FakePi();
+      pi.decision = "silent"; pi.frontmanAction = "silent";
+      if (outcome === "error") {
+        const fail = async (): Promise<never> => { throw new Error("Synthetic Luna outage"); };
+        pi.triage = fail; pi.frontmanPlan = fail;
+      }
+      const signals: AbortSignal[] = [];
+      const typing = new DiscordTypingIndicatorManager(async (_channel, signal) => { signals.push(signal); });
+      const loop = orchestrator(convex, pi, durable, typing);
+      loop.schedule(channel);
+      await vi.waitFor(() => expect(loop.isLocallyRunning(channel)).toBe(false));
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  });
+
+  it("does not wait for a nonsettling typing transport before completing Luna", async () => {
+    const convex = new FakeConvex();
+    const pi = new FakePi(); pi.decision = "direct";
+    const pending = Promise.withResolvers<void>();
+    const send = vi.fn(() => pending.promise);
+    const typing = new DiscordTypingIndicatorManager(send);
+    const loop = orchestrator(convex, pi, false, typing);
+    loop.schedule(channel);
+    await vi.waitFor(() => expect(loop.isLocallyRunning(channel)).toBe(false));
+    expect(pi.calls).toEqual(["triage"]);
+    expect(convex.queued).toHaveLength(1);
+    expect(send).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    pending.resolve();
+  });
+
+  it("stops typing immediately on lease loss while Luna is still pending", async () => {
+    const convex = new FakeConvex();
+    vi.spyOn(convex, "heartbeatRun").mockResolvedValueOnce(true).mockResolvedValue(false);
+    const pi = new FakePi(); pi.decision = "silent";
+    const plan = pi.triage.bind(pi);
+    const pending = Promise.withResolvers<void>();
+    pi.triage = async (input) => { await pending.promise; return plan(input); };
+    const signals: AbortSignal[] = [];
+    const typing = new DiscordTypingIndicatorManager(async (_channel, signal) => { signals.push(signal); });
+    const loop = new ChannelLoopOrchestrator({ convex, pi, typing, workerId: "worker", heartbeatIntervalMs: 1_000 });
+    loop.schedule(channel);
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    expect(signals[0]?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(signals[0]?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(signals).toHaveLength(1);
+    pending.resolve();
+    await vi.waitFor(() => expect(loop.isLocallyRunning(channel)).toBe(false));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("uses the claimed reply channel and ignores later windows after shutdown", async () => {
+    const convex = new FakeConvex();
+    const originalClaim = convex.claimLoop.bind(convex);
+    vi.spyOn(convex, "claimLoop").mockImplementation(async (reference) => {
+      const result = await originalClaim(reference);
+      if (result.claimed) result.replyChannelId = "99";
+      return result;
+    });
+    const pi = new FakePi();
+    const plan = pi.frontmanPlan.bind(pi);
+    const pending = Promise.withResolvers<void>();
+    pi.frontmanPlan = async (input) => { await pending.promise; return plan(input); };
+    const send = vi.fn(async (_channel: ChannelReference, _signal: AbortSignal) => undefined);
+    const typing = new DiscordTypingIndicatorManager(send);
+    const loop = orchestrator(convex, pi, true, typing);
+    loop.schedule(channel);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(send.mock.calls[0]?.[0]).toEqual({ guildId: "10", channelId: "99" });
+    typing.dispose();
+    pending.resolve();
+    await vi.waitFor(() => expect(loop.isLocallyRunning(channel)).toBe(false));
+    expect(send).toHaveBeenCalledOnce();
+    expect(pi.durableCalls).toEqual(["plan", "sol", "resume"]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

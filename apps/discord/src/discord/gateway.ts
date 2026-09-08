@@ -24,6 +24,7 @@ import type {
 import type { ChannelLoopOrchestrator } from "../orchestrator/channel-loop.js";
 import { discordImageAttachments } from "../media/images.js";
 import { logger } from "../runtime/logger.js";
+import { DiscordTypingIndicatorManager, sendDiscordTyping } from "./typing.js";
 
 export interface DiscordGatewayDependencies {
   config: DiscordGatewayConfig;
@@ -170,6 +171,8 @@ export class DiscordGateway {
       GatewayIntentBits.MessageContent,
     ],
   });
+  readonly typing = new DiscordTypingIndicatorManager((channel, signal) =>
+    sendDiscordTyping(this.client, channel, signal));
 
   private connectedAt: number | undefined;
   private syncing = false;
@@ -226,6 +229,7 @@ export class DiscordGateway {
   }
 
   async stop(): Promise<void> {
+    this.typing.dispose();
     this.client.destroy();
   }
 

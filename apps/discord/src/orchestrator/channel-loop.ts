@@ -39,6 +39,7 @@ import {
 } from "../content.js";
 import { PiAgentOperationError } from "../pi/client.js";
 import { logger } from "../runtime/logger.js";
+import type { DiscordTypingIndicator } from "../discord/typing.js";
 
 export interface ChannelLoopDependencies {
   convex: ConvexLoopClient;
@@ -46,6 +47,7 @@ export interface ChannelLoopDependencies {
   workerId: string;
   heartbeatIntervalMs: number;
   durableConversationsEnabled?: boolean;
+  typing?: DiscordTypingIndicator;
 }
 
 export interface ConvexLoopClient {
@@ -330,6 +332,15 @@ export class ChannelLoopOrchestrator {
     return this.locallyRunning.has(channelKey(channel));
   }
 
+  private async withTyping<T>(claim: ClaimedLoop, signal: AbortSignal, model: () => Promise<T>): Promise<T> {
+    const stop = this.dependencies.typing?.start({ guildId: claim.guildId, channelId: claim.replyChannelId }, signal);
+    try {
+      return await model();
+    } finally {
+      stop?.();
+    }
+  }
+
   private async runDurable(
     claim: ClaimedLoop,
     identity: RunIdentity,
@@ -369,7 +380,7 @@ export class ChannelLoopOrchestrator {
     let plan = claim.recovery?.plan;
     if (plan === undefined) {
       await changeStage("triaging");
-      const planResult = await planAgent.call(this.dependencies.pi, {
+      const planResult = await this.withTyping(claim, signal, () => planAgent.call(this.dependencies.pi, {
         requestId: planRequestId,
         profile: "frontman_plan",
         triggerKind: claim.triggerKind,
@@ -377,7 +388,7 @@ export class ChannelLoopOrchestrator {
         durableContext,
         channel: agentChannel,
         messages: claim.messages,
-      }, signal);
+      }, signal));
       durableContext = await consumeNativeCheckpointRejection(
         this.dependencies,
         claim.conversation,
@@ -628,7 +639,8 @@ export class ChannelLoopOrchestrator {
         if (newest.nextExplicitTriggerSequence !== undefined) {
           resumeRequest.nextExplicitTriggerSequence = newest.nextExplicitTriggerSequence;
         }
-        const resumeResult = await resumeAgent.call(this.dependencies.pi, resumeRequest, signal);
+        const resumeResult = await this.withTyping(claim, signal,
+          () => resumeAgent.call(this.dependencies.pi, resumeRequest, signal));
         durableContext = await consumeNativeCheckpointRejection(
           this.dependencies,
           claim.conversation,
@@ -827,7 +839,7 @@ export class ChannelLoopOrchestrator {
       }
       await changeStage("triaging");
       const triageStartedAt = Date.now();
-      const triage = await this.dependencies.pi.triage(
+      const triage = await this.withTyping(claim, controller.signal, () => this.dependencies.pi.triage(
         {
           requestId: `${claim.runId}:triage`,
           profile: "triage",
@@ -840,7 +852,7 @@ export class ChannelLoopOrchestrator {
           messages: claim.messages,
         },
         controller.signal,
-      );
+      ));
       logger.info("Discord channel triage completed.", {
         channelId: channel.channelId,
         guildId: channel.guildId,
@@ -873,7 +885,8 @@ export class ChannelLoopOrchestrator {
         return result.status === "catching_up";
       }
       const target = targetMessage(triage.targetMessageId, claim.messages);
-      if (triage.question === null) {
+      const question = triage.question;
+      if (question === null) {
         throw new Error("Triage did not provide a normalized question.");
       }
 
@@ -965,7 +978,7 @@ export class ChannelLoopOrchestrator {
             channelName: claim.channelName,
           },
           messages: claim.messages,
-          question: triage.question,
+          question,
         },
         controller.signal,
       );
@@ -985,7 +998,7 @@ export class ChannelLoopOrchestrator {
       const context = replyContext(newest, claim.messages, claim.windowEnd);
       await changeStage("drafting");
       const replyStartedAt = Date.now();
-      const reply = await this.dependencies.pi.reply(
+      const reply = await this.withTyping(claim, controller.signal, () => this.dependencies.pi.reply(
         {
           requestId: `${claim.runId}:reply`,
           profile: "reply",
@@ -997,11 +1010,11 @@ export class ChannelLoopOrchestrator {
             channelName: claim.channelName,
           },
           messages: context.messages,
-          question: triage.question,
+          question,
           research,
         },
         controller.signal,
-      );
+      ));
       logger.info("Discord channel reply drafted.", {
         channelId: channel.channelId,
         guildId: channel.guildId,

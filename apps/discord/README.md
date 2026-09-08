@@ -6,6 +6,14 @@ Pi agent calls use short, authenticated job requests. The gateway submits a stag
 
 The service never sends the Discord token, CHART-IMG key, or Pi Codex OAuth data to the browser or Convex. Convex records fixed activity events for the web control page, but it does not copy message text, model prompts, credentials, or hidden reasoning into that feed.
 
+## Typing feedback
+
+Luna shows typing in the conversation's reply channel while it reviews a new message or writes its reply. The indicator starts with the model call and refreshes about every eight seconds. It is not refreshed during Sol-only research or when replaying a saved result.
+
+Typing is best-effort and does not delay or fail agent work. Refreshes stop on completion, silence, failure, lease cancellation, or service shutdown. In-flight typing requests are cancelled. Discord can keep the last indicator visible until its normal ten-second expiry; there is no separate stop-typing request. See [Discord's typing endpoint](https://docs.discord.com/developers/resources/channel#trigger-typing-indicator).
+
+This uses the existing bot token and permissions. It adds no gateway intents, settings, stored messages, or model calls. Typing does not indicate that research succeeded.
+
 ## Required Railway variables
 
 - `DISCORD_BOT_TOKEN`: Discord bot token. The health server can start without it. Add it to connect the bot.
