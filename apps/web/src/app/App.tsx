@@ -1,6 +1,6 @@
 import { useAuth } from "@workos-inc/authkit-react";
 import { useConvexAuth } from "convex/react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import {
   Navigate,
   Route,
@@ -13,13 +13,22 @@ import { useConnectionState } from "../convex/client";
 import { Composer } from "../features/composer/Composer";
 import {
   BottomNavigation,
-  DesktopNavigation,
+  PrimaryRail,
 } from "../features/navigation/BottomNavigation";
-import { isChatPathname } from "../features/navigation/routes";
+import {
+  isChatPathname,
+  isJournalPathname,
+} from "../features/navigation/routes";
 import { ThreadSidebar } from "../features/threads/ThreadSidebar";
 import { Welcome } from "../features/threads/Welcome";
 import { AuthStage } from "./AuthStage";
 import { RecoveryBanner } from "./RecoveryBanner";
+
+const JournalPage = lazy(() =>
+  import("../features/journal/JournalPage").then((module) => ({
+    default: module.JournalPage,
+  })),
+);
 
 const ThreadWorkspace = lazy(() =>
   import("../features/threads/ThreadWorkspace").then((module) => ({
@@ -69,23 +78,61 @@ function WorkOSLoginRoute() {
   );
 }
 
-function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
-  const { user, signOut } = useAuth();
-  const connection = useConnectionState();
+export function AppShell({
+  subtitle,
+  userLabel,
+  userTitle,
+  onSignOut,
+  reconnecting = false,
+  renderThreadSidebar,
+  renderRecoveryBanner,
+  journalElement,
+  askElement,
+  threadElement,
+  discordElement,
+}: {
+  subtitle: string;
+  userLabel: string;
+  userTitle?: string;
+  onSignOut: () => void;
+  reconnecting?: boolean;
+  renderThreadSidebar: (props: {
+    mobileOpen: boolean;
+    onClose: () => void;
+  }) => ReactNode;
+  renderRecoveryBanner?: (locationKey: string) => ReactNode;
+  journalElement: ReactNode;
+  askElement: ReactNode;
+  threadElement: ReactNode;
+  discordElement: ReactNode;
+}) {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isChatRoute = isChatPathname(location.pathname);
-  const reconnecting =
-    connection.hasEverConnected && !connection.isWebSocketConnected;
+  const isJournalRoute = isJournalPathname(location.pathname);
+  const section = isJournalRoute ? "journal" : isChatRoute ? "chat" : "discord";
+
   return (
-    <div className="shell" data-section={isChatRoute ? "chat" : "discord"}>
+    <div className="shell" data-section={section}>
       <KeyboardShortcuts />
-      {isChatRoute && (
-        <ThreadSidebar
-          mobileOpen={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-        />
-      )}
+      <PrimaryRail
+        subtitle={subtitle}
+        footer={
+          <div className="rail-account">
+            <span className="rail-user" title={userTitle}>
+              {userLabel}
+            </span>
+            <button type="button" onClick={onSignOut}>
+              Sign out
+            </button>
+          </div>
+        }
+      />
+      {isChatRoute &&
+        renderThreadSidebar({
+          mobileOpen: sidebarOpen,
+          onClose: () => setSidebarOpen(false),
+        })}
       <div
         className={`workspace ${isChatRoute ? "workspace--chat" : "workspace--full"}`}
       >
@@ -106,23 +153,12 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
             </span>
             <div>
               <strong>Project Trishula</strong>
-              <span>
-                {config.environment !== "production"
-                  ? config.environment
-                  : "Market research agent"}
-              </span>
+              <span>{subtitle}</span>
             </div>
           </div>
-          <DesktopNavigation />
           <div className="account">
-            <span title={user?.email}>
-              {[user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
-                user?.email}
-            </span>
-            <button
-              type="button"
-              onClick={() => signOut({ returnTo: window.location.origin })}
-            >
+            <span title={userTitle}>{userLabel}</span>
+            <button type="button" onClick={onSignOut}>
               Sign out
             </button>
           </div>
@@ -133,55 +169,90 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
             while it reconnects…
           </div>
         )}
-        {isChatRoute && <RecoveryBanner key={location.key} />}
+        {isChatRoute && renderRecoveryBanner?.(location.key)}
         <Routes>
-          <Route path="/" element={<Navigate to="/ask" replace />} />
-          <Route
-            path="/ask"
-            element={
-              <>
-                <main className="workspace-body workspace-body--with-composer">
-                  <Welcome />
-                </main>
-                <Composer activeRun={null} />
-              </>
-            }
-          />
-          <Route
-            path="/threads/:threadId"
-            element={
-              <Suspense
-                fallback={
-                  <main className="workspace-body">
-                    <div className="loading">Loading conversation…</div>
-                  </main>
-                }
-              >
-                <ThreadWorkspace />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/discord"
-            element={
-              <Suspense
-                fallback={
-                  <main className="discord-page">
-                    <div className="loading">Loading Discord control…</div>
-                  </main>
-                }
-              >
-                <DiscordControlPage
-                  applicationId={config.discordApplicationId}
-                />
-              </Suspense>
-            }
-          />
-          <Route path="*" element={<Navigate to="/ask" replace />} />
+          <Route path="/" element={<Navigate to="/journal" replace />} />
+          <Route path="/journal" element={journalElement} />
+          <Route path="/ask" element={askElement} />
+          <Route path="/threads/:threadId" element={threadElement} />
+          <Route path="/discord" element={discordElement} />
+          <Route path="*" element={<Navigate to="/journal" replace />} />
         </Routes>
         <BottomNavigation />
       </div>
     </div>
+  );
+}
+
+function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
+  const { user, signOut } = useAuth();
+  const connection = useConnectionState();
+  const reconnecting =
+    connection.hasEverConnected && !connection.isWebSocketConnected;
+  const subtitle =
+    config.environment !== "production"
+      ? config.environment
+      : "Trading journal & research";
+  const userLabel =
+    [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
+    user?.email ||
+    "Account";
+
+  return (
+    <AppShell
+      subtitle={subtitle}
+      userLabel={userLabel}
+      userTitle={user?.email}
+      onSignOut={() => signOut({ returnTo: window.location.origin })}
+      reconnecting={reconnecting}
+      renderThreadSidebar={({ mobileOpen, onClose }) => (
+        <ThreadSidebar mobileOpen={mobileOpen} onClose={onClose} />
+      )}
+      renderRecoveryBanner={(locationKey) => (
+        <RecoveryBanner key={locationKey} />
+      )}
+      journalElement={
+        <Suspense
+          fallback={
+            <main className="workspace-body">
+              <div className="loading">Loading trading journal…</div>
+            </main>
+          }
+        >
+          <JournalPage />
+        </Suspense>
+      }
+      askElement={
+        <>
+          <main className="workspace-body workspace-body--with-composer">
+            <Welcome />
+          </main>
+          <Composer activeRun={null} />
+        </>
+      }
+      threadElement={
+        <Suspense
+          fallback={
+            <main className="workspace-body">
+              <div className="loading">Loading conversation…</div>
+            </main>
+          }
+        >
+          <ThreadWorkspace />
+        </Suspense>
+      }
+      discordElement={
+        <Suspense
+          fallback={
+            <main className="discord-page">
+              <div className="loading">Loading Discord control…</div>
+            </main>
+          }
+        >
+          <DiscordControlPage applicationId={config.discordApplicationId} />
+        </Suspense>
+      }
+    />
   );
 }
 
