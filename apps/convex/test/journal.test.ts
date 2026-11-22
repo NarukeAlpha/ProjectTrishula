@@ -14,6 +14,7 @@ import {
   deleteTrade,
   expireStaleRun,
   getChartByImageKeyInternal,
+  getChartUrls,
   getDiary,
   getDiaryForOwner,
   getRunDispatchContextInternal,
@@ -677,15 +678,41 @@ describe("authenticated chart upload integrity and owner isolation", () => {
       },
     ]);
 
-    // User B has empty diary and cannot see User A's chartUrls
-    const diaryB = await invokeHandler<MutationCtx, Record<string, never>, {
-      settings: { brokerTimeZone: string };
-      trades: unknown[];
-      chartUrls: Record<string, string>;
-    }>(getDiary, ctxB, {});
-    expect(diaryB.settings.brokerTimeZone).toBe(DEFAULT_BROKER_TIME_ZONE);
-    expect(diaryB.trades).toHaveLength(0);
-    expect(diaryB.chartUrls).toEqual({});
+    // User B has empty diary (no unbounded chartUrls record on getDiary)
+    const diaryB = await invokeHandler<MutationCtx, Record<string, never>, Record<string, unknown>>(
+      getDiary,
+      ctxB,
+      {},
+    );
+    expect(diaryB).toEqual({
+      settings: { brokerTimeZone: DEFAULT_BROKER_TIME_ZONE, updatedAt: 0 },
+      trades: [],
+      lessons: [],
+      orderDays: [],
+    });
+    expect("chartUrls" in diaryB).toBe(false);
+
+    // getChartUrls resolves only owner-scoped imageKeys, deduplicates, and enforces max 32 cap
+    const urlsForA = await invokeHandler<MutationCtx, { imageKeys: string[] }, Record<string, string>>(
+      getChartUrls,
+      ctxA,
+      { imageKeys: [expectedKey, expectedKey, "f".repeat(64)] },
+    );
+    expect(urlsForA).toEqual({ [expectedKey]: uploadedA.url });
+
+    const urlsForB = await invokeHandler<MutationCtx, { imageKeys: string[] }, Record<string, string>>(
+      getChartUrls,
+      ctxB,
+      { imageKeys: [expectedKey] },
+    );
+    expect(urlsForB).toEqual({});
+
+    const tooManyKeys = Array.from({ length: 33 }, (_, index) =>
+      index.toString(16).padStart(64, "0"),
+    );
+    await expect(
+      invokeHandler(getChartUrls, ctxA, { imageKeys: tooManyKeys }),
+    ).rejects.toThrow("At most 32 chart image keys may be requested at once.");
 
     // User B uploading same PNG gets its own isolated record
     const uploadedB = await invokeHandler<ActionCtx, Record<string, unknown>, { storageId: Id<"_storage"> }>(
@@ -742,7 +769,7 @@ describe("authenticated chart upload integrity and owner isolation", () => {
       deleted: false,
     });
 
-    // Review preserved on upsertTrade, cleared explicitly via clearTradeAssistantReview
+    // Review preserved when only notes/setup/plan/thesis/adherence/mistakes change
     const run = await h.startActiveRunFor(USER_A);
     await invokeHandler(saveReviewInternal, h.ctxForUser(null), {
       ownerId: USER_A,
@@ -750,13 +777,53 @@ describe("authenticated chart upload integrity and owner isolation", () => {
       tradeStableId: "trade-a-1",
       assistantReview: "Good discipline.",
     });
-    const updated = await invokeHandler<MutationCtx, Record<string, unknown>, { assistantReview: string | null }>(
+    const updatedNotes = await invokeHandler<MutationCtx, Record<string, unknown>, { assistantReview: string | null }>(
       upsertTrade,
       ctxA,
-      { stableId: "trade-a-1", trade: makeTradeInput({ setup: "Updated" }) },
+      {
+        stableId: "trade-a-1",
+        trade: makeTradeInput({
+          setup: "Updated",
+          thesis: "Refined thesis notes",
+          plan: "Refined plan",
+          review: "Refined review",
+          adherence: "Partly followed",
+          mistakes: ["Entry timing"],
+        }),
+      },
     );
-    expect(updated.assistantReview).toBe("Good discipline.");
+    expect(updatedNotes.assistantReview).toBe("Good discipline.");
 
+    // Review invalidated to null when trade identity/session changes (symbol, instrument, openedOn, or closedOn)
+    for (const identityMutation of [
+      makeTradeInput({ symbol: "SPY" }),
+      makeTradeInput({ instrument: "Shares" }),
+      makeTradeInput({ openedOn: "2026-11-17" }),
+      makeTradeInput({ closedOn: "2026-11-19" }),
+    ]) {
+      await invokeHandler(upsertTrade, ctxA, { stableId: "trade-a-1", trade: makeTradeInput() });
+      await invokeHandler(saveReviewInternal, h.ctxForUser(null), {
+        ownerId: USER_A,
+        runStableId: run.runStableId,
+        tradeStableId: "trade-a-1",
+        assistantReview: "Stale review before identity change.",
+      });
+      const invalidated = await invokeHandler<MutationCtx, Record<string, unknown>, { assistantReview: string | null }>(
+        upsertTrade,
+        ctxA,
+        { stableId: "trade-a-1", trade: identityMutation },
+      );
+      expect(invalidated.assistantReview).toBeNull();
+    }
+
+    // Explicit clear path still clears review without changing identity
+    await invokeHandler(upsertTrade, ctxA, { stableId: "trade-a-1", trade: makeTradeInput() });
+    await invokeHandler(saveReviewInternal, h.ctxForUser(null), {
+      ownerId: USER_A,
+      runStableId: run.runStableId,
+      tradeStableId: "trade-a-1",
+      assistantReview: "To be explicitly cleared.",
+    });
     const cleared = await invokeHandler<MutationCtx, Record<string, unknown>, { assistantReview: string | null }>(
       clearTradeAssistantReview,
       ctxA,
@@ -1285,6 +1352,72 @@ describe("chat run lifecycle, timeouts, error recovery, and bounded history", ()
       hasMore: boolean;
     }>(clearChatHistory, ctxA, { batchSize: 2 });
     expect(batch2).toEqual({ deletedMessages: 2, deletedRuns: 0, hasMore: false });
+  });
+
+  it("reports hasMore accurately in clearChatHistory across non-adjacent terminal run statuses when budget is exhausted", async () => {
+    const h = createJournalHarness();
+    const ctxA = h.ctxForUser(USER_A);
+
+    // Create 1 completed run and 1 canceled run (0 failed runs) so the "completed" status
+    // exhausts batchSize=1 while a "canceled" run remains two statuses later.
+    const completedRun = await invokeHandler<MutationCtx, Record<string, unknown>, { runStableId: string }>(
+      sendChatMessage,
+      ctxA,
+      { text: "Turn 1" },
+    );
+    await invokeHandler(completeRunInternal, h.ctxForUser(null), {
+      ownerId: USER_A,
+      runId: completedRun.runStableId,
+      status: "completed",
+      text: "Done 1",
+    });
+
+    await invokeHandler(sendChatMessage, ctxA, { text: "Turn 2" });
+    await invokeHandler(cancelActiveRun, ctxA, {});
+
+    // Clear all 4 messages first via batchSize=4? No — test directly with batchSize=1 so runs
+    // hit the exact exhausted-budget cross-status check after messages are drained!
+    // Remove messages manually via clear with batchSize=4? Instead seed 0 messages + 1 completed + 1 canceled:
+    const clear1 = await invokeHandler<MutationCtx, Record<string, unknown>, {
+      deletedMessages: number;
+      deletedRuns: number;
+      hasMore: boolean;
+    }>(clearChatHistory, ctxA, { batchSize: 1 });
+    expect(clear1).toEqual({ deletedMessages: 1, deletedRuns: 1, hasMore: true });
+
+    // Even when messages are already gone and completed runs exhaust batchSize=1,
+    // a remaining canceled run (with 0 failed runs in between) MUST still report hasMore=true.
+    const h2 = createJournalHarness();
+    const ctxA2 = h2.ctxForUser(USER_A);
+    const run1 = await invokeHandler<MutationCtx, Record<string, unknown>, { runStableId: string }>(
+      sendChatMessage,
+      ctxA2,
+      { text: "Completed turn" },
+    );
+    await invokeHandler(completeRunInternal, h2.ctxForUser(null), {
+      ownerId: USER_A,
+      runId: run1.runStableId,
+      status: "completed",
+      text: "Answer",
+    });
+    await invokeHandler(sendChatMessage, ctxA2, { text: "Canceled turn" });
+    await invokeHandler(cancelActiveRun, ctxA2, {});
+    // Clear messages directly in fixture so only 1 completed + 0 failed + 1 canceled runs remain
+    h2.tableRows("journalChatMessages").length = 0;
+
+    const firstClear = await invokeHandler<MutationCtx, Record<string, unknown>, {
+      deletedMessages: number;
+      deletedRuns: number;
+      hasMore: boolean;
+    }>(clearChatHistory, ctxA2, { batchSize: 1 });
+    expect(firstClear).toEqual({ deletedMessages: 0, deletedRuns: 1, hasMore: true });
+
+    const secondClear = await invokeHandler<MutationCtx, Record<string, unknown>, {
+      deletedMessages: number;
+      deletedRuns: number;
+      hasMore: boolean;
+    }>(clearChatHistory, ctxA2, { batchSize: 1 });
+    expect(secondClear).toEqual({ deletedMessages: 0, deletedRuns: 1, hasMore: false });
   });
 
   it("marks run failed on preparation/token error or invalid 202 body, expires stale runs, and retries cancelRun once", async () => {

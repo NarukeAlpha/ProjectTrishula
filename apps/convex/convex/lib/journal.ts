@@ -44,6 +44,7 @@ export const DEFAULT_CHAT_LIST_LIMIT = 100;
 export const MAX_CHAT_LIST_LIMIT = 200;
 export const DEFAULT_CHAT_CLEAR_BATCH_SIZE = 100;
 export const MAX_CHAT_CLEAR_BATCH_SIZE = 200;
+export const MAX_CHART_URLS_QUERY_KEYS = 32;
 
 export type JournalInstrument = (typeof instruments)[number];
 export type JournalAccount = (typeof accounts)[number];

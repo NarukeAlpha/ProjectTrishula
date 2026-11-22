@@ -29,6 +29,7 @@ import {
   journalTradeInputValidator,
   lessonInputSchema,
   MAX_CHART_IMAGE_BYTES,
+  MAX_CHART_URLS_QUERY_KEYS,
   MAX_CHAT_ATTACHMENTS,
   MAX_CHAT_CLEAR_BATCH_SIZE,
   MAX_CHAT_LIST_LIMIT,
@@ -386,8 +387,8 @@ async function readSettingsForOwner(ctx: ReadCtx, ownerId: string): Promise<Jour
   return toSettingsDto(row);
 }
 
-async function readDiaryBundleForOwner(ctx: ReadCtx, ownerId: string) {
-  const [settings, tradeRows, lessonRows, orderBatchRows, chartRows] = await Promise.all([
+async function readDiaryCoreForOwner(ctx: ReadCtx, ownerId: string) {
+  const [settings, tradeRows, lessonRows, orderBatchRows] = await Promise.all([
     readSettingsForOwner(ctx, ownerId),
     ctx.db
       .query("journalTrades")
@@ -399,10 +400,6 @@ async function readDiaryBundleForOwner(ctx: ReadCtx, ownerId: string) {
       .collect(),
     ctx.db
       .query("journalOrderBatches")
-      .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
-      .collect(),
-    ctx.db
-      .query("journalCharts")
       .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
       .collect(),
   ]);
@@ -430,24 +427,33 @@ async function readDiaryBundleForOwner(ctx: ReadCtx, ownerId: string) {
         || compareStringsDesc(left.stableId, right.stableId),
     );
 
-  const chartUrls: Record<string, string> = {};
-  const charts = await Promise.all(
-    chartRows.map(async (chart): Promise<JournalChartDto> => {
-      const url = await ctx.storage.getUrl(chart.storageId);
-      if (url !== null) {
-        chartUrls[chart.imageKey] = url;
-      }
-      return toChartDto(chart, url);
-    }),
-  );
-
   return {
     settings,
     trades,
     lessons,
     orderDays,
+  };
+}
+
+async function readDiaryBundleForOwner(ctx: ReadCtx, ownerId: string) {
+  const [core, chartRows] = await Promise.all([
+    readDiaryCoreForOwner(ctx, ownerId),
+    ctx.db
+      .query("journalCharts")
+      .withIndex("by_owner", (index) => index.eq("ownerId", ownerId))
+      .collect(),
+  ]);
+
+  const charts = await Promise.all(
+    chartRows.map(async (chart): Promise<JournalChartDto> => {
+      const url = await ctx.storage.getUrl(chart.storageId);
+      return toChartDto(chart, url);
+    }),
+  );
+
+  return {
+    ...core,
     charts,
-    chartUrls,
   };
 }
 
@@ -486,9 +492,17 @@ async function upsertTradeForOwner(
     )
     .unique();
   const now = resolveTimestamp(explicitUpdatedAt, Date.now());
+  const tradeIdentityChanged = existing !== null && (
+    existing.symbol !== trade.symbol
+    || existing.instrument !== trade.instrument
+    || existing.openedOn !== trade.openedOn
+    || existing.closedOn !== trade.closedOn
+  );
   const assistantReview = assistantReviewOverride?.set
     ? assistantReviewOverride.value
-    : (existing?.assistantReview ?? null);
+    : tradeIdentityChanged
+      ? null
+      : (existing?.assistantReview ?? null);
 
   if (existing) {
     await ctx.db.patch(existing._id, {
@@ -869,14 +883,40 @@ export const getDiary = query({
   args: {},
   handler: async (ctx) => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
-    const bundle = await readDiaryBundleForOwner(ctx, actor.id);
-    return {
-      settings: bundle.settings,
-      trades: bundle.trades,
-      lessons: bundle.lessons,
-      orderDays: bundle.orderDays,
-      chartUrls: bundle.chartUrls,
-    };
+    return readDiaryCoreForOwner(ctx, actor.id);
+  },
+});
+
+export const getChartUrls = query({
+  args: {
+    imageKeys: v.array(v.string()),
+  },
+  handler: async (ctx, args): Promise<Record<string, string>> => {
+    const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    if (args.imageKeys.length > MAX_CHART_URLS_QUERY_KEYS) {
+      throw new Error(`At most ${MAX_CHART_URLS_QUERY_KEYS} chart image keys may be requested at once.`);
+    }
+    const uniqueKeys = [...new Set(args.imageKeys.map((key) => chartImageIdSchema.parse(key)))];
+    const entries = await Promise.all(
+      uniqueKeys.map(async (imageKey): Promise<[string, string] | null> => {
+        const chart = await ctx.db
+          .query("journalCharts")
+          .withIndex("by_owner_image_key", (index) =>
+            index.eq("ownerId", actor.id).eq("imageKey", imageKey),
+          )
+          .unique();
+        if (!chart) return null;
+        const url = await ctx.storage.getUrl(chart.storageId);
+        return url === null ? null : [imageKey, url];
+      }),
+    );
+    const urls: Record<string, string> = {};
+    for (const entry of entries) {
+      if (entry !== null) {
+        urls[entry[0]] = entry[1];
+      }
+    }
+    return urls;
   },
 });
 
@@ -1273,16 +1313,7 @@ export const clearChatHistory = mutation({
     let deletedRuns = 0;
     let remainingRunBudget = batchSize;
     for (const status of ["completed", "failed", "canceled"] as const) {
-      if (remainingRunBudget === 0) {
-        const leftover = await ctx.db
-          .query("journalChatRuns")
-          .withIndex("by_owner_status", (index) =>
-            index.eq("ownerId", actor.id).eq("status", status),
-          )
-          .first();
-        if (leftover !== null) hasMore = true;
-        break;
-      }
+      if (remainingRunBudget === 0) break;
       const runBatch = await ctx.db
         .query("journalChatRuns")
         .withIndex("by_owner_status", (index) =>
@@ -1298,6 +1329,29 @@ export const clearChatHistory = mutation({
         hasMore = true;
       }
       remainingRunBudget -= runsToDelete.length;
+    }
+
+    if (!hasMore) {
+      const remainingMessage = await ctx.db
+        .query("journalChatMessages")
+        .withIndex("by_owner_ordinal", (index) => index.eq("ownerId", actor.id))
+        .first();
+      if (remainingMessage !== null) {
+        hasMore = true;
+      } else {
+        for (const status of ["completed", "failed", "canceled"] as const) {
+          const remainingRun = await ctx.db
+            .query("journalChatRuns")
+            .withIndex("by_owner_status", (index) =>
+              index.eq("ownerId", actor.id).eq("status", status),
+            )
+            .first();
+          if (remainingRun !== null) {
+            hasMore = true;
+            break;
+          }
+        }
+      }
     }
 
     return {
