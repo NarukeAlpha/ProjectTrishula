@@ -1,5 +1,15 @@
+import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { isChatPathname } from "./routes";
+import { isChatPathname, isJournalPathname } from "./routes";
+
+function JournalIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 4.5h11a3 3 0 0 1 3 3v12H8a3 3 0 0 0-3 3v-18Z" />
+      <path d="M8 9h7M8 13h5" />
+    </svg>
+  );
+}
 
 function ChatIcon() {
   return (
@@ -21,9 +31,14 @@ function DiscordIcon() {
 
 export function BottomNavigation() {
   const location = useLocation();
+  const journalActive = isJournalPathname(location.pathname);
   const askActive = isChatPathname(location.pathname);
   return (
     <nav className="bottom-nav" aria-label="Primary navigation">
+      <NavLink className={journalActive ? "active" : undefined} to="/journal">
+        <JournalIcon />
+        <span>Journal</span>
+      </NavLink>
       <NavLink className={askActive ? "active" : undefined} to="/ask">
         <ChatIcon />
         <span>Chat</span>
@@ -38,13 +53,46 @@ export function BottomNavigation() {
 
 export function DesktopNavigation() {
   const location = useLocation();
+  const journalActive = isJournalPathname(location.pathname);
   const askActive = isChatPathname(location.pathname);
   return (
     <nav className="desktop-nav" aria-label="Primary navigation">
-      <NavLink className={askActive ? "active" : undefined} to="/ask">
-        Chat
+      <NavLink className={journalActive ? "active" : undefined} to="/journal">
+        <JournalIcon />
+        <span>Journal</span>
       </NavLink>
-      <NavLink to="/discord">Discord</NavLink>
+      <NavLink className={askActive ? "active" : undefined} to="/ask">
+        <ChatIcon />
+        <span>Chat</span>
+      </NavLink>
+      <NavLink to="/discord">
+        <DiscordIcon />
+        <span>Discord</span>
+      </NavLink>
     </nav>
+  );
+}
+
+export function PrimaryRail({
+  subtitle,
+  footer,
+}: {
+  subtitle: string;
+  footer: ReactNode;
+}) {
+  return (
+    <aside className="primary-rail" aria-label="Trishula navigation">
+      <div className="rail-brand">
+        <span className="brand-mark" aria-hidden="true">
+          T
+        </span>
+        <div>
+          <strong>Project Trishula</strong>
+          <span>{subtitle}</span>
+        </div>
+      </div>
+      <DesktopNavigation />
+      <div className="rail-footer">{footer}</div>
+    </aside>
   );
 }

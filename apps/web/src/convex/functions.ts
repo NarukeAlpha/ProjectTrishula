@@ -9,6 +9,17 @@ import type {
   DiscordConversationResetReadModel,
   DiscordControlPlaneReadModel,
   DiscordGuildRoutingReadModel,
+  JournalChatAttachmentRef,
+  JournalChatMessageReadModel,
+  JournalDiaryReadModel,
+  JournalLessonInput,
+  JournalLessonReadModel,
+  JournalOrderBatchInput,
+  JournalOrderBatchReadModel,
+  JournalSettingsReadModel,
+  JournalTradeInput,
+  JournalTradeReadModel,
+  JournalUploadedChartReadModel,
   MarketResearchControlStatusReadModel,
   MarketResearchPreferencesReadModel,
   SaveMarketResearchControlSettings,
@@ -203,5 +214,86 @@ export const publicApi = {
       { proposalId: string; fingerprint: string },
       { status: "rejected" }
     >("trading:rejectProposal"),
+  },
+  journal: {
+    getDiary: makeFunctionReference<
+      "query",
+      NoArguments,
+      JournalDiaryReadModel
+    >("journal:getDiary"),
+    saveSettings: makeFunctionReference<
+      "mutation",
+      { brokerTimeZone: string; tradingViewLayoutId?: string | null },
+      JournalSettingsReadModel
+    >("journal:saveSettings"),
+    upsertTrade: makeFunctionReference<
+      "mutation",
+      { stableId?: string; trade: JournalTradeInput },
+      JournalTradeReadModel
+    >("journal:upsertTrade"),
+    clearTradeAssistantReview: makeFunctionReference<
+      "mutation",
+      { stableId: string },
+      JournalTradeReadModel
+    >("journal:clearTradeAssistantReview"),
+    deleteTrade: makeFunctionReference<
+      "mutation",
+      { stableId: string },
+      { deleted: boolean; unlinkedLessons: number }
+    >("journal:deleteTrade"),
+    upsertLesson: makeFunctionReference<
+      "mutation",
+      { stableId?: string; lesson: JournalLessonInput },
+      JournalLessonReadModel
+    >("journal:upsertLesson"),
+    deleteLesson: makeFunctionReference<
+      "mutation",
+      { stableId: string },
+      { deleted: boolean }
+    >("journal:deleteLesson"),
+    upsertOrderBatch: makeFunctionReference<
+      "mutation",
+      { stableId?: string; batch: JournalOrderBatchInput },
+      JournalOrderBatchReadModel
+    >("journal:upsertOrderBatch"),
+    deleteOrderBatch: makeFunctionReference<
+      "mutation",
+      { stableId: string },
+      { deleted: boolean }
+    >("journal:deleteOrderBatch"),
+    uploadChartAsset: makeFunctionReference<
+      "action",
+      {
+        base64Data: string;
+        filename?: string;
+        symbol?: string;
+        interval?: string;
+      },
+      JournalUploadedChartReadModel
+    >("journal:uploadChartAsset"),
+    listChatMessages: makeFunctionReference<
+      "query",
+      { limit?: number },
+      JournalChatMessageReadModel[]
+    >("journal:listChatMessages"),
+    sendChatMessage: makeFunctionReference<
+      "mutation",
+      { text: string; attachments?: JournalChatAttachmentRef[] },
+      {
+        runStableId: string;
+        userMessageStableId: string;
+        assistantMessageStableId: string;
+      }
+    >("journal:sendChatMessage"),
+    cancelActiveRun: makeFunctionReference<
+      "mutation",
+      NoArguments,
+      { canceled: boolean; runStableId?: string }
+    >("journal:cancelActiveRun"),
+    clearChatHistory: makeFunctionReference<
+      "mutation",
+      { batchSize?: number },
+      { deletedMessages: number; deletedRuns: number; hasMore: boolean }
+    >("journal:clearChatHistory"),
   },
 } as const;
