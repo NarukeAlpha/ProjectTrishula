@@ -23,6 +23,16 @@ import {
 import { executionRequest } from "./lib/execution.js";
 import { authorizedServiceRequest, constantTimeEqual } from "./lib/service_auth.js";
 import { discordGateway } from "./discord_http.js";
+import {
+  journalGetDiary,
+  journalImportOrders,
+  journalRunComplete,
+  journalRunProgress,
+  journalSaveReview,
+  journalUploadChart,
+  journalUpsertLesson,
+  journalUpsertTrade,
+} from "./journal_http.js";
 import { marketResearchDiscord, marketResearchPi } from "./market_research_http.js";
 
 const jsonHeaders = {
@@ -667,5 +677,45 @@ http.route({
 http.route({ path: "/discord", method: "POST", handler: discordGateway });
 http.route({ path: "/market-research/pi", method: "POST", handler: marketResearchPi });
 http.route({ path: "/market-research/discord", method: "POST", handler: marketResearchDiscord });
+http.route({
+  path: "/internal/journal/tools/get-diary",
+  method: "POST",
+  handler: journalGetDiary,
+});
+http.route({
+  path: "/internal/journal/tools/import-orders",
+  method: "POST",
+  handler: journalImportOrders,
+});
+http.route({
+  path: "/internal/journal/tools/upsert-trade",
+  method: "POST",
+  handler: journalUpsertTrade,
+});
+http.route({
+  path: "/internal/journal/tools/save-review",
+  method: "POST",
+  handler: journalSaveReview,
+});
+http.route({
+  path: "/internal/journal/tools/upsert-lesson",
+  method: "POST",
+  handler: journalUpsertLesson,
+});
+http.route({
+  path: "/internal/journal/tools/upload-chart",
+  method: "POST",
+  handler: journalUploadChart,
+});
+http.route({
+  path: "/internal/journal/runs/progress",
+  method: "POST",
+  handler: journalRunProgress,
+});
+http.route({
+  path: "/internal/journal/runs/complete",
+  method: "POST",
+  handler: journalRunComplete,
+});
 
 export default http;
