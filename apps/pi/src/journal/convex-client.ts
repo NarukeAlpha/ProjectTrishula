@@ -12,6 +12,7 @@ import {
   journalOrderSchema,
   journalSettingsSchema,
   journalStatuses,
+  readBoundedBytes,
   type JournalAssistantReviewInput,
   type JournalChartMimeType,
   type JournalChartSource,
@@ -102,7 +103,6 @@ export const journalDiaryResponseSchema = z.object({
   lessons: z.array(journalLessonDtoSchema),
   orderDays: z.array(journalOrderBatchDtoSchema),
   charts: z.array(journalChartDtoSchema),
-  chartUrls: z.record(z.string(), z.string()),
 });
 
 export type JournalDiaryResponse = z.infer<typeof journalDiaryResponseSchema>;
@@ -343,34 +343,14 @@ type ConvexJournalWireRequest =
   | RunProgressWireRequest
   | RunCompleteWireRequest;
 
-async function readBoundedJson(response: Response): Promise<z.infer<ReturnType<typeof z.json>> | null> {
-  if (response.body === null) return null;
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
+async function readBoundedJson(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<z.infer<ReturnType<typeof z.json>> | null> {
+  const read = await readBoundedBytes(response, MAX_JSON_RESPONSE_BYTES, signal);
+  if (!read.ok) return null;
   try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      total += next.value.byteLength;
-      if (total > MAX_JSON_RESPONSE_BYTES) {
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (total === 0) return null;
-  const combined = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(combined);
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(read.bytes);
     return z.json().parse(JSON.parse(decoded));
   } catch {
     return null;
@@ -601,7 +581,7 @@ export class ConvexJournalClient implements JournalConvexClient {
 
     let jsonBody: z.infer<ReturnType<typeof z.json>> | null = null;
     try {
-      jsonBody = await readBoundedJson(response);
+      jsonBody = await readBoundedJson(response, combined.signal);
     } finally {
       combined.cleanup();
     }

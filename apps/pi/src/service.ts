@@ -47,9 +47,17 @@ export async function startExecutionService(
     }
   }
   if (journal) {
-    await journal.initialize();
-    if (!journal.readiness().ready) {
-      throw new Error(`Journal agent is not ready: ${journal.readiness().reason ?? "unknown reason"}`);
+    try {
+      await journal.initialize();
+      if (!journal.readiness().ready) {
+        logger.error("journal_agent_not_ready", {
+          reason: journal.readiness().reason ?? "unknown_reason",
+        });
+      }
+    } catch (error) {
+      logger.error("journal_agent_init_failed", {
+        error: error instanceof Error ? error.message.slice(0, 200) : "unknown_error",
+      });
     }
   }
 

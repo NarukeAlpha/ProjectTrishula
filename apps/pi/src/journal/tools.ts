@@ -1,8 +1,13 @@
+import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import type { ImageContent, TextContent, Tool, ToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import {
   ChartProviderError,
+  MAX_CHART_HEIGHT,
+  MAX_CHART_WIDTH,
+  MIN_CHART_HEIGHT,
+  MIN_CHART_WIDTH,
   chartCaptureRequestSchema,
   chartFormats,
   chartIntervals,
@@ -72,8 +77,8 @@ const captureChartToolArgsSchema = z.object({
   to: z.string().trim().min(1).max(64).optional(),
   session: z.enum(chartSessions).optional(),
   timezone: z.string().trim().min(1).max(64).optional(),
-  width: z.number().int().min(320).max(2_400).optional(),
-  height: z.number().int().min(240).max(1_600).optional(),
+  width: z.number().int().min(MIN_CHART_WIDTH).max(MAX_CHART_WIDTH).optional(),
+  height: z.number().int().min(MIN_CHART_HEIGHT).max(MAX_CHART_HEIGHT).optional(),
   format: z.enum(chartFormats).optional(),
   preset: z.enum(chartPresets).optional(),
   includeVolumeProfile: z.boolean().optional(),
@@ -227,8 +232,8 @@ export const journalTools: Tool[] = [
       to: Type.Optional(Type.String({ description: "UTC ISO-8601 end timestamp (e.g. 2026-04-15T20:00:00Z)." })),
       session: Type.Optional(Type.Union(chartSessions.map((value) => Type.Literal(value)))),
       timezone: Type.Optional(Type.String({ description: "Display timezone; defaults to America/New_York." })),
-      width: Type.Optional(Type.Integer({ minimum: 320, maximum: 2_400 })),
-      height: Type.Optional(Type.Integer({ minimum: 240, maximum: 1_600 })),
+      width: Type.Optional(Type.Integer({ minimum: MIN_CHART_WIDTH, maximum: MAX_CHART_WIDTH })),
+      height: Type.Optional(Type.Integer({ minimum: MIN_CHART_HEIGHT, maximum: MAX_CHART_HEIGHT })),
       format: Type.Optional(Type.Union(chartFormats.map((value) => Type.Literal(value)))),
       preset: Type.Optional(Type.Union(chartPresets.map((value) => Type.Literal(value)))),
       includeVolumeProfile: Type.Optional(Type.Boolean()),
@@ -283,6 +288,35 @@ export interface JournalToolExecutionResult {
   content: (TextContent | ImageContent)[];
   isError: boolean;
   completedSummary: string;
+}
+
+const canonicalJsonSchema = z.json();
+type CanonicalJsonValue = z.infer<typeof canonicalJsonSchema>;
+
+function normalizeCanonicalJson(value: CanonicalJsonValue): CanonicalJsonValue {
+  if (value === null || !(value instanceof Object)) return value;
+  if (Array.isArray(value)) return value.map(normalizeCanonicalJson);
+  const sorted: Record<string, CanonicalJsonValue> = {};
+  for (const [key, entry] of Object.entries(value).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    sorted[key] = normalizeCanonicalJson(entry);
+  }
+  return sorted;
+}
+
+export function deriveDeterministicStableId<TPayload>(
+  runId: string,
+  kind: "order-day" | "trade" | "lesson",
+  payload: TPayload,
+): string {
+  const canonical = JSON.stringify(
+    normalizeCanonicalJson(canonicalJsonSchema.parse(JSON.parse(JSON.stringify(payload)))),
+  );
+  const digest = createHash("sha256")
+    .update(`${runId}\0${kind}\0${canonical}`, "utf8")
+    .digest("hex");
+  return `${kind}-${digest.slice(0, 32)}`;
 }
 
 function textResult(
@@ -415,19 +449,36 @@ export async function executeJournalTool(
             true,
           );
         }
-        const orderDays: JournalImportOrderDayInput[] = parsed.data.orderDays.map((day) => {
-          const item: JournalImportOrderDayInput = {
-            date: day.date,
-            note: day.note,
-            orders: day.orders,
-          };
-          if (day.stableId !== undefined) item.stableId = day.stableId;
-          return item;
-        });
+        const orderDays: JournalImportOrderDayInput[] = parsed.data.orderDays.map((day, index) => ({
+          stableId: day.stableId ?? deriveDeterministicStableId(
+            context.credentials.runId,
+            "order-day",
+            {
+              index,
+              date: day.date,
+              note: day.note,
+              orders: day.orders,
+            },
+          ),
+          date: day.date,
+          note: day.note,
+          orders: day.orders,
+        }));
         const trades: JournalImportTradeInput[] = [];
-        for (const entry of parsed.data.trades) {
-          const item: JournalImportTradeInput = { trade: entry.trade };
-          if (entry.stableId !== undefined) item.stableId = entry.stableId;
+        for (let index = 0; index < parsed.data.trades.length; index += 1) {
+          const entry = parsed.data.trades[index];
+          if (!entry) continue;
+          const item: JournalImportTradeInput = {
+            stableId: entry.stableId ?? deriveDeterministicStableId(
+              context.credentials.runId,
+              "trade",
+              {
+                index,
+                trade: entry.trade,
+              },
+            ),
+            trade: entry.trade,
+          };
           if (entry.assistantReview !== undefined) {
             const validatedReview = validateAssistantReviewForTool(entry.assistantReview);
             if (!validatedReview.ok) {
@@ -458,9 +509,13 @@ export async function executeJournalTool(
           );
         }
         const payload: JournalUpsertTradeInput = {
+          stableId: parsed.data.stableId ?? deriveDeterministicStableId(
+            context.credentials.runId,
+            "trade",
+            parsed.data.trade,
+          ),
           trade: parsed.data.trade,
         };
-        if (parsed.data.stableId !== undefined) payload.stableId = parsed.data.stableId;
         const saved = await context.convex.upsertTrade(
           context.credentials,
           payload,
@@ -594,9 +649,13 @@ export async function executeJournalTool(
           );
         }
         const payload: JournalUpsertLessonInput = {
+          stableId: parsed.data.stableId ?? deriveDeterministicStableId(
+            context.credentials.runId,
+            "lesson",
+            parsed.data.lesson,
+          ),
           lesson: parsed.data.lesson,
         };
-        if (parsed.data.stableId !== undefined) payload.stableId = parsed.data.stableId;
         const saved = await context.convex.upsertLesson(
           context.credentials,
           payload,

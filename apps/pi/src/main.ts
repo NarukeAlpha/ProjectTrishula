@@ -69,8 +69,10 @@ async function main(): Promise<void> {
     }),
     chartProvider: new ChartImgProvider({
       apiKey: config.chartImgApiKey,
+      plan: config.chartImgPlan,
     }),
     convexSiteUrl: config.convexSiteUrl,
+    ...(config.convexCloudOrigin === undefined ? {} : { convexCloudOrigin: config.convexCloudOrigin }),
     logger: consoleLogger,
   });
   const service = await startExecutionService(

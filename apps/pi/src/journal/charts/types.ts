@@ -4,11 +4,18 @@ export const chartIntervals = ["1m", "5m", "15m", "1h", "1D"] as const;
 export const chartSessions = ["regular", "extended"] as const;
 export const chartFormats = ["png", "jpeg"] as const;
 export const chartPresets = ["intraday", "spot", "clean"] as const;
+export const chartImgPlans = ["basic", "pro", "mega", "ultra"] as const;
+
+export const MIN_CHART_WIDTH = 400;
+export const MIN_CHART_HEIGHT = 300;
+export const MAX_CHART_WIDTH = 2_400;
+export const MAX_CHART_HEIGHT = 1_600;
 
 export type ChartInterval = (typeof chartIntervals)[number];
 export type ChartSession = (typeof chartSessions)[number];
 export type ChartFormat = (typeof chartFormats)[number];
 export type ChartPreset = (typeof chartPresets)[number];
+export type ChartImgPlan = (typeof chartImgPlans)[number];
 
 export const chartCaptureRequestSchema = z.object({
   symbol: z.string().trim().min(1).max(32),
@@ -17,8 +24,8 @@ export const chartCaptureRequestSchema = z.object({
   to: z.string().trim().min(1).max(64).optional(),
   session: z.enum(chartSessions).optional(),
   timezone: z.string().trim().min(1).max(64).optional(),
-  width: z.number().int().min(320).max(2_400).optional(),
-  height: z.number().int().min(240).max(1_600).optional(),
+  width: z.number().int().min(MIN_CHART_WIDTH).max(MAX_CHART_WIDTH).optional(),
+  height: z.number().int().min(MIN_CHART_HEIGHT).max(MAX_CHART_HEIGHT).optional(),
   format: z.enum(chartFormats).optional(),
   preset: z.enum(chartPresets).optional(),
   includeVolumeProfile: z.boolean().optional(),

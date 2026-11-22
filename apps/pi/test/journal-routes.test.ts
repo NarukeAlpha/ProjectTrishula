@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { createApp, type AppRunRegistry } from "../src/app.js";
+import { loadConfig } from "../src/config.js";
 import type { JournalRunRequest } from "../src/journal/contracts.js";
 import { JournalJobRegistry } from "../src/journal/jobs.js";
 import type { JournalAgentRunner } from "../src/journal/runner.js";
 import type { Logger } from "../src/runtime/logger.js";
+import { startExecutionService } from "../src/service.js";
 import { TestExecutor } from "./helpers.js";
 
 const secret = "a-secure-service-secret-with-32-chars";
@@ -311,5 +313,62 @@ describe("journal HTTP routes and job registry", () => {
 
     releaseRun?.();
     await journalJobs.waitForIdle();
+  });
+
+  it("isolates journal init failure so /health stays 200 for Pi/Discord while /v1/journal/runs returns 503", async () => {
+    const failedJournal: JournalAgentRunner = {
+      initialize: vi.fn(async () => {
+        throw new Error("Unknown JOURNAL_MODEL");
+      }),
+      readiness: vi.fn(() => ({
+        ready: false,
+        reason: "Unknown JOURNAL_MODEL",
+        chartImgConfigured: false,
+      })),
+      run: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => undefined),
+    };
+
+    const config = {
+      ...loadConfig({
+        NODE_ENV: "test",
+        HOST: "127.0.0.1",
+        PORT: "8080",
+        SERVICE_SHARED_SECRET: secret,
+        PI_DISCORD_SHARED_SECRET: discordSecret,
+        CONVEX_SITE_URL: "http://convex.internal/http",
+      }),
+      port: 0,
+    };
+
+    const service = await startExecutionService(
+      config,
+      new TestExecutor(),
+      silentLogger,
+      undefined,
+      undefined,
+      undefined,
+      failedJournal,
+    );
+
+    try {
+      const healthRes = await request(service.server).get("/health");
+      expect(healthRes.status).toBe(200);
+      expect(healthRes.body.ok).toBe(true);
+      expect(healthRes.body.journal).toEqual({
+        ready: false,
+        reason: "Unknown JOURNAL_MODEL",
+        chartImgConfigured: false,
+      });
+
+      const runRes = await request(service.server)
+        .post("/v1/journal/runs")
+        .set("authorization", `Bearer ${secret}`)
+        .send(makeJournalRunRequest());
+      expect(runRes.status).toBe(503);
+      expect(runRes.body).toEqual({ error: "Unknown JOURNAL_MODEL" });
+    } finally {
+      await service.shutdown();
+    }
   });
 });

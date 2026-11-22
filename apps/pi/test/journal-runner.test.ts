@@ -4,6 +4,7 @@ import type { CapturedChart, ChartProvider } from "../src/journal/charts/index.j
 import type { JournalRunRequest } from "../src/journal/contracts.js";
 import {
   ConvexJournalClient,
+  JournalConvexError,
   JournalRunInactiveError,
   type JournalConvexClient,
   type JournalRunCompleteInput,
@@ -11,6 +12,7 @@ import {
 } from "../src/journal/convex-client.js";
 import type { JournalModelAdapter, JournalModelCompletionRequest } from "../src/journal/model.js";
 import { createJournalAgentRunner } from "../src/journal/runner.js";
+import { executeJournalTool } from "../src/journal/tools.js";
 import type { Logger } from "../src/runtime/logger.js";
 
 const silentLogger: Logger = {
@@ -575,5 +577,376 @@ describe("JournalAgentRunner end-to-end tool loop", () => {
       expect.anything(),
       expect.objectContaining({ status: "completed" }),
     );
+  });
+
+  it("parses the exact Convex getDiaryForOwner payload without chartUrls", async () => {
+    const convexDiaryPayload = {
+      settings: {
+        brokerTimeZone: "America/Puerto_Rico",
+        tradingViewLayoutId: "layout_abc",
+        updatedAt: 1_700_000_000_000,
+      },
+      trades: [],
+      lessons: [],
+      orderDays: [],
+      charts: [
+        {
+          imageKey: "d".repeat(64),
+          storageId: "storage-99",
+          mimeType: "image/png",
+          width: 1_200,
+          height: 750,
+          symbol: "NASDAQ:QQQ",
+          interval: "5m",
+          source: "chart_img",
+          url: "https://convex.example.com/api/storage/storage-99",
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000,
+        },
+      ],
+    };
+
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify(convexDiaryPayload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = new ConvexJournalClient({
+      siteUrl: "https://convex.example.com/http",
+      sharedSecret: "a-secure-service-secret-with-32-chars",
+      timeoutMs: 5_000,
+      logger: silentLogger,
+      fetch: fetchMock,
+    });
+
+    const diary = await client.getDiary({
+      ownerId: "user_trader_1",
+      runId: "jrun-diary-1",
+      runToken: "run-cap-token-1",
+    });
+
+    expect(diary).toEqual(convexDiaryPayload);
+    const call = fetchMock.mock.calls[0];
+    expect(call?.[0]).toBe("https://convex.example.com/http/internal/journal/tools/get-diary");
+    expect(call?.[1]?.redirect).toBe("error");
+    expect(call?.[1]?.headers).toMatchObject({
+      authorization: "Bearer a-secure-service-secret-with-32-chars",
+      "x-journal-run-token": "run-cap-token-1",
+    });
+  });
+
+  it("derives identical deterministic stableIds when retrying import_orders, upsert_trade, and upsert_lesson without stableId", async () => {
+    const seenImportOrderIds: string[] = [];
+    const seenImportTradeIds: string[] = [];
+    const seenUpsertTradeIds: string[] = [];
+    const seenUpsertLessonIds: string[] = [];
+
+    const sampleTrade = {
+      symbol: "QQQ",
+      instrument: "Options" as const,
+      account: "Live" as const,
+      direction: "Long" as const,
+      status: "Closed" as const,
+      openedOn: "2026-04-15",
+      closedOn: "2026-04-15",
+      setup: "VWAP reclaim",
+      size: "2x 500C",
+      details: "Test details",
+      plannedRiskCents: 10_000,
+      realizedPnlCents: 15_000,
+      thesis: "Thesis",
+      plan: "Plan",
+      review: "Review",
+      adherence: "Followed" as const,
+      mistakes: [],
+    };
+    const sampleOrder = {
+      contract: "QQQ 04/15 500C",
+      submittedAt: "10:15:00",
+      status: "Filled" as const,
+      side: "Buy" as const,
+      type: "Limit" as const,
+      quantity: 2,
+      averageFillCents: 150,
+      realizedPnlCents: null,
+      cashCents: -30_000,
+      limitCents: 150,
+    };
+    const sampleLesson = {
+      title: "Respect VWAP",
+      body: "Wait for confirmation above VWAP before sizing in.",
+      tradeStableId: null,
+    };
+
+    const convex: JournalConvexClient = {
+      getDiary: vi.fn<JournalConvexClient["getDiary"]>(),
+      importOrders: vi.fn<JournalConvexClient["importOrders"]>(async (_creds, input) => {
+        for (const day of input.orderDays) seenImportOrderIds.push(day.stableId ?? "");
+        for (const entry of input.trades) seenImportTradeIds.push(entry.stableId ?? "");
+        return {
+          orderDays: input.orderDays.map((day) => ({
+            stableId: day.stableId ?? "missing",
+            date: day.date,
+            note: day.note,
+            orders: day.orders,
+            createdAt: 1,
+            updatedAt: 1,
+          })),
+          trades: input.trades.map((entry) => ({
+            stableId: entry.stableId ?? "missing",
+            ...entry.trade,
+            assistantReview: null,
+            createdAt: 1,
+            updatedAt: 1,
+          })),
+        };
+      }),
+      upsertTrade: vi.fn<JournalConvexClient["upsertTrade"]>(async (_creds, input) => {
+        seenUpsertTradeIds.push(input.stableId ?? "");
+        return {
+          stableId: input.stableId ?? "missing",
+          ...input.trade,
+          assistantReview: null,
+          createdAt: 1,
+          updatedAt: 1,
+        };
+      }),
+      saveReview: vi.fn<JournalConvexClient["saveReview"]>(),
+      upsertLesson: vi.fn<JournalConvexClient["upsertLesson"]>(async (_creds, input) => {
+        seenUpsertLessonIds.push(input.stableId ?? "");
+        return {
+          stableId: input.stableId ?? "missing",
+          ...input.lesson,
+          createdAt: 1,
+          updatedAt: 1,
+        };
+      }),
+      uploadChart: vi.fn<JournalConvexClient["uploadChart"]>(),
+      reportProgress: vi.fn<JournalConvexClient["reportProgress"]>(),
+      completeRun: vi.fn<JournalConvexClient["completeRun"]>(),
+    };
+
+    const runContext = (runId: string) => ({
+      credentials: { ownerId: "user_1", runId, runToken: "tok" },
+      settings: { brokerTimeZone: "America/Puerto_Rico", updatedAt: 1 },
+      convex,
+      chartProvider: { id: "chart_img", isConfigured: () => false, captureChart: vi.fn() },
+      signal: new AbortController().signal,
+    });
+
+    const importCall = makeToolCall("tc-imp", "import_orders", {
+      orderDays: [{ date: "2026-04-15", note: "Morning session", orders: [sampleOrder] }],
+      trades: [{ trade: sampleTrade }],
+    });
+    const tradeCall = makeToolCall("tc-tr", "upsert_trade", { trade: sampleTrade });
+    const lessonCall = makeToolCall("tc-ls", "upsert_lesson", { lesson: sampleLesson });
+
+    // Execute twice in run A and once in run B
+    await executeJournalTool(importCall, runContext("run-A"));
+    await executeJournalTool(importCall, runContext("run-A"));
+    await executeJournalTool(importCall, runContext("run-B"));
+
+    await executeJournalTool(tradeCall, runContext("run-A"));
+    await executeJournalTool(tradeCall, runContext("run-A"));
+    await executeJournalTool(tradeCall, runContext("run-B"));
+
+    await executeJournalTool(lessonCall, runContext("run-A"));
+    await executeJournalTool(lessonCall, runContext("run-A"));
+    await executeJournalTool(lessonCall, runContext("run-B"));
+
+    expect(seenImportOrderIds[0]).toMatch(/^order-day-[0-9a-f]{32}$/);
+    expect(seenImportOrderIds[0]).toBe(seenImportOrderIds[1]);
+    expect(seenImportOrderIds[0]).not.toBe(seenImportOrderIds[2]);
+
+    expect(seenImportTradeIds[0]).toMatch(/^trade-[0-9a-f]{32}$/);
+    expect(seenImportTradeIds[0]).toBe(seenImportTradeIds[1]);
+    expect(seenImportTradeIds[0]).not.toBe(seenImportTradeIds[2]);
+
+    expect(seenUpsertTradeIds[0]).toMatch(/^trade-[0-9a-f]{32}$/);
+    expect(seenUpsertTradeIds[0]).toBe(seenUpsertTradeIds[1]);
+    expect(seenUpsertTradeIds[0]).not.toBe(seenUpsertTradeIds[2]);
+
+    expect(seenUpsertLessonIds[0]).toMatch(/^lesson-[0-9a-f]{32}$/);
+    expect(seenUpsertLessonIds[0]).toBe(seenUpsertLessonIds[1]);
+    expect(seenUpsertLessonIds[0]).not.toBe(seenUpsertLessonIds[2]);
+  });
+
+  it("retries transient completeRun errors with backoff and does not retry 4xx/409 responses", async () => {
+    const backoffDelays: number[] = [];
+    const completeRun = vi.fn<JournalConvexClient["completeRun"]>()
+      .mockRejectedValueOnce(new JournalConvexError("gateway timeout", 504))
+      .mockRejectedValueOnce(new JournalConvexError("network reset"))
+      .mockResolvedValueOnce({ accepted: true, status: "completed" });
+
+    const model: JournalModelAdapter = {
+      provider: "openai-codex",
+      modelId: "gpt-6-astra",
+      initialize: vi.fn(async () => undefined),
+      readiness: vi.fn(() => ({ ready: true })),
+      complete: vi.fn(async () => makeAssistantMessage([{ type: "text", text: "All done." }])),
+      dispose: vi.fn(async () => undefined),
+    };
+
+    const convex: JournalConvexClient = {
+      getDiary: vi.fn(),
+      importOrders: vi.fn(),
+      upsertTrade: vi.fn(),
+      saveReview: vi.fn(),
+      upsertLesson: vi.fn(),
+      uploadChart: vi.fn(),
+      reportProgress: vi.fn(async () => ({ accepted: true, status: "running" })),
+      completeRun,
+    };
+
+    const runner = createJournalAgentRunner({
+      model,
+      convex,
+      chartProvider: { id: "chart_img", isConfigured: () => false, captureChart: vi.fn() },
+      convexSiteUrl: "https://convex.example.com/http",
+      sleep: async (ms) => {
+        backoffDelays.push(ms);
+      },
+      logger: silentLogger,
+    });
+
+    await runner.run(
+      makeRunRequest({
+        userMessage: {
+          stableId: "msg-retry",
+          ordinal: 5,
+          role: "user",
+          text: "Summarize.",
+          attachments: [],
+          status: "completed",
+          createdAt: 1_700_000_005_000,
+          updatedAt: 1_700_000_005_000,
+        },
+      }),
+    );
+
+    expect(completeRun).toHaveBeenCalledTimes(3);
+    expect(backoffDelays).toEqual([250, 750]);
+
+    // 400 client error must NOT be retried
+    const clientErrorDelays: number[] = [];
+    const clientErrorComplete = vi.fn<JournalConvexClient["completeRun"]>()
+      .mockRejectedValueOnce(new JournalConvexError("bad payload", 400));
+
+    const runner2 = createJournalAgentRunner({
+      model,
+      convex: { ...convex, completeRun: clientErrorComplete },
+      chartProvider: { id: "chart_img", isConfigured: () => false, captureChart: vi.fn() },
+      convexSiteUrl: "https://convex.example.com/http",
+      sleep: async (ms) => {
+        clientErrorDelays.push(ms);
+      },
+      logger: silentLogger,
+    });
+
+    await runner2.run(
+      makeRunRequest({
+        userMessage: {
+          stableId: "msg-no-retry",
+          ordinal: 6,
+          role: "user",
+          text: "Summarize.",
+          attachments: [],
+          status: "completed",
+          createdAt: 1_700_000_006_000,
+          updatedAt: 1_700_000_006_000,
+        },
+      }),
+    );
+
+    expect(clientErrorComplete).toHaveBeenCalledTimes(1);
+    expect(clientErrorDelays).toEqual([]);
+  });
+
+  it("supports split-origin CONVEX_CLOUD_ORIGIN attachments and blocks non-/api/storage/ paths", async () => {
+    const pngBytes = makePngBytes(800, 600);
+    const attachmentFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(new Blob([new Uint8Array(pngBytes)], { type: "image/png" }), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    let capturedContext: Context | undefined;
+
+    const model: JournalModelAdapter = {
+      provider: "openai-codex",
+      modelId: "gpt-6-astra",
+      initialize: vi.fn(async () => undefined),
+      readiness: vi.fn(() => ({ ready: true })),
+      complete: vi.fn(async (req: JournalModelCompletionRequest) => {
+        capturedContext = req.context;
+        return makeAssistantMessage([{ type: "text", text: "Inspected." }]);
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+
+    const convex: JournalConvexClient = {
+      getDiary: vi.fn(),
+      importOrders: vi.fn(),
+      upsertTrade: vi.fn(),
+      saveReview: vi.fn(),
+      upsertLesson: vi.fn(),
+      uploadChart: vi.fn(),
+      reportProgress: vi.fn(async () => ({ accepted: true, status: "running" })),
+      completeRun: vi.fn(async () => ({ accepted: true, status: "completed" })),
+    };
+
+    const runner = createJournalAgentRunner({
+      model,
+      convex,
+      chartProvider: { id: "chart_img", isConfigured: () => false, captureChart: vi.fn() },
+      convexSiteUrl: "https://site.convex.example.com/http",
+      convexCloudOrigin: "https://cloud.convex.example.com",
+      attachmentFetch,
+      logger: silentLogger,
+    });
+
+    await runner.run(
+      makeRunRequest({
+        userMessage: {
+          stableId: "msg-split-origin",
+          ordinal: 7,
+          role: "user",
+          text: "Review these attachments.",
+          attachments: [
+            {
+              storageId: "storage-cloud-1",
+              imageKey: "e".repeat(64),
+              mimeType: "image/png",
+              filename: "allowed-cloud.png",
+              url: "https://cloud.convex.example.com/api/storage/storage-cloud-1",
+            },
+            {
+              storageId: "storage-bad-path",
+              imageKey: "f".repeat(64),
+              mimeType: "image/png",
+              filename: "blocked-path.png",
+              url: "https://site.convex.example.com/http/internal/journal/tools/get-diary",
+            },
+          ],
+          status: "completed",
+          createdAt: 1_700_000_007_000,
+          updatedAt: 1_700_000_007_000,
+        },
+      }),
+    );
+
+    // Only the /api/storage/ URL on CONVEX_CLOUD_ORIGIN was fetched; the /http/ path was blocked
+    expect(attachmentFetch).toHaveBeenCalledTimes(1);
+    expect(attachmentFetch.mock.calls[0]?.[0]).toBe(
+      "https://cloud.convex.example.com/api/storage/storage-cloud-1",
+    );
+    const userMsg = capturedContext?.messages[0];
+    expect(userMsg?.role).toBe("user");
+    if (userMsg?.role === "user" && Array.isArray(userMsg.content)) {
+      const imageParts = userMsg.content.filter((part) => part.type === "image");
+      expect(imageParts).toHaveLength(1);
+    }
   });
 });

@@ -475,10 +475,18 @@ export function createTimeoutAbortSignal(
   };
 }
 
+export type ReadBoundedBytesResult =
+  | { ok: true; bytes: Uint8Array }
+  | { ok: false; reason: "too_large" | "empty" | "aborted" | "read_error" };
+
 export async function readBoundedBytes(
   response: Response,
   maxBytes: number,
-): Promise<{ ok: true; bytes: Uint8Array } | { ok: false; reason: "too_large" | "empty" | "read_error" }> {
+  signal?: AbortSignal,
+): Promise<ReadBoundedBytesResult> {
+  if (signal?.aborted) {
+    return { ok: false, reason: "aborted" };
+  }
   const declared = response.headers.get("content-length");
   if (declared !== null) {
     const parsed = Number(declared);
@@ -492,20 +500,53 @@ export async function readBoundedBytes(
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  const onAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  let abortRace: Promise<{ aborted: true }> | undefined;
+  let onAbortRace: (() => void) | undefined;
+  if (signal !== undefined) {
+    signal.addEventListener("abort", onAbort, { once: true });
+    abortRace = new Promise<{ aborted: true }>((resolve) => {
+      onAbortRace = () => resolve({ aborted: true });
+      if (signal.aborted) {
+        resolve({ aborted: true });
+      } else {
+        signal.addEventListener("abort", onAbortRace, { once: true });
+      }
+    });
+  }
   try {
     while (true) {
-      const next = await reader.read();
+      if (signal?.aborted) {
+        await reader.cancel(signal.reason).catch(() => undefined);
+        return { ok: false, reason: "aborted" };
+      }
+      const next = abortRace !== undefined
+        ? await Promise.race([reader.read(), abortRace])
+        : await reader.read();
+      if ("aborted" in next || signal?.aborted) {
+        await reader.cancel(signal?.reason).catch(() => undefined);
+        return { ok: false, reason: "aborted" };
+      }
       if (next.done) break;
       total += next.value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel();
+        await reader.cancel().catch(() => undefined);
         return { ok: false, reason: "too_large" };
       }
       chunks.push(next.value);
     }
   } catch {
+    if (signal?.aborted) {
+      return { ok: false, reason: "aborted" };
+    }
     return { ok: false, reason: "read_error" };
   } finally {
+    signal?.removeEventListener("abort", onAbort);
+    if (onAbortRace !== undefined) {
+      signal?.removeEventListener("abort", onAbortRace);
+    }
     reader.releaseLock();
   }
   if (total === 0) return { ok: false, reason: "empty" };

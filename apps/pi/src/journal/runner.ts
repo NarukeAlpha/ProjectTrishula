@@ -21,6 +21,7 @@ import {
   type JournalToolEvent,
 } from "./contracts.js";
 import {
+  JournalConvexError,
   JournalRunInactiveError,
   type JournalConvexClient,
   type JournalRunCompleteInput,
@@ -38,6 +39,7 @@ import {
 export const DEFAULT_MAX_JOURNAL_ITERATIONS = 16;
 const MAX_TOOL_EVENTS = 64;
 const MAX_HISTORY_ATTACHMENT_IMAGES = 4;
+const DEFAULT_COMPLETE_RETRY_DELAYS_MS = [250, 750] as const;
 
 export interface JournalAgentRunnerReadiness extends JournalModelReadiness {
   chartImgConfigured: boolean;
@@ -55,8 +57,11 @@ export interface JournalAgentRunnerOptions {
   convex: JournalConvexClient;
   chartProvider: ChartProvider;
   convexSiteUrl: string;
+  convexCloudOrigin?: string;
   allowedAttachmentOrigins?: readonly string[];
   attachmentFetch?: typeof fetch;
+  completeRetryDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
   logger: Logger;
   maxIterations?: number;
   now?: () => number;
@@ -226,13 +231,30 @@ function errorMessageFrom(error: Error | string): string {
   return (error instanceof Error ? error.message : error).trim().slice(0, 800);
 }
 
+function isRetryableCompleteError(error: Error): boolean {
+  if (error instanceof JournalRunInactiveError) return false;
+  if (error instanceof JournalConvexError) {
+    if (error.httpStatus === undefined) return true;
+    return error.httpStatus >= 500;
+  }
+  return true;
+}
+
+async function defaultBackoffSleep(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 class DefaultJournalAgentRunner implements JournalAgentRunner {
   private readonly maxIterations: number;
   private readonly now: () => number;
+  private readonly completeRetryDelaysMs: readonly number[];
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly options: JournalAgentRunnerOptions) {
     this.maxIterations = options.maxIterations ?? DEFAULT_MAX_JOURNAL_ITERATIONS;
     this.now = options.now ?? Date.now;
+    this.completeRetryDelaysMs = options.completeRetryDelaysMs ?? DEFAULT_COMPLETE_RETRY_DELAYS_MS;
+    this.sleep = options.sleep ?? defaultBackoffSleep;
   }
 
   async initialize(): Promise<void> {
@@ -295,6 +317,9 @@ class DefaultJournalAgentRunner implements JournalAgentRunner {
       const fetchOptions: AttachmentFetchOptions = {
         convexSiteUrl: this.options.convexSiteUrl,
       };
+      if (this.options.convexCloudOrigin !== undefined) {
+        fetchOptions.convexCloudOrigin = this.options.convexCloudOrigin;
+      }
       if (this.options.allowedAttachmentOrigins !== undefined) {
         fetchOptions.allowedOrigins = this.options.allowedAttachmentOrigins;
       }
@@ -463,16 +488,35 @@ class DefaultJournalAgentRunner implements JournalAgentRunner {
         if (outcome.status === "failed") {
           completePayload.error = outcome.error;
         }
-        try {
-          await this.options.convex.completeRun(credentials, completePayload);
-        } catch (completeError) {
-          this.options.logger.error("journal_complete_callback_failed", {
-            runId: request.runId,
-            status: outcome.status,
-            error: completeError instanceof Error
-              ? completeError.message.slice(0, 200)
-              : "complete_failed",
-          });
+        const maxAttempts = this.completeRetryDelaysMs.length + 1;
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          try {
+            await this.options.convex.completeRun(credentials, completePayload);
+            break;
+          } catch (completeError) {
+            const errorObj = completeError instanceof Error
+              ? completeError
+              : new Error("complete_failed");
+            const delayMs = this.completeRetryDelaysMs[attempt];
+            const canRetry = delayMs !== undefined && isRetryableCompleteError(errorObj);
+            if (!canRetry) {
+              this.options.logger.error("journal_complete_callback_failed", {
+                runId: request.runId,
+                status: outcome.status,
+                attempt: attempt + 1,
+                error: errorObj.message.slice(0, 200),
+              });
+              break;
+            }
+            this.options.logger.warn("journal_complete_callback_retry", {
+              runId: request.runId,
+              status: outcome.status,
+              attempt: attempt + 1,
+              delayMs,
+              error: errorObj.message.slice(0, 200),
+            });
+            await this.sleep(delayMs);
+          }
         }
       }
     }

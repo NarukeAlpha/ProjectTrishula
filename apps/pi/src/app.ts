@@ -91,11 +91,12 @@ export function createApp(dependencies: AppDependencies): express.Express {
       && dependencies.marketResearchJobs !== undefined
     );
     const journal = dependencies.journal?.readiness();
+    // Isolate journal readiness from overall Pi/Discord health so journal-only init issues
+    // return 503 on /v1/journal/* and surface in health.journal without taking down Pi/Discord.
     const ready = acceptingRuns
       && executor.ready
       && (discordAgents?.ready ?? true)
-      && marketResearchReady
-      && (journal?.ready ?? true);
+      && marketResearchReady;
     const health: HealthResponse = {
       ok: ready,
       service: "project-trishula-pi",

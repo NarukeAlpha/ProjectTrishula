@@ -52,6 +52,19 @@ function imageResponse(bytes: Uint8Array, contentType: string): Response {
   });
 }
 
+function stalledImageResponse(): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Emit partial PNG header then stall indefinitely without closing.
+      controller.enqueue(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "image/png" },
+  });
+}
+
 describe("ChartImgProvider", () => {
   it("normalizes bare tickers and preserves explicit exchange prefixes", () => {
     expect(normalizeTradingViewSymbol("qqq")).toBe("NASDAQ:QQQ");
@@ -62,75 +75,66 @@ describe("ChartImgProvider", () => {
     expect(normalizeTradingViewSymbol("customtkr")).toBe("CUSTOMTKR");
   });
 
-  it("builds intraday indicator payloads for 1m/5m charts with VWAP and Volume Profile", () => {
-    const payload = buildAdvancedChartPayload({
+  it("sizes studies per CHART_IMG_PLAN (basic=3, pro=5 default, mega/ultra=full stack with VWMA in_0)", () => {
+    const basicPayload = buildAdvancedChartPayload({ symbol: "QQQ", interval: "5m" }, "basic");
+    expect(basicPayload.studies).toEqual([
+      { name: "Volume" },
+      { name: "VWAP", override: { "VWAP.color": "#FFEB3B", "VWAP.linewidth": 2 } },
+      { name: "Relative Strength Index", input: { length: 14, smoothingLine: "SMA", smoothingLength: 14 } },
+    ]);
+
+    const proIntraday = buildAdvancedChartPayload({
       symbol: "QQQ",
       interval: "5m",
       from: "2026-04-15T13:30:00Z",
       to: "2026-04-15T20:00:00Z",
       session: "regular",
     });
-
-    expect(payload.symbol).toBe("NASDAQ:QQQ");
-    expect(payload.interval).toBe("5m");
-    expect(payload.width).toBe(1_200);
-    expect(payload.height).toBe(750);
-    expect(payload.theme).toBe("dark");
-    expect(payload.timezone).toBe("America/New_York");
-    expect(payload.session).toBe("regular");
-    expect(payload.format).toBe("png");
-    expect(payload.range).toEqual({
+    expect(proIntraday.symbol).toBe("NASDAQ:QQQ");
+    expect(proIntraday.interval).toBe("5m");
+    expect(proIntraday.width).toBe(1_200);
+    expect(proIntraday.height).toBe(750);
+    expect(proIntraday.theme).toBe("dark");
+    expect(proIntraday.timezone).toBe("America/New_York");
+    expect(proIntraday.session).toBe("regular");
+    expect(proIntraday.format).toBe("png");
+    expect(proIntraday.range).toEqual({
       from: "2026-04-15T13:30:00.000Z",
       to: "2026-04-15T20:00:00.000Z",
     });
-
-    expect(payload.studies).toEqual([
+    expect(proIntraday.studies).toEqual([
       { name: "Volume" },
-      {
-        name: "Moving Average",
-        input: { length: 9 },
-        override: { "Plot.color": "#BA68C8", "Plot.linewidth": 1 },
-      },
-      {
-        name: "Moving Average",
-        input: { length: 20 },
-        override: { "Plot.color": "#4DD0E1", "Plot.linewidth": 1 },
-      },
-      {
-        name: "Moving Average",
-        input: { length: 50 },
-        override: { "Plot.color": "#D32F2F", "Plot.linewidth": 2 },
-      },
-      {
-        name: "VWMA",
-        input: { length: 90 },
-        override: { "Plot.color": "#FBC02D", "Plot.linewidth": 1 },
-      },
-      {
-        name: "VWMA",
-        input: { length: 180 },
-        override: { "Plot.color": "#FF5252", "Plot.linewidth": 2 },
-      },
-      {
-        name: "VWAP",
-        override: { "VWAP.color": "#FFEB3B", "VWAP.linewidth": 2 },
-      },
-      {
-        name: "Relative Strength Index",
-        input: { length: 14, smoothingLine: "SMA", smoothingLength: 14 },
-      },
+      { name: "Moving Average", input: { length: 9 }, override: { "Plot.color": "#BA68C8", "Plot.linewidth": 1 } },
+      { name: "Moving Average", input: { length: 20 }, override: { "Plot.color": "#4DD0E1", "Plot.linewidth": 1 } },
+      { name: "VWAP", override: { "VWAP.color": "#FFEB3B", "VWAP.linewidth": 2 } },
+      { name: "Relative Strength Index", input: { length: 14, smoothingLine: "SMA", smoothingLength: 14 } },
+    ]);
+
+    const proSpot = buildAdvancedChartPayload({ symbol: "NVDA", interval: "1D" }, "pro");
+    expect(proSpot.studies).toHaveLength(5);
+    expect(proSpot.studies.map((study) => study.name)).toEqual([
+      "Volume",
+      "Moving Average",
+      "Moving Average",
+      "Moving Average",
+      "Relative Strength Index",
+    ]);
+
+    const megaIntraday = buildAdvancedChartPayload({ symbol: "QQQ", interval: "5m" }, "mega");
+    expect(megaIntraday.studies).toEqual([
+      { name: "Volume" },
+      { name: "Moving Average", input: { length: 9 }, override: { "Plot.color": "#BA68C8", "Plot.linewidth": 1 } },
+      { name: "Moving Average", input: { length: 20 }, override: { "Plot.color": "#4DD0E1", "Plot.linewidth": 1 } },
+      { name: "Moving Average", input: { length: 50 }, override: { "Plot.color": "#D32F2F", "Plot.linewidth": 2 } },
+      { name: "VWMA", input: { in_0: 90 }, override: { "Plot.color": "#FBC02D", "Plot.linewidth": 1 } },
+      { name: "VWMA", input: { in_0: 180 }, override: { "Plot.color": "#FF5252", "Plot.linewidth": 2 } },
+      { name: "VWAP", override: { "VWAP.color": "#FFEB3B", "VWAP.linewidth": 2 } },
+      { name: "Relative Strength Index", input: { length: 14, smoothingLine: "SMA", smoothingLength: 14 } },
       { name: "Volume Profile Visible Range" },
     ]);
-  });
 
-  it("builds spot indicator payloads for 1h/1D charts without VWAP or Volume Profile by default", () => {
-    const payload = buildAdvancedChartPayload({
-      symbol: "NASDAQ:NVDA",
-      interval: "1D",
-    });
-
-    const studyNames = payload.studies.map((study) => study.name);
-    expect(studyNames).toEqual([
+    const ultraSpot = buildAdvancedChartPayload({ symbol: "NASDAQ:NVDA", interval: "1D" }, "ultra");
+    expect(ultraSpot.studies.map((study) => study.name)).toEqual([
       "Volume",
       "Moving Average",
       "Moving Average",
@@ -139,13 +143,61 @@ describe("ChartImgProvider", () => {
       "VWMA",
       "Relative Strength Index",
     ]);
+  });
 
-    const withVolumeProfile = buildAdvancedChartPayload({
-      symbol: "NASDAQ:NVDA",
-      interval: "1h",
-      includeVolumeProfile: true,
+  it("enforces paired from/to, 400x300 minimum dimensions, and routes dated captures to Advanced Chart", async () => {
+    const fetchSpy = vi.fn<typeof fetch>()
+      .mockResolvedValue(imageResponse(makePngBytes(1_200, 750), "image/png"));
+
+    const provider = new ChartImgProvider({
+      apiKey: "test-chart-img-key",
+      fetch: fetchSpy,
+      rateLimitMs: 0,
     });
-    expect(withVolumeProfile.studies.at(-1)).toEqual({ name: "Volume Profile Visible Range" });
+
+    await expect(
+      provider.captureChart({ symbol: "QQQ", interval: "5m", from: "2026-04-15T13:30:00Z" }),
+    ).rejects.toMatchObject({ code: "chart_invalid_request" });
+
+    await expect(
+      provider.captureChart({ symbol: "QQQ", interval: "5m", to: "2026-04-15T20:00:00Z" }),
+    ).rejects.toMatchObject({ code: "chart_invalid_request" });
+
+    await expect(
+      provider.captureChart({ symbol: "QQQ", interval: "5m", width: 399, height: 300 }),
+    ).rejects.toMatchObject({ code: "chart_invalid_request" });
+
+    await expect(
+      provider.captureChart({
+        symbol: "QQQ",
+        interval: "5m",
+        useSavedLayout: true,
+        layoutId: "myLayout_123",
+        width: 400,
+        height: 299,
+      }),
+    ).rejects.toMatchObject({ code: "chart_invalid_request" });
+
+    // Dated historical capture with useSavedLayout=true MUST route to Advanced Chart (not Shared Layout)
+    await provider.captureChart({
+      symbol: "SPX",
+      interval: "5m",
+      useSavedLayout: true,
+      layoutId: "myLayout_123",
+      from: "2026-04-15T13:30:00Z",
+      to: "2026-04-15T16:00:00Z",
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const datedCall = fetchSpy.mock.calls[0];
+    expect(datedCall?.[0]).toBe(CHART_IMG_ADVANCED_ENDPOINT);
+    expect(JSON.parse(String(datedCall?.[1]?.body))).toMatchObject({
+      symbol: "SP:SPX",
+      range: {
+        from: "2026-04-15T13:30:00.000Z",
+        to: "2026-04-15T16:00:00.000Z",
+      },
+    });
   });
 
   it("captures PNG and JPEG charts via the Advanced Chart endpoint with redirect: error", async () => {
@@ -189,7 +241,7 @@ describe("ChartImgProvider", () => {
     });
   });
 
-  it("uses the saved TradingView layout endpoint when useSavedLayout is true", async () => {
+  it("uses the saved TradingView layout endpoint when useSavedLayout is true without a historical range", async () => {
     const fetchSpy = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(imageResponse(makePngBytes(1_200, 750), "image/png"));
 
@@ -204,8 +256,6 @@ describe("ChartImgProvider", () => {
       interval: "5m",
       useSavedLayout: true,
       layoutId: "myLayout_123",
-      from: "2026-04-15T13:30:00Z",
-      to: "2026-04-15T16:00:00Z",
     });
 
     expect(chart.symbol).toBe("SP:SPX");
@@ -218,10 +268,6 @@ describe("ChartImgProvider", () => {
       width: 1_200,
       height: 750,
       format: "png",
-      range: {
-        from: "2026-04-15T13:30:00.000Z",
-        to: "2026-04-15T16:00:00.000Z",
-      },
     });
   });
 
@@ -251,7 +297,65 @@ describe("ChartImgProvider", () => {
     expect(sleeps).toEqual([1_000]);
   });
 
-  it("returns typed errors for missing key, HTTP errors, corrupt magic bytes, oversized images, and redirects", async () => {
+  it("times out cleanly when a response body stalls after headers arrive", async () => {
+    const provider = new ChartImgProvider({
+      apiKey: "test-chart-img-key",
+      timeoutMs: 40,
+      rateLimitMs: 0,
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(stalledImageResponse()),
+    });
+
+    await expect(
+      provider.captureChart({ symbol: "QQQ", interval: "5m" }),
+    ).rejects.toMatchObject({
+      name: "ChartProviderError",
+      code: "chart_provider_timeout",
+    });
+  });
+
+  it("aborts a caller waiting in the serial queue immediately without waiting for an earlier stalled request", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const fetchSpy = vi.fn<typeof fetch>()
+      .mockImplementationOnce(
+        async () =>
+          new Promise<Response>((resolve) => {
+            releaseFirst = () => resolve(imageResponse(makePngBytes(1_200, 750), "image/png"));
+          }),
+      )
+      .mockResolvedValueOnce(imageResponse(makePngBytes(1_200, 750), "image/png"));
+
+    const provider = new ChartImgProvider({
+      apiKey: "test-chart-img-key",
+      rateLimitMs: 0,
+      fetch: fetchSpy,
+    });
+
+    const firstPromise = provider.captureChart({ symbol: "QQQ", interval: "1m" });
+    const queuedAbort = new AbortController();
+    const secondPromise = provider.captureChart(
+      { symbol: "SPY", interval: "5m" },
+      queuedAbort.signal,
+    );
+    const thirdPromise = provider.captureChart({ symbol: "NVDA", interval: "15m" });
+
+    queuedAbort.abort(new Error("journal_run_canceled"));
+
+    // Second request must reject immediately while first request is still blocked
+    await expect(secondPromise).rejects.toMatchObject({
+      name: "ChartProviderError",
+      code: "chart_provider_aborted",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // Releasing the first request allows the third queued request to proceed cleanly
+    releaseFirst?.();
+    const [first, third] = await Promise.all([firstPromise, thirdPromise]);
+    expect(first.symbol).toBe("NASDAQ:QQQ");
+    expect(third.symbol).toBe("NASDAQ:NVDA");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns typed errors for missing key, HTTP errors (with bounded error body), corrupt magic bytes, oversized images, and redirects", async () => {
     const unconfigured = new ChartImgProvider({});
     expect(unconfigured.isConfigured()).toBe(false);
     await expect(
@@ -273,6 +377,21 @@ describe("ChartImgProvider", () => {
     ).rejects.toMatchObject({
       code: "chart_provider_http_error",
       status: 429,
+    });
+
+    const oversizedErrorBodyProvider = new ChartImgProvider({
+      apiKey: "test-key",
+      rateLimitMs: 0,
+      fetch: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response("x".repeat(16_384), { status: 502 }),
+      ),
+    });
+    await expect(
+      oversizedErrorBodyProvider.captureChart({ symbol: "QQQ", interval: "5m" }),
+    ).rejects.toMatchObject({
+      code: "chart_provider_http_error",
+      status: 502,
+      message: "CHART-IMG returned HTTP 502",
     });
 
     const badBytesProvider = new ChartImgProvider({

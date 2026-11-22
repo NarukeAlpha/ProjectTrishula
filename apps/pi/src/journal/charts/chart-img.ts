@@ -9,6 +9,7 @@ import {
   ChartProviderError,
   type CapturedChart,
   type ChartCaptureRequest,
+  type ChartImgPlan,
   type ChartInterval,
   type ChartPreset,
   type ChartProvider,
@@ -24,6 +25,9 @@ export const DEFAULT_CHART_HEIGHT = 750;
 export const DEFAULT_CHART_TIMEZONE = "America/New_York";
 export const DEFAULT_CHART_TIMEOUT_MS = 30_000;
 export const DEFAULT_CHART_RATE_LIMIT_MS = 1_000;
+export const DEFAULT_CHART_PLAN: ChartImgPlan = "pro";
+
+const MAX_CHART_ERROR_BODY_BYTES = 4_096;
 
 const TRADINGVIEW_SYMBOL_WITH_EXCHANGE = /^[A-Z0-9._-]+:[A-Z0-9._!-]+$/;
 const BARE_SYMBOL_PATTERN = /^[A-Z0-9._!-]+$/;
@@ -116,8 +120,8 @@ const WELL_KNOWN_EXCHANGE_MAP = new Map<string, string>([
 ]);
 
 export interface ChartImgDateRange {
-  from?: string;
-  to?: string;
+  from: string;
+  to: string;
 }
 
 export interface ChartImgStudy {
@@ -138,7 +142,7 @@ export interface ChartImgAdvancedPayload {
   timezone: string;
   format: "png" | "jpeg";
   studies: ChartImgStudy[];
-  range?: { from?: string; to?: string };
+  range?: ChartImgDateRange;
   override: {
     scalesFontSize: number;
     showLegend: boolean;
@@ -160,17 +164,29 @@ export interface ChartImgLayoutPayload {
   format: "png" | "jpeg";
   session?: "regular" | "extended";
   timezone?: string;
-  range?: { from?: string; to?: string };
 }
 
 export interface ChartImgProviderOptions {
   apiKey?: string | undefined;
+  plan?: ChartImgPlan;
   timeoutMs?: number;
   rateLimitMs?: number;
   maxBytes?: number;
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+export function maxStudiesForPlan(plan: ChartImgPlan): number {
+  switch (plan) {
+    case "basic":
+      return 3;
+    case "pro":
+      return 5;
+    case "mega":
+    case "ultra":
+      return 10;
+  }
 }
 
 export function normalizeTradingViewSymbol(raw: string): string {
@@ -192,61 +208,85 @@ export function resolveChartPreset(interval: ChartInterval, explicit?: ChartPres
   return interval === "1m" || interval === "5m" || interval === "15m" ? "intraday" : "spot";
 }
 
+const VOLUME_STUDY: ChartImgStudy = { name: "Volume" };
+const SMA_9_STUDY: ChartImgStudy = {
+  name: "Moving Average",
+  input: { length: 9 },
+  override: { "Plot.color": "#BA68C8", "Plot.linewidth": 1 },
+};
+const SMA_20_STUDY: ChartImgStudy = {
+  name: "Moving Average",
+  input: { length: 20 },
+  override: { "Plot.color": "#4DD0E1", "Plot.linewidth": 1 },
+};
+const SMA_50_STUDY: ChartImgStudy = {
+  name: "Moving Average",
+  input: { length: 50 },
+  override: { "Plot.color": "#D32F2F", "Plot.linewidth": 2 },
+};
+const VWMA_90_STUDY: ChartImgStudy = {
+  name: "VWMA",
+  input: { in_0: 90 },
+  override: { "Plot.color": "#FBC02D", "Plot.linewidth": 1 },
+};
+const VWMA_180_STUDY: ChartImgStudy = {
+  name: "VWMA",
+  input: { in_0: 180 },
+  override: { "Plot.color": "#FF5252", "Plot.linewidth": 2 },
+};
+const VWAP_STUDY: ChartImgStudy = {
+  name: "VWAP",
+  override: { "VWAP.color": "#FFEB3B", "VWAP.linewidth": 2 },
+};
+const RSI_14_STUDY: ChartImgStudy = {
+  name: "Relative Strength Index",
+  input: { length: 14, smoothingLine: "SMA", smoothingLength: 14 },
+};
+const VOLUME_PROFILE_STUDY: ChartImgStudy = { name: "Volume Profile Visible Range" };
+
 export function buildIndicatorStudies(
   preset: ChartPreset,
   includeVolumeProfile?: boolean,
+  plan: ChartImgPlan = DEFAULT_CHART_PLAN,
 ): ChartImgStudy[] {
+  const studyCap = maxStudiesForPlan(plan);
   if (preset === "clean") {
-    return [{ name: "Volume" }];
+    return [VOLUME_STUDY].slice(0, studyCap);
   }
 
+  if (plan === "basic") {
+    return [VOLUME_STUDY, VWAP_STUDY, RSI_14_STUDY].slice(0, studyCap);
+  }
+
+  if (plan === "pro") {
+    const proStudies: ChartImgStudy[] = preset === "intraday"
+      ? [VOLUME_STUDY, SMA_9_STUDY, SMA_20_STUDY, VWAP_STUDY, RSI_14_STUDY]
+      : [VOLUME_STUDY, SMA_9_STUDY, SMA_20_STUDY, SMA_50_STUDY, RSI_14_STUDY];
+    return proStudies.slice(0, studyCap);
+  }
+
+  // mega / ultra: full indicator stack
   const studies: ChartImgStudy[] = [
-    { name: "Volume" },
-    {
-      name: "Moving Average",
-      input: { length: 9 },
-      override: { "Plot.color": "#BA68C8", "Plot.linewidth": 1 },
-    },
-    {
-      name: "Moving Average",
-      input: { length: 20 },
-      override: { "Plot.color": "#4DD0E1", "Plot.linewidth": 1 },
-    },
-    {
-      name: "Moving Average",
-      input: { length: 50 },
-      override: { "Plot.color": "#D32F2F", "Plot.linewidth": 2 },
-    },
-    {
-      name: "VWMA",
-      input: { length: 90 },
-      override: { "Plot.color": "#FBC02D", "Plot.linewidth": 1 },
-    },
-    {
-      name: "VWMA",
-      input: { length: 180 },
-      override: { "Plot.color": "#FF5252", "Plot.linewidth": 2 },
-    },
+    VOLUME_STUDY,
+    SMA_9_STUDY,
+    SMA_20_STUDY,
+    SMA_50_STUDY,
+    VWMA_90_STUDY,
+    VWMA_180_STUDY,
   ];
 
   if (preset === "intraday") {
-    studies.push({
-      name: "VWAP",
-      override: { "VWAP.color": "#FFEB3B", "VWAP.linewidth": 2 },
-    });
+    studies.push(VWAP_STUDY);
   }
 
-  studies.push({
-    name: "Relative Strength Index",
-    input: { length: 14, smoothingLine: "SMA", smoothingLength: 14 },
-  });
+  studies.push(RSI_14_STUDY);
 
   const shouldIncludeVolumeProfile = includeVolumeProfile ?? (preset === "intraday");
   if (shouldIncludeVolumeProfile) {
-    studies.push({ name: "Volume Profile Visible Range" });
+    studies.push(VOLUME_PROFILE_STUDY);
   }
 
-  return studies;
+  return studies.slice(0, studyCap);
 }
 
 function normalizeIsoTimestamp(value: string, field: "from" | "to"): string {
@@ -265,23 +305,27 @@ function buildRange(
   to?: string,
 ): ChartImgDateRange | undefined {
   if (from === undefined && to === undefined) return undefined;
-  const range: ChartImgDateRange = {};
-  if (from !== undefined) range.from = normalizeIsoTimestamp(from, "from");
-  if (to !== undefined) range.to = normalizeIsoTimestamp(to, "to");
-  if (
-    range.from !== undefined
-    && range.to !== undefined
-    && Date.parse(range.from) >= Date.parse(range.to)
-  ) {
+  if (from === undefined || to === undefined) {
+    throw new ChartProviderError(
+      "chart_invalid_request",
+      "Both 'from' and 'to' ISO timestamps must be provided together when specifying a historical range.",
+    );
+  }
+  const isoFrom = normalizeIsoTimestamp(from, "from");
+  const isoTo = normalizeIsoTimestamp(to, "to");
+  if (Date.parse(isoFrom) >= Date.parse(isoTo)) {
     throw new ChartProviderError(
       "chart_invalid_request",
       "Chart 'from' timestamp must be earlier than 'to'.",
     );
   }
-  return range;
+  return { from: isoFrom, to: isoTo };
 }
 
-export function buildAdvancedChartPayload(request: ChartCaptureRequest): ChartImgAdvancedPayload {
+export function buildAdvancedChartPayload(
+  request: ChartCaptureRequest,
+  plan: ChartImgPlan = DEFAULT_CHART_PLAN,
+): ChartImgAdvancedPayload {
   const symbol = normalizeTradingViewSymbol(request.symbol);
   const preset = resolveChartPreset(request.interval, request.preset);
   const range = buildRange(request.from, request.to);
@@ -296,7 +340,7 @@ export function buildAdvancedChartPayload(request: ChartCaptureRequest): ChartIm
     session: request.session ?? "extended",
     timezone: request.timezone ?? DEFAULT_CHART_TIMEZONE,
     format: request.format ?? "png",
-    studies: buildIndicatorStudies(preset, request.includeVolumeProfile),
+    studies: buildIndicatorStudies(preset, request.includeVolumeProfile, plan),
     override: {
       scalesFontSize: 13,
       showLegend: true,
@@ -315,7 +359,6 @@ export function buildAdvancedChartPayload(request: ChartCaptureRequest): ChartIm
 
 export function buildSavedLayoutPayload(request: ChartCaptureRequest): ChartImgLayoutPayload {
   const symbol = normalizeTradingViewSymbol(request.symbol);
-  const range = buildRange(request.from, request.to);
   const payload: ChartImgLayoutPayload = {
     symbol,
     interval: request.interval,
@@ -325,7 +368,6 @@ export function buildSavedLayoutPayload(request: ChartCaptureRequest): ChartImgL
   };
   if (request.session !== undefined) payload.session = request.session;
   if (request.timezone !== undefined) payload.timezone = request.timezone;
-  if (range !== undefined) payload.range = range;
   return payload;
 }
 
@@ -345,21 +387,30 @@ async function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+interface QueueWaiter {
+  grant: () => void;
+  reject: (error: ChartProviderError) => void;
+  cleanup: () => void;
+}
+
 export class ChartImgProvider implements ChartProvider {
   readonly id = "chart_img";
   private readonly apiKey: string | undefined;
+  private readonly plan: ChartImgPlan;
   private readonly timeoutMs: number;
   private readonly rateLimitMs: number;
   private readonly maxBytes: number;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
-  private queue: Promise<void> = Promise.resolve();
+  private busy = false;
+  private readonly waiters: QueueWaiter[] = [];
   private nextRequestAt = 0;
 
   constructor(options: ChartImgProviderOptions = {}) {
     const trimmed = options.apiKey?.trim();
     this.apiKey = trimmed && trimmed.length > 0 ? trimmed : undefined;
+    this.plan = options.plan ?? DEFAULT_CHART_PLAN;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_CHART_TIMEOUT_MS;
     this.rateLimitMs = options.rateLimitMs ?? DEFAULT_CHART_RATE_LIMIT_MS;
     this.maxBytes = options.maxBytes ?? MAX_JOURNAL_CHART_BYTES;
@@ -394,10 +445,12 @@ export class ChartImgProvider implements ChartProvider {
     const request = parsed.data;
     const expectedFormat = request.format ?? "png";
     const expectedMimeType = expectedFormat === "jpeg" ? "image/jpeg" : "image/png";
+    const hasHistoricalRange = request.from !== undefined || request.to !== undefined;
 
     let endpoint: string;
     let body: ChartImgAdvancedPayload | ChartImgLayoutPayload;
-    if (request.useSavedLayout) {
+    // Shared Layout ignores historical date ranges; always route dated historical captures to Advanced Chart.
+    if (request.useSavedLayout && !hasHistoricalRange) {
       const layoutId = request.layoutId?.trim();
       if (!layoutId || !LAYOUT_ID_PATTERN.test(layoutId)) {
         throw new ChartProviderError(
@@ -409,118 +462,180 @@ export class ChartImgProvider implements ChartProvider {
       body = buildSavedLayoutPayload(request);
     } else {
       endpoint = CHART_IMG_ADVANCED_ENDPOINT;
-      body = buildAdvancedChartPayload(request);
+      body = buildAdvancedChartPayload(request, this.plan);
     }
 
     const apiKey = this.apiKey;
     return this.enqueue(async () => {
-      signal?.throwIfAborted();
+      if (signal?.aborted) {
+        throw new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted.");
+      }
       const combined = createTimeoutAbortSignal(
         this.timeoutMs,
         "chart_provider_timeout",
         signal,
         "chart_provider_aborted",
       );
-      let response: Response;
       try {
-        response = await this.fetchImpl(endpoint, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-api-key": apiKey,
-          },
-          body: JSON.stringify(body),
-          redirect: "error",
-          signal: combined.signal,
-        });
-      } catch (error) {
-        if (combined.wasTimeout()) {
-          throw new ChartProviderError("chart_provider_timeout", "CHART-IMG request timed out.");
+        let response: Response;
+        try {
+          response = await this.fetchImpl(endpoint, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-api-key": apiKey,
+            },
+            body: JSON.stringify(body),
+            redirect: "error",
+            signal: combined.signal,
+          });
+        } catch (error) {
+          if (combined.wasTimeout()) {
+            throw new ChartProviderError("chart_provider_timeout", "CHART-IMG request timed out.");
+          }
+          if (signal?.aborted) {
+            throw new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted.");
+          }
+          const message = error instanceof Error ? error.message : "CHART-IMG request failed.";
+          throw new ChartProviderError(
+            "chart_provider_unavailable",
+            `CHART-IMG request failed: ${message}`,
+          );
         }
-        if (signal?.aborted) {
-          throw new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted.");
+
+        if (!response.ok) {
+          let detail = "";
+          const errorRead = await readBoundedBytes(
+            response,
+            MAX_CHART_ERROR_BODY_BYTES,
+            combined.signal,
+          );
+          if (errorRead.ok) {
+            const decoded = new TextDecoder("utf-8", { fatal: false }).decode(errorRead.bytes).trim();
+            if (decoded.length > 0) detail = `: ${decoded.slice(0, 200)}`;
+          } else if (errorRead.reason === "aborted") {
+            if (combined.wasTimeout()) {
+              throw new ChartProviderError("chart_provider_timeout", "CHART-IMG request timed out.");
+            }
+            throw new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted.");
+          }
+          throw new ChartProviderError(
+            "chart_provider_http_error",
+            `CHART-IMG returned HTTP ${response.status}${detail}`,
+            response.status,
+          );
         }
-        const message = error instanceof Error ? error.message : "CHART-IMG request failed.";
-        throw new ChartProviderError(
-          "chart_provider_unavailable",
-          `CHART-IMG request failed: ${message}`,
-        );
+
+        const contentType = response.headers
+          .get("content-type")
+          ?.split(";", 1)[0]
+          ?.trim()
+          .toLowerCase();
+        if (contentType !== "image/png" && contentType !== "image/jpeg") {
+          throw new ChartProviderError(
+            "chart_provider_response_invalid",
+            `CHART-IMG returned unexpected content-type '${contentType ?? "missing"}'.`,
+          );
+        }
+
+        const read = await readBoundedBytes(response, this.maxBytes, combined.signal);
+        if (!read.ok) {
+          if (read.reason === "aborted") {
+            if (combined.wasTimeout()) {
+              throw new ChartProviderError("chart_provider_timeout", "CHART-IMG response body timed out.");
+            }
+            throw new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted.");
+          }
+          if (read.reason === "too_large") {
+            throw new ChartProviderError(
+              "chart_provider_response_too_large",
+              `CHART-IMG image exceeded the ${this.maxBytes}-byte limit.`,
+            );
+          }
+          throw new ChartProviderError(
+            "chart_provider_response_invalid",
+            "CHART-IMG returned an empty or unreadable image body.",
+          );
+        }
+
+        const sniffed = sniffJournalImage(read.bytes);
+        if (
+          sniffed === null
+          || (sniffed.mimeType !== "image/png" && sniffed.mimeType !== "image/jpeg")
+        ) {
+          throw new ChartProviderError(
+            "chart_provider_response_invalid",
+            "CHART-IMG response bytes are not a valid PNG or JPEG image.",
+          );
+        }
+        if (sniffed.mimeType !== contentType || sniffed.mimeType !== expectedMimeType) {
+          throw new ChartProviderError(
+            "chart_provider_response_invalid",
+            `CHART-IMG returned ${sniffed.mimeType} instead of requested ${expectedMimeType}.`,
+          );
+        }
+
+        return {
+          bytes: read.bytes,
+          mimeType: sniffed.mimeType,
+          width: sniffed.width,
+          height: sniffed.height,
+          symbol: body.symbol,
+          interval: request.interval,
+          source: "chart_img",
+        };
       } finally {
         combined.cleanup();
       }
-
-      if (!response.ok) {
-        let detail = "";
-        try {
-          const text = (await response.text()).trim();
-          if (text.length > 0) detail = `: ${text.slice(0, 200)}`;
-        } catch {
-          // Ignore unreadable error response bodies.
-        }
-        throw new ChartProviderError(
-          "chart_provider_http_error",
-          `CHART-IMG returned HTTP ${response.status}${detail}`,
-          response.status,
-        );
-      }
-
-      const contentType = response.headers
-        .get("content-type")
-        ?.split(";", 1)[0]
-        ?.trim()
-        .toLowerCase();
-      if (contentType !== "image/png" && contentType !== "image/jpeg") {
-        throw new ChartProviderError(
-          "chart_provider_response_invalid",
-          `CHART-IMG returned unexpected content-type '${contentType ?? "missing"}'.`,
-        );
-      }
-
-      const read = await readBoundedBytes(response, this.maxBytes);
-      if (!read.ok) {
-        if (read.reason === "too_large") {
-          throw new ChartProviderError(
-            "chart_provider_response_too_large",
-            `CHART-IMG image exceeded the ${this.maxBytes}-byte limit.`,
-          );
-        }
-        throw new ChartProviderError(
-          "chart_provider_response_invalid",
-          "CHART-IMG returned an empty or unreadable image body.",
-        );
-      }
-
-      const sniffed = sniffJournalImage(read.bytes);
-      if (
-        sniffed === null
-        || (sniffed.mimeType !== "image/png" && sniffed.mimeType !== "image/jpeg")
-      ) {
-        throw new ChartProviderError(
-          "chart_provider_response_invalid",
-          "CHART-IMG response bytes are not a valid PNG or JPEG image.",
-        );
-      }
-      if (sniffed.mimeType !== contentType || sniffed.mimeType !== expectedMimeType) {
-        throw new ChartProviderError(
-          "chart_provider_response_invalid",
-          `CHART-IMG returned ${sniffed.mimeType} instead of requested ${expectedMimeType}.`,
-        );
-      }
-
-      return {
-        bytes: read.bytes,
-        mimeType: sniffed.mimeType,
-        width: sniffed.width,
-        height: sniffed.height,
-        symbol: body.symbol,
-        interval: request.interval,
-        source: "chart_img",
-      };
     }, signal);
   }
 
-  private enqueue<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const task = this.queue.then(async () => {
+  private async acquireSlot(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      throw new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted.");
+    }
+    if (!this.busy) {
+      this.busy = true;
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) {
+          this.waiters.splice(index, 1);
+        }
+        reject(new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted while queued."));
+      };
+      const waiter: QueueWaiter = {
+        grant: () => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        },
+        reject: (error) => {
+          signal?.removeEventListener("abort", onAbort);
+          reject(error);
+        },
+        cleanup: () => {
+          signal?.removeEventListener("abort", onAbort);
+        },
+      };
+      this.waiters.push(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  private releaseSlot(): void {
+    const next = this.waiters.shift();
+    if (next !== undefined) {
+      next.grant();
+      return;
+    }
+    this.busy = false;
+  }
+
+  private async enqueue<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.acquireSlot(signal);
+    try {
       if (signal?.aborted) {
         throw new ChartProviderError("chart_provider_aborted", "CHART-IMG request was aborted.");
       }
@@ -533,12 +648,9 @@ export class ChartImgProvider implements ChartProvider {
         }
       }
       this.nextRequestAt = this.now() + this.rateLimitMs;
-      return operation();
-    });
-    this.queue = task.then(
-      () => undefined,
-      () => undefined,
-    );
-    return task;
+      return await operation();
+    } finally {
+      this.releaseSlot();
+    }
   }
 }

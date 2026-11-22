@@ -24,6 +24,7 @@ export type FetchAttachmentResult =
 
 export interface AttachmentFetchOptions {
   convexSiteUrl: string;
+  convexCloudOrigin?: string;
   allowedOrigins?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
@@ -33,6 +34,7 @@ export interface AttachmentFetchOptions {
 export function deriveAllowedAttachmentOrigins(
   convexSiteUrl: string,
   extraOrigins: readonly string[] = [],
+  convexCloudOrigin?: string,
 ): ReadonlySet<string> {
   const origins = new Set<string>();
   const siteUrl = new URL(convexSiteUrl);
@@ -41,6 +43,13 @@ export function deriveAllowedAttachmentOrigins(
     const deploymentPrefix = siteUrl.hostname.slice(0, -".convex.site".length);
     if (deploymentPrefix.length > 0) {
       origins.add(`https://${deploymentPrefix}.convex.cloud`);
+    }
+  }
+  if (convexCloudOrigin !== undefined && convexCloudOrigin.trim().length > 0) {
+    try {
+      origins.add(new URL(convexCloudOrigin).origin);
+    } catch {
+      // Ignore malformed optional override entries.
     }
   }
   for (const extra of extraOrigins) {
@@ -65,7 +74,8 @@ export function isAllowedAttachmentUrl(
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   if (parsed.username !== "" || parsed.password !== "") return false;
-  return allowedOrigins.has(parsed.origin);
+  if (!allowedOrigins.has(parsed.origin)) return false;
+  return parsed.pathname.startsWith("/api/storage/");
 }
 
 export async function fetchJournalAttachment(
@@ -79,9 +89,10 @@ export async function fetchJournalAttachment(
   const allowedOrigins = deriveAllowedAttachmentOrigins(
     options.convexSiteUrl,
     options.allowedOrigins,
+    options.convexCloudOrigin,
   );
   if (!isAllowedAttachmentUrl(attachment.url, allowedOrigins)) {
-    return { ok: false, attachment, reason: "Attachment URL origin is not allowed." };
+    return { ok: false, attachment, reason: "Attachment URL origin or path is not allowed." };
   }
 
   const maxBytes = options.maxBytes ?? MAX_JOURNAL_CHART_BYTES;
@@ -114,15 +125,20 @@ export async function fetchJournalAttachment(
         reason: `Attachment download failed with HTTP ${response.status}.`,
       };
     }
-    readResult = await readBoundedBytes(response, maxBytes);
+    readResult = await readBoundedBytes(response, maxBytes, combined.signal);
   } finally {
     combined.cleanup();
   }
 
   if (!readResult.ok) {
+    if (readResult.reason === "aborted" && signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("journal_run_aborted");
+    }
     const reason = readResult.reason === "too_large"
       ? `Attachment exceeded ${maxBytes} bytes.`
-      : "Attachment image body was empty or unreadable.";
+      : readResult.reason === "aborted"
+        ? "Attachment download timed out."
+        : "Attachment image body was empty or unreadable.";
     return { ok: false, attachment, reason };
   }
 
