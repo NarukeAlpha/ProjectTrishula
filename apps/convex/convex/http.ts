@@ -24,6 +24,8 @@ import { executionRequest } from "./lib/execution.js";
 import { authorizedServiceRequest, constantTimeEqual } from "./lib/service_auth.js";
 import { discordGateway } from "./discord_http.js";
 import {
+  journalAdminMigrate,
+  journalAdminUploadChart,
   journalGetDiary,
   journalImportOrders,
   journalRunComplete,
@@ -716,6 +718,16 @@ http.route({
   path: "/internal/journal/runs/complete",
   method: "POST",
   handler: journalRunComplete,
+});
+http.route({
+  path: "/internal/journal/admin/upload-chart",
+  method: "POST",
+  handler: journalAdminUploadChart,
+});
+http.route({
+  path: "/internal/journal/admin/migrate",
+  method: "POST",
+  handler: journalAdminMigrate,
 });
 
 export default http;

@@ -39,6 +39,11 @@ export const MAX_CHAT_TEXT_LENGTH = 20_000;
 export const MAX_CHAT_ATTACHMENTS = 8;
 export const MAX_PLAIN_REVIEW_LENGTH = 12_000;
 export const MAX_RECENT_HISTORY_MESSAGES = 20;
+export const JOURNAL_RUN_TIMEOUT_MS = 5 * 60 * 1_000;
+export const DEFAULT_CHAT_LIST_LIMIT = 100;
+export const MAX_CHAT_LIST_LIMIT = 200;
+export const DEFAULT_CHAT_CLEAR_BATCH_SIZE = 100;
+export const MAX_CHAT_CLEAR_BATCH_SIZE = 200;
 
 export type JournalInstrument = (typeof instruments)[number];
 export type JournalAccount = (typeof accounts)[number];
@@ -178,6 +183,11 @@ export const journalChatAttachmentValidator = v.object({
   filename: v.string(),
 });
 
+export const journalChatAttachmentRefValidator = v.object({
+  imageKey: v.string(),
+  filename: v.string(),
+});
+
 export const journalToolEventValidator = v.object({
   name: v.string(),
   status: v.union(
@@ -234,7 +244,7 @@ export const orderSchema = z.object({
   realizedPnlCents: centsSchema.nullable(),
   cashCents: centsSchema,
   limitCents: centsSchema.nullable(),
-});
+}).strict();
 
 export type Order = z.infer<typeof orderSchema>;
 
@@ -259,7 +269,7 @@ const tradeFieldsSchema = z.object({
     .array(z.enum(mistakeOptions))
     .max(mistakeOptions.length)
     .transform((items) => [...new Set(items)]),
-});
+}).strict();
 
 export type TradeInput = z.infer<typeof tradeFieldsSchema>;
 
@@ -295,7 +305,7 @@ export const lessonInputSchema = z.object({
   title: z.string().trim().min(1, "Enter a lesson title.").max(120),
   body: notesSchema.min(1, "Write down the lesson."),
   tradeStableId: journalStableIdSchema.nullable(),
-});
+}).strict();
 
 export type LessonInput = z.infer<typeof lessonInputSchema>;
 
@@ -303,7 +313,7 @@ export const orderBatchInputSchema = z.object({
   date: isoDateSchema,
   note: notesSchema,
   orders: z.array(orderSchema).min(1, "Include at least one order.").max(120),
-});
+}).strict();
 
 export type OrderBatchInput = z.infer<typeof orderBatchInputSchema>;
 
@@ -316,7 +326,7 @@ const reviewRectangle = z.object({
   y: reviewCoordinate,
   width: reviewLength,
   height: reviewLength,
-});
+}).strict();
 
 type Rectangle = z.infer<typeof reviewRectangle>;
 
@@ -339,10 +349,14 @@ export const reviewChartSchema = z
     focus: reviewRectangle,
     focusLabel: reviewLabel,
     levels: z
-      .array(z.object({ y: reviewCoordinate, label: z.string().trim().min(1).max(14) }))
+      .array(
+        z.object({ y: reviewCoordinate, label: z.string().trim().min(1).max(14) }).strict(),
+      )
       .max(3),
     ticks: z
-      .array(z.object({ x: reviewCoordinate, label: z.string().trim().min(1).max(12) }))
+      .array(
+        z.object({ x: reviewCoordinate, label: z.string().trim().min(1).max(12) }).strict(),
+      )
       .min(1)
       .max(5),
     interval: reviewLabel,
@@ -350,6 +364,7 @@ export const reviewChartSchema = z
     text: reviewParagraph,
     alt: reviewParagraph,
   })
+  .strict()
   .refine(
     ({ width, height, crop, focus, levels, ticks }) =>
       contains({ x: 0, y: 0, width, height }, crop)
@@ -368,7 +383,7 @@ export const chartReviewSchema = z.object({
   charts: z.array(reviewChartSchema).min(1).max(8),
   nextTime: reviewParagraph,
   note: reviewParagraph.optional(),
-});
+}).strict();
 
 export type ReviewChart = z.infer<typeof reviewChartSchema>;
 export type ChartReview = z.infer<typeof chartReviewSchema>;
@@ -377,7 +392,7 @@ export const toolEventSchema = z.object({
   name: z.string().trim().min(1).max(120),
   status: z.enum(toolEventStatuses),
   summary: z.string().trim().max(500).optional(),
-});
+}).strict();
 
 export type JournalToolEvent = {
   name: string;
@@ -659,4 +674,26 @@ export function detectImageDimensions(
     case "image/webp":
       return readWebpDimensions(bytes);
   }
+}
+
+export interface SniffedChartImage {
+  mimeType: JournalChartMimeType;
+  width: number;
+  height: number;
+}
+
+export function sniffChartImage(bytes: Uint8Array): SniffedChartImage {
+  const png = readPngDimensions(bytes);
+  if (png !== null) {
+    return { mimeType: "image/png", width: png.width, height: png.height };
+  }
+  const jpeg = readJpegDimensions(bytes);
+  if (jpeg !== null) {
+    return { mimeType: "image/jpeg", width: jpeg.width, height: jpeg.height };
+  }
+  const webp = readWebpDimensions(bytes);
+  if (webp !== null) {
+    return { mimeType: "image/webp", width: webp.width, height: webp.height };
+  }
+  throw new Error("Unsupported or corrupted image format. Only valid JPEG, PNG, and WEBP images are accepted.");
 }

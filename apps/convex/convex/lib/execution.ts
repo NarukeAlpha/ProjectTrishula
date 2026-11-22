@@ -89,6 +89,7 @@ async function postExecutionJson<TBody>(
   url: string,
   body: TBody,
   options: ExecutionRequestOptions,
+  rejectRedirects = false,
 ): Promise<Response> {
   const request: RequestInit = {
     method: "POST",
@@ -98,6 +99,9 @@ async function postExecutionJson<TBody>(
     },
     body: JSON.stringify(body),
   };
+  if (rejectRedirects) {
+    request.redirect = "error";
+  }
   if (options.timeoutMs !== undefined) {
     request.signal = AbortSignal.timeout(requireTimeoutMs(options.timeoutMs));
   }
@@ -119,5 +123,5 @@ export async function journalExecutionRequest<TBody>(
   body: TBody,
   options: ExecutionRequestOptions = {},
 ): Promise<Response> {
-  return postExecutionJson(await journalExecutionUrl(ownerId, path), body, options);
+  return postExecutionJson(await journalExecutionUrl(ownerId, path), body, options, true);
 }

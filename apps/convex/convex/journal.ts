@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import {
+  action,
   internalMutation,
   internalQuery,
   mutation,
@@ -12,11 +13,14 @@ import {
 import { actorFromIdentity } from "./lib/auth.js";
 import {
   chartImageIdSchema,
-  chartMimeTypes,
+  decodeBase64Image,
   DEFAULT_BROKER_TIME_ZONE,
+  DEFAULT_CHAT_CLEAR_BATCH_SIZE,
+  DEFAULT_CHAT_LIST_LIMIT,
+  JOURNAL_RUN_TIMEOUT_MS,
   journalChartMimeTypeValidator,
   journalChartSourceValidator,
-  journalChatAttachmentValidator,
+  journalChatAttachmentRefValidator,
   journalLessonInputValidator,
   journalOrderBatchInputValidator,
   journalStableIdSchema,
@@ -26,6 +30,8 @@ import {
   lessonInputSchema,
   MAX_CHART_IMAGE_BYTES,
   MAX_CHAT_ATTACHMENTS,
+  MAX_CHAT_CLEAR_BATCH_SIZE,
+  MAX_CHAT_LIST_LIMIT,
   MAX_CHAT_TEXT_LENGTH,
   MAX_RECENT_HISTORY_MESSAGES,
   normalizeAssistantReview,
@@ -33,6 +39,8 @@ import {
   normalizeOptionalChartMetadata,
   normalizeTradingViewLayoutId,
   orderBatchInputSchema,
+  sha256HexBytes,
+  sniffChartImage,
   toExactToolEvent,
   toolEventSchema,
   tradeInputSchema,
@@ -46,7 +54,6 @@ import {
   type OrderBatchInput,
   type TradeInput,
 } from "./lib/journal.js";
-import { z } from "zod";
 
 type ReadCtx = Pick<QueryCtx, "db" | "storage">;
 type WriteCtx = Pick<MutationCtx, "db" | "storage">;
@@ -113,6 +120,20 @@ export interface JournalChartDto {
   updatedAt: number;
 }
 
+export interface JournalUploadedChartDto {
+  imageKey: string;
+  storageId: Id<"_storage">;
+  mimeType: JournalChartMimeType;
+  width: number;
+  height: number;
+  url: string;
+}
+
+export interface RegisterChartResult {
+  deduplicated: boolean;
+  chart: JournalUploadedChartDto;
+}
+
 export interface JournalChatAttachmentDto {
   storageId: Id<"_storage">;
   imageKey: string;
@@ -135,9 +156,94 @@ export interface JournalChatMessageDto {
   updatedAt: number;
 }
 
+interface ChartPatchFields {
+  storageId?: Id<"_storage">;
+  mimeType?: JournalChartMimeType;
+  width?: number;
+  height?: number;
+  symbol?: string;
+  interval?: string;
+  updatedAt: number;
+}
+
+interface ChartInsertDoc {
+  ownerId: string;
+  imageKey: string;
+  storageId: Id<"_storage">;
+  mimeType: JournalChartMimeType;
+  width?: number;
+  height?: number;
+  symbol?: string;
+  interval?: string;
+  source: JournalChartSource;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface SettingsInsertDoc {
+  ownerId: string;
+  brokerTimeZone: string;
+  tradingViewLayoutId?: string;
+  updatedAt: number;
+}
+
+interface ProgressMessagePatch {
+  status: "running";
+  text?: string;
+  toolEvents?: JournalToolEvent[];
+  updatedAt: number;
+}
+
+interface CompleteRunPatch {
+  status: JournalTerminalChatStatus;
+  error?: string;
+  updatedAt: number;
+}
+
+interface CompleteMessagePatch {
+  status: JournalTerminalChatStatus;
+  text: string;
+  toolEvents?: JournalToolEvent[];
+  error?: string;
+  updatedAt: number;
+}
+
+interface RegisterChartActionArgs {
+  ownerId: string;
+  imageKey: string;
+  storageId: Id<"_storage">;
+  mimeType: JournalChartMimeType;
+  width: number;
+  height: number;
+  symbol?: string;
+  interval?: string;
+  source: JournalChartSource;
+}
+
 function compareStringsDesc(left: string, right: string): number {
   if (left === right) return 0;
   return left > right ? -1 : 1;
+}
+
+function resolveTimestamp(updatedAt: number | undefined, fallbackNow: number): number {
+  if (updatedAt === undefined) return fallbackNow;
+  if (!Number.isSafeInteger(updatedAt) || updatedAt <= 0) {
+    throw new Error("updatedAt must be a positive integer timestamp.");
+  }
+  return updatedAt;
+}
+
+function normalizeBoundedLimit(
+  value: number | undefined,
+  defaultValue: number,
+  maxValue: number,
+  field: string,
+): number {
+  if (value === undefined) return defaultValue;
+  if (!Number.isSafeInteger(value) || value < 1 || value > maxValue) {
+    throw new Error(`${field} must be an integer between 1 and ${maxValue}.`);
+  }
+  return value;
 }
 
 function toSettingsDto(doc: Doc<"journalSettings"> | null): JournalSettingsDto {
@@ -256,6 +362,22 @@ function resolveStableId(stableId: string | undefined): string {
   return journalStableIdSchema.parse(stableId);
 }
 
+async function requireActiveRunForOwner(
+  ctx: ReadCtx,
+  ownerId: string,
+  runStableId: string,
+): Promise<Doc<"journalChatRuns">> {
+  const validatedRunId = journalStableIdSchema.parse(runStableId);
+  const run = await ctx.db
+    .query("journalChatRuns")
+    .withIndex("by_stable", (index) => index.eq("stableId", validatedRunId))
+    .unique();
+  if (!run || run.ownerId !== ownerId || (run.status !== "pending" && run.status !== "running")) {
+    throw new Error("run_not_active");
+  }
+  return run;
+}
+
 async function readSettingsForOwner(ctx: ReadCtx, ownerId: string): Promise<JournalSettingsDto> {
   const row = await ctx.db
     .query("journalSettings")
@@ -353,6 +475,7 @@ async function upsertTradeForOwner(
   stableIdArg: string | undefined,
   rawTrade: TradeInput,
   assistantReviewOverride?: { set: true; value: string | null },
+  explicitUpdatedAt?: number,
 ): Promise<JournalTradeDto> {
   const stableId = resolveStableId(stableIdArg);
   const trade = tradeInputSchema.parse(rawTrade);
@@ -362,7 +485,7 @@ async function upsertTradeForOwner(
       index.eq("ownerId", ownerId).eq("stableId", stableId),
     )
     .unique();
-  const now = Date.now();
+  const now = resolveTimestamp(explicitUpdatedAt, Date.now());
   const assistantReview = assistantReviewOverride?.set
     ? assistantReviewOverride.value
     : (existing?.assistantReview ?? null);
@@ -437,6 +560,7 @@ async function upsertLessonForOwner(
   ownerId: string,
   stableIdArg: string | undefined,
   rawLesson: LessonInput,
+  explicitUpdatedAt?: number,
 ): Promise<JournalLessonDto> {
   const stableId = resolveStableId(stableIdArg);
   const lesson = lessonInputSchema.parse(rawLesson);
@@ -459,7 +583,7 @@ async function upsertLessonForOwner(
       index.eq("ownerId", ownerId).eq("stableId", stableId),
     )
     .unique();
-  const now = Date.now();
+  const now = resolveTimestamp(explicitUpdatedAt, Date.now());
   if (existing) {
     await ctx.db.patch(existing._id, {
       title: lesson.title,
@@ -518,6 +642,7 @@ async function upsertOrderBatchForOwner(
   ownerId: string,
   stableIdArg: string | undefined,
   rawBatch: OrderBatchInput,
+  explicitUpdatedAt?: number,
 ): Promise<JournalOrderBatchDto> {
   const stableId = resolveStableId(stableIdArg);
   const batch = orderBatchInputSchema.parse(rawBatch);
@@ -527,7 +652,7 @@ async function upsertOrderBatchForOwner(
       index.eq("ownerId", ownerId).eq("stableId", stableId),
     )
     .unique();
-  const now = Date.now();
+  const now = resolveTimestamp(explicitUpdatedAt, Date.now());
   if (existing) {
     await ctx.db.patch(existing._id, {
       date: batch.date,
@@ -613,85 +738,30 @@ async function saveReviewForOwner(
   };
 }
 
-interface UpsertChartInput {
+interface RegisterChartInput {
   imageKey: string;
   storageId: Id<"_storage">;
   mimeType: JournalChartMimeType;
-  width?: number;
-  height?: number;
+  width: number;
+  height: number;
   symbol?: string;
   interval?: string;
   source: JournalChartSource;
 }
 
-interface ChartPatchFields {
-  storageId?: Id<"_storage">;
-  width?: number;
-  height?: number;
-  symbol?: string;
-  interval?: string;
-  updatedAt: number;
-}
-
-interface ChartInsertDoc {
-  ownerId: string;
-  imageKey: string;
-  storageId: Id<"_storage">;
-  mimeType: JournalChartMimeType;
-  width?: number;
-  height?: number;
-  symbol?: string;
-  interval?: string;
-  source: JournalChartSource;
-  createdAt: number;
-  updatedAt: number;
-}
-
-interface SettingsInsertDoc {
-  ownerId: string;
-  brokerTimeZone: string;
-  tradingViewLayoutId?: string;
-  updatedAt: number;
-}
-
-interface ProgressMessagePatch {
-  status: "running";
-  text?: string;
-  toolEvents?: JournalToolEvent[];
-  updatedAt: number;
-}
-
-interface CompleteRunPatch {
-  status: JournalTerminalChatStatus;
-  error?: string;
-  updatedAt: number;
-}
-
-interface CompleteMessagePatch {
-  status: JournalTerminalChatStatus;
-  text: string;
-  toolEvents?: JournalToolEvent[];
-  error?: string;
-  updatedAt: number;
-}
-
-interface UpsertChartResult {
-  imageKey: string;
-  storageId: Id<"_storage">;
-  url: string;
-  width?: number;
-  height?: number;
-  deduplicated: boolean;
-}
-
-async function upsertChartForOwner(
+// Never deletes storage blobs inside a mutation: callers that stored a brand-new blob
+// delete ONLY their own newly created storageId if deduplicated === true or on throw.
+async function registerChartForOwner(
   ctx: WriteCtx,
   ownerId: string,
-  input: UpsertChartInput,
-): Promise<UpsertChartResult> {
+  input: RegisterChartInput,
+): Promise<RegisterChartResult> {
   const imageKey = chartImageIdSchema.parse(input.imageKey);
   const width = normalizeOptionalChartDimension(input.width, "width");
   const height = normalizeOptionalChartDimension(input.height, "height");
+  if (width === undefined || height === undefined) {
+    throw new Error("Verified chart width and height are required.");
+  }
   const symbol = normalizeOptionalChartMetadata(input.symbol, "symbol", 32);
   const interval = normalizeOptionalChartMetadata(input.interval, "interval", 32);
 
@@ -705,7 +775,6 @@ async function upsertChartForOwner(
 
   const storageMeta = await ctx.db.system.get(input.storageId);
   if (storageMeta !== null && storageMeta.size > MAX_CHART_IMAGE_BYTES) {
-    await ctx.storage.delete(input.storageId);
     throw new Error(`Chart image exceeds maximum size of ${MAX_CHART_IMAGE_BYTES} bytes.`);
   }
   const incomingUrl = await ctx.storage.getUrl(input.storageId);
@@ -724,28 +793,28 @@ async function upsertChartForOwner(
   if (existing) {
     const existingUrl = await ctx.storage.getUrl(existing.storageId);
     const keepExistingStorage = existingUrl !== null;
-    if (keepExistingStorage && existing.storageId !== input.storageId) {
-      await ctx.storage.delete(input.storageId);
-    }
     const patchFields: ChartPatchFields = { updatedAt: now };
-    if (!keepExistingStorage) patchFields.storageId = input.storageId;
-    if (width !== undefined) patchFields.width = width;
-    if (height !== undefined) patchFields.height = height;
+    if (!keepExistingStorage) {
+      patchFields.storageId = input.storageId;
+      patchFields.mimeType = input.mimeType;
+    }
+    if (existing.width === undefined) patchFields.width = width;
+    if (existing.height === undefined) patchFields.height = height;
     if (symbol !== undefined) patchFields.symbol = symbol;
     if (interval !== undefined) patchFields.interval = interval;
     await ctx.db.patch(existing._id, patchFields);
 
-    const finalWidth = width ?? existing.width;
-    const finalHeight = height ?? existing.height;
-    const result: UpsertChartResult = {
-      imageKey,
-      storageId: keepExistingStorage ? existing.storageId : input.storageId,
-      url: keepExistingStorage ? existingUrl : incomingUrl,
+    return {
       deduplicated: keepExistingStorage,
+      chart: {
+        imageKey,
+        storageId: keepExistingStorage ? existing.storageId : input.storageId,
+        mimeType: keepExistingStorage ? existing.mimeType : input.mimeType,
+        width: existing.width ?? width,
+        height: existing.height ?? height,
+        url: keepExistingStorage ? existingUrl : incomingUrl,
+      },
     };
-    if (finalWidth !== undefined) result.width = finalWidth;
-    if (finalHeight !== undefined) result.height = finalHeight;
-    return result;
   }
 
   const doc: ChartInsertDoc = {
@@ -753,25 +822,27 @@ async function upsertChartForOwner(
     imageKey,
     storageId: input.storageId,
     mimeType: input.mimeType,
+    width,
+    height,
     source: input.source,
     createdAt: now,
     updatedAt: now,
   };
-  if (width !== undefined) doc.width = width;
-  if (height !== undefined) doc.height = height;
   if (symbol !== undefined) doc.symbol = symbol;
   if (interval !== undefined) doc.interval = interval;
   await ctx.db.insert("journalCharts", doc);
 
-  const result: UpsertChartResult = {
-    imageKey,
-    storageId: input.storageId,
-    url: incomingUrl,
+  return {
     deduplicated: false,
+    chart: {
+      imageKey,
+      storageId: input.storageId,
+      mimeType: input.mimeType,
+      width,
+      height,
+      url: incomingUrl,
+    },
   };
-  if (width !== undefined) result.width = width;
-  if (height !== undefined) result.height = height;
-  return result;
 }
 
 async function findActiveRunForOwner(
@@ -790,10 +861,8 @@ async function findActiveRunForOwner(
   return null;
 }
 
-const attachmentMimeTypeSchema = z.enum(chartMimeTypes);
-
 // ---------------------------------------------------------------------------
-// Authenticated client queries & mutations
+// Authenticated client queries, mutations & actions
 // ---------------------------------------------------------------------------
 
 export const getDiary = query({
@@ -930,62 +999,99 @@ export const deleteOrderBatch = mutation({
   },
 });
 
-export const generateUploadUrl = mutation({
-  args: {},
-  handler: async (ctx): Promise<string> => {
-    actorFromIdentity(await ctx.auth.getUserIdentity());
-    return ctx.storage.generateUploadUrl();
-  },
-});
-
-export const registerUploadedChart = mutation({
+export const uploadChartAsset = action({
   args: {
-    imageKey: v.string(),
-    storageId: v.id("_storage"),
-    mimeType: journalChartMimeTypeValidator,
-    width: v.optional(v.number()),
-    height: v.optional(v.number()),
+    base64Data: v.string(),
+    filename: v.optional(v.string()),
     symbol: v.optional(v.string()),
     interval: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ imageKey: string; storageId: Id<"_storage">; url: string }> => {
+  handler: async (ctx, args): Promise<JournalUploadedChartDto> => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
-    const input: UpsertChartInput = {
-      imageKey: args.imageKey,
-      storageId: args.storageId,
-      mimeType: args.mimeType,
-      source: "upload",
-    };
-    if (args.width !== undefined) input.width = args.width;
-    if (args.height !== undefined) input.height = args.height;
-    if (args.symbol !== undefined) input.symbol = args.symbol;
-    if (args.interval !== undefined) input.interval = args.interval;
-    const saved = await upsertChartForOwner(ctx, actor.id, input);
-    return {
-      imageKey: saved.imageKey,
-      storageId: saved.storageId,
-      url: saved.url,
-    };
+    if (args.filename !== undefined) {
+      const trimmedFilename = args.filename.trim();
+      if (trimmedFilename.length === 0 || trimmedFilename.length > 255) {
+        throw new Error("filename must be non-empty and at most 255 characters.");
+      }
+    }
+    const symbol = normalizeOptionalChartMetadata(args.symbol, "symbol", 32);
+    const interval = normalizeOptionalChartMetadata(args.interval, "interval", 32);
+    const bytes = decodeBase64Image(args.base64Data, MAX_CHART_IMAGE_BYTES);
+    const sniffed = sniffChartImage(bytes);
+    const imageKey = await sha256HexBytes(bytes);
+
+    const existing: JournalChartDto | null = await ctx.runQuery(
+      internal.journal.getChartByImageKeyInternal,
+      {
+        ownerId: actor.id,
+        imageKey,
+      },
+    );
+    if (existing !== null && existing.url !== null) {
+      return {
+        imageKey: existing.imageKey,
+        storageId: existing.storageId,
+        mimeType: existing.mimeType,
+        width: existing.width ?? sniffed.width,
+        height: existing.height ?? sniffed.height,
+        url: existing.url,
+      };
+    }
+
+    const newStorageId = await ctx.storage.store(new Blob([bytes], { type: sniffed.mimeType }));
+    try {
+      const registerArgs: RegisterChartActionArgs = {
+        ownerId: actor.id,
+        imageKey,
+        storageId: newStorageId,
+        mimeType: sniffed.mimeType,
+        width: sniffed.width,
+        height: sniffed.height,
+        source: "upload",
+      };
+      if (symbol !== undefined) registerArgs.symbol = symbol;
+      if (interval !== undefined) registerArgs.interval = interval;
+
+      const registered: RegisterChartResult = await ctx.runMutation(
+        internal.journal.registerChartInternal,
+        registerArgs,
+      );
+      if (registered.deduplicated && registered.chart.storageId !== newStorageId) {
+        await ctx.storage.delete(newStorageId);
+      }
+      return registered.chart;
+    } catch (error) {
+      await ctx.storage.delete(newStorageId).catch(() => undefined);
+      throw error;
+    }
   },
 });
 
 export const listChatMessages = query({
-  args: {},
-  handler: async (ctx): Promise<JournalChatMessageDto[]> => {
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<JournalChatMessageDto[]> => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const limit = normalizeBoundedLimit(
+      args.limit,
+      DEFAULT_CHAT_LIST_LIMIT,
+      MAX_CHAT_LIST_LIMIT,
+      "limit",
+    );
     const rows = await ctx.db
       .query("journalChatMessages")
       .withIndex("by_owner_ordinal", (index) => index.eq("ownerId", actor.id))
-      .order("asc")
-      .collect();
-    return Promise.all(rows.map((row) => toChatMessageDto(ctx, row)));
+      .order("desc")
+      .take(limit);
+    return Promise.all(rows.toReversed().map((row) => toChatMessageDto(ctx, row)));
   },
 });
 
 export const sendChatMessage = mutation({
   args: {
     text: v.string(),
-    attachments: v.optional(v.array(journalChatAttachmentValidator)),
+    attachments: v.optional(v.array(journalChatAttachmentRefValidator)),
   },
   handler: async (ctx, args) => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
@@ -1015,7 +1121,6 @@ export const sendChatMessage = mutation({
     }> = [];
     for (const attachment of rawAttachments) {
       const imageKey = chartImageIdSchema.parse(attachment.imageKey);
-      const mimeType = attachmentMimeTypeSchema.parse(attachment.mimeType);
       const filename = attachment.filename.trim();
       if (filename.length === 0 || filename.length > 255) {
         throw new Error("Attachment filename must be non-empty and at most 255 characters.");
@@ -1026,17 +1131,17 @@ export const sendChatMessage = mutation({
           index.eq("ownerId", actor.id).eq("imageKey", imageKey),
         )
         .unique();
-      if (!ownedChart || ownedChart.storageId !== attachment.storageId) {
+      if (!ownedChart) {
         throw new Error("Attachment must reference an uploaded chart owned by this user.");
       }
-      const url = await ctx.storage.getUrl(attachment.storageId);
+      const url = await ctx.storage.getUrl(ownedChart.storageId);
       if (url === null) {
         throw new Error("Attachment storage object not found.");
       }
       attachments.push({
-        storageId: attachment.storageId,
-        imageKey,
-        mimeType,
+        storageId: ownedChart.storageId,
+        imageKey: ownedChart.imageKey,
+        mimeType: ownedChart.mimeType,
         filename,
       });
     }
@@ -1094,6 +1199,9 @@ export const sendChatMessage = mutation({
       ownerId: actor.id,
       runStableId,
     });
+    await ctx.scheduler.runAfter(JOURNAL_RUN_TIMEOUT_MS, internal.journal.expireStaleRun, {
+      runStableId,
+    });
 
     return {
       runStableId,
@@ -1132,39 +1240,70 @@ export const cancelActiveRun = mutation({
 });
 
 export const clearChatHistory = mutation({
-  args: {},
-  handler: async (ctx): Promise<{ deletedMessages: number; deletedRuns: number }> => {
+  args: {
+    batchSize: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ deletedMessages: number; deletedRuns: number; hasMore: boolean }> => {
     const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const batchSize = normalizeBoundedLimit(
+      args.batchSize,
+      DEFAULT_CHAT_CLEAR_BATCH_SIZE,
+      MAX_CHAT_CLEAR_BATCH_SIZE,
+      "batchSize",
+    );
     const activeRun = await findActiveRunForOwner(ctx, actor.id);
     if (activeRun) {
       throw new Error("Cannot clear chat history while a run is active.");
     }
 
-    const messages = await ctx.db
+    const messageBatch = await ctx.db
       .query("journalChatMessages")
       .withIndex("by_owner_ordinal", (index) => index.eq("ownerId", actor.id))
-      .collect();
-    for (const message of messages) {
+      .order("asc")
+      .take(batchSize + 1);
+    const messagesToDelete = messageBatch.slice(0, batchSize);
+    for (const message of messagesToDelete) {
       await ctx.db.delete(message._id);
     }
+    let hasMore = messageBatch.length > batchSize;
 
     let deletedRuns = 0;
+    let remainingRunBudget = batchSize;
     for (const status of ["completed", "failed", "canceled"] as const) {
-      const runs = await ctx.db
+      if (remainingRunBudget === 0) {
+        const leftover = await ctx.db
+          .query("journalChatRuns")
+          .withIndex("by_owner_status", (index) =>
+            index.eq("ownerId", actor.id).eq("status", status),
+          )
+          .first();
+        if (leftover !== null) hasMore = true;
+        break;
+      }
+      const runBatch = await ctx.db
         .query("journalChatRuns")
         .withIndex("by_owner_status", (index) =>
           index.eq("ownerId", actor.id).eq("status", status),
         )
-        .collect();
-      for (const run of runs) {
+        .take(remainingRunBudget + 1);
+      const runsToDelete = runBatch.slice(0, remainingRunBudget);
+      for (const run of runsToDelete) {
         await ctx.db.delete(run._id);
         deletedRuns += 1;
       }
+      if (runBatch.length > remainingRunBudget) {
+        hasMore = true;
+      }
+      remainingRunBudget -= runsToDelete.length;
     }
 
     return {
-      deletedMessages: messages.length,
+      deletedMessages: messagesToDelete.length,
       deletedRuns,
+      hasMore,
     };
   },
 });
@@ -1174,8 +1313,14 @@ export const clearChatHistory = mutation({
 // ---------------------------------------------------------------------------
 
 export const getDiaryForOwner = internalQuery({
-  args: { ownerId: v.string() },
+  args: {
+    ownerId: v.string(),
+    runStableId: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
+    if (args.runStableId !== undefined) {
+      await requireActiveRunForOwner(ctx, args.ownerId, args.runStableId);
+    }
     const bundle = await readDiaryBundleForOwner(ctx, args.ownerId);
     return {
       settings: bundle.settings,
@@ -1191,8 +1336,12 @@ export const getChartByImageKeyInternal = internalQuery({
   args: {
     ownerId: v.string(),
     imageKey: v.string(),
+    runStableId: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<JournalChartDto | null> => {
+    if (args.runStableId !== undefined) {
+      await requireActiveRunForOwner(ctx, args.ownerId, args.runStableId);
+    }
     const imageKey = chartImageIdSchema.parse(args.imageKey);
     const row = await ctx.db
       .query("journalCharts")
@@ -1209,10 +1358,12 @@ export const getChartByImageKeyInternal = internalQuery({
 export const upsertTradeInternal = internalMutation({
   args: {
     ownerId: v.string(),
+    runStableId: v.string(),
     stableId: v.optional(v.string()),
     trade: journalTradeInputValidator,
   },
   handler: async (ctx, args): Promise<JournalTradeDto> => {
+    await requireActiveRunForOwner(ctx, args.ownerId, args.runStableId);
     return upsertTradeForOwner(ctx, args.ownerId, args.stableId, args.trade);
   },
 });
@@ -1220,10 +1371,12 @@ export const upsertTradeInternal = internalMutation({
 export const saveReviewInternal = internalMutation({
   args: {
     ownerId: v.string(),
+    runStableId: v.string(),
     tradeStableId: v.string(),
     assistantReview: v.union(v.string(), v.null()),
   },
   handler: async (ctx, args): Promise<JournalTradeDto> => {
+    await requireActiveRunForOwner(ctx, args.ownerId, args.runStableId);
     return saveReviewForOwner(ctx, args.ownerId, args.tradeStableId, args.assistantReview);
   },
 });
@@ -1231,10 +1384,12 @@ export const saveReviewInternal = internalMutation({
 export const upsertLessonInternal = internalMutation({
   args: {
     ownerId: v.string(),
+    runStableId: v.string(),
     stableId: v.optional(v.string()),
     lesson: journalLessonInputValidator,
   },
   handler: async (ctx, args): Promise<JournalLessonDto> => {
+    await requireActiveRunForOwner(ctx, args.ownerId, args.runStableId);
     return upsertLessonForOwner(ctx, args.ownerId, args.stableId, args.lesson);
   },
 });
@@ -1242,6 +1397,7 @@ export const upsertLessonInternal = internalMutation({
 export const importOrdersInternal = internalMutation({
   args: {
     ownerId: v.string(),
+    runStableId: v.string(),
     orderDays: v.array(
       v.object({
         stableId: v.optional(v.string()),
@@ -1259,6 +1415,8 @@ export const importOrdersInternal = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
+    await requireActiveRunForOwner(ctx, args.ownerId, args.runStableId);
+
     const seenOrderIds = new Set<string>();
     const preparedOrders = args.orderDays.map((entry) => {
       const stableId = resolveStableId(entry.stableId);
@@ -1329,30 +1487,191 @@ export const importOrdersInternal = internalMutation({
   },
 });
 
-export const upsertChartInternal = internalMutation({
+export const registerChartInternal = internalMutation({
   args: {
     ownerId: v.string(),
+    runStableId: v.optional(v.string()),
     imageKey: v.string(),
     storageId: v.id("_storage"),
     mimeType: journalChartMimeTypeValidator,
-    width: v.optional(v.number()),
-    height: v.optional(v.number()),
+    width: v.number(),
+    height: v.number(),
     symbol: v.optional(v.string()),
     interval: v.optional(v.string()),
     source: journalChartSourceValidator,
   },
-  handler: async (ctx, args): Promise<UpsertChartResult> => {
-    const input: UpsertChartInput = {
+  handler: async (ctx, args): Promise<RegisterChartResult> => {
+    if (args.runStableId !== undefined) {
+      await requireActiveRunForOwner(ctx, args.ownerId, args.runStableId);
+    }
+    const input: RegisterChartInput = {
       imageKey: args.imageKey,
       storageId: args.storageId,
       mimeType: args.mimeType,
+      width: args.width,
+      height: args.height,
       source: args.source,
     };
-    if (args.width !== undefined) input.width = args.width;
-    if (args.height !== undefined) input.height = args.height;
     if (args.symbol !== undefined) input.symbol = args.symbol;
     if (args.interval !== undefined) input.interval = args.interval;
-    return upsertChartForOwner(ctx, args.ownerId, input);
+    return registerChartForOwner(ctx, args.ownerId, input);
+  },
+});
+
+export const migrateDiaryInternal = internalMutation({
+  args: {
+    ownerId: v.string(),
+    replaceExistingReviews: v.optional(v.boolean()),
+    orderDays: v.array(
+      v.object({
+        stableId: v.string(),
+        date: v.string(),
+        note: v.string(),
+        orders: journalOrderBatchInputValidator.fields.orders,
+        updatedAt: v.optional(v.number()),
+      }),
+    ),
+    trades: v.array(
+      v.object({
+        stableId: v.string(),
+        trade: journalTradeInputValidator,
+        assistantReview: v.optional(v.union(v.string(), v.null())),
+        updatedAt: v.optional(v.number()),
+      }),
+    ),
+    lessons: v.array(
+      v.object({
+        stableId: v.string(),
+        lesson: journalLessonInputValidator,
+        updatedAt: v.optional(v.number()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const replaceExistingReviews = args.replaceExistingReviews ?? false;
+    const now = Date.now();
+
+    const seenOrderIds = new Set<string>();
+    const preparedOrders = args.orderDays.map((entry) => {
+      const stableId = journalStableIdSchema.parse(entry.stableId);
+      if (seenOrderIds.has(stableId)) {
+        throw new Error(`Duplicate order batch stableId in migration: ${stableId}`);
+      }
+      seenOrderIds.add(stableId);
+      const batch = orderBatchInputSchema.parse({
+        date: entry.date,
+        note: entry.note,
+        orders: entry.orders,
+      });
+      const updatedAt = resolveTimestamp(entry.updatedAt, now);
+      return { stableId, batch, updatedAt };
+    });
+
+    const seenTradeIds = new Set<string>();
+    const preparedTrades: Array<{
+      stableId: string;
+      trade: TradeInput;
+      incomingReview: string | null | undefined;
+      updatedAt: number;
+    }> = [];
+    for (const entry of args.trades) {
+      const stableId = journalStableIdSchema.parse(entry.stableId);
+      if (seenTradeIds.has(stableId)) {
+        throw new Error(`Duplicate trade stableId in migration: ${stableId}`);
+      }
+      seenTradeIds.add(stableId);
+      const trade = tradeInputSchema.parse(entry.trade);
+      const updatedAt = resolveTimestamp(entry.updatedAt, now);
+      let incomingReview: string | null | undefined;
+      if (entry.assistantReview !== undefined) {
+        const normalized = normalizeAssistantReview(entry.assistantReview);
+        if (normalized.imageKeys.length > 0) {
+          await verifyOwnedChartKeys(ctx, args.ownerId, normalized.imageKeys);
+        }
+        incomingReview = normalized.stored;
+      }
+      preparedTrades.push({ stableId, trade, incomingReview, updatedAt });
+    }
+
+    const seenLessonIds = new Set<string>();
+    const preparedLessons: Array<{
+      stableId: string;
+      lesson: LessonInput;
+      updatedAt: number;
+    }> = [];
+    for (const entry of args.lessons) {
+      const stableId = journalStableIdSchema.parse(entry.stableId);
+      if (seenLessonIds.has(stableId)) {
+        throw new Error(`Duplicate lesson stableId in migration: ${stableId}`);
+      }
+      seenLessonIds.add(stableId);
+      const lesson = lessonInputSchema.parse(entry.lesson);
+      const updatedAt = resolveTimestamp(entry.updatedAt, now);
+      if (lesson.tradeStableId !== null && !seenTradeIds.has(lesson.tradeStableId)) {
+        const tradeStableId = lesson.tradeStableId;
+        const existingTrade = await ctx.db
+          .query("journalTrades")
+          .withIndex("by_owner_stable", (index) =>
+            index.eq("ownerId", args.ownerId).eq("stableId", tradeStableId),
+          )
+          .unique();
+        if (!existingTrade) {
+          throw new Error(`Lesson ${stableId} references missing trade ${tradeStableId}.`);
+        }
+      }
+      preparedLessons.push({ stableId, lesson, updatedAt });
+    }
+
+    for (const item of preparedOrders) {
+      await upsertOrderBatchForOwner(ctx, args.ownerId, item.stableId, item.batch, item.updatedAt);
+    }
+
+    let preservedReviews = 0;
+    for (const item of preparedTrades) {
+      const existing = await ctx.db
+        .query("journalTrades")
+        .withIndex("by_owner_stable", (index) =>
+          index.eq("ownerId", args.ownerId).eq("stableId", item.stableId),
+        )
+        .unique();
+
+      let reviewOverride: { set: true; value: string | null } | undefined;
+      if (existing && existing.assistantReview !== null && !replaceExistingReviews) {
+        if (item.incomingReview === undefined || item.incomingReview === null) {
+          preservedReviews += 1;
+        } else if (existing.updatedAt >= item.updatedAt) {
+          preservedReviews += 1;
+        } else {
+          reviewOverride = { set: true, value: item.incomingReview };
+        }
+      } else if (item.incomingReview !== undefined) {
+        reviewOverride = { set: true, value: item.incomingReview };
+      }
+
+      const effectiveUpdatedAt = existing && existing.updatedAt > item.updatedAt && !replaceExistingReviews
+        ? existing.updatedAt
+        : item.updatedAt;
+
+      await upsertTradeForOwner(
+        ctx,
+        args.ownerId,
+        item.stableId,
+        item.trade,
+        reviewOverride,
+        effectiveUpdatedAt,
+      );
+    }
+
+    for (const item of preparedLessons) {
+      await upsertLessonForOwner(ctx, args.ownerId, item.stableId, item.lesson, item.updatedAt);
+    }
+
+    return {
+      orderDays: preparedOrders.length,
+      trades: preparedTrades.length,
+      lessons: preparedLessons.length,
+      preservedReviews,
+    };
   },
 });
 
@@ -1364,7 +1683,7 @@ export interface JournalDispatchPayload {
   history: JournalChatMessageDto[];
 }
 
-export const prepareRunDispatchInternal = internalMutation({
+export const getRunDispatchContextInternal = internalQuery({
   args: {
     ownerId: v.string(),
     runStableId: v.string(),
@@ -1383,10 +1702,6 @@ export const prepareRunDispatchInternal = internalMutation({
     if (!userMessage || !assistantMessage || assistantMessage.status !== "pending") {
       return null;
     }
-
-    const now = Date.now();
-    await ctx.db.patch(run._id, { status: "running", updatedAt: now });
-    await ctx.db.patch(assistantMessage._id, { status: "running", updatedAt: now });
 
     const settings = await readSettingsForOwner(ctx, args.ownerId);
     const recentRows = await ctx.db
@@ -1412,6 +1727,60 @@ export const prepareRunDispatchInternal = internalMutation({
       userMessage: userMessageDto,
       history,
     };
+  },
+});
+
+export const markRunRunningInternal = internalMutation({
+  args: {
+    ownerId: v.string(),
+    runStableId: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ marked: boolean; status: JournalChatStatus | "missing" }> => {
+    const run = await ctx.db
+      .query("journalChatRuns")
+      .withIndex("by_stable", (index) => index.eq("stableId", args.runStableId))
+      .unique();
+    if (!run || run.ownerId !== args.ownerId) {
+      return { marked: false, status: "missing" };
+    }
+    if (run.status !== "pending") {
+      return { marked: false, status: run.status };
+    }
+    const now = Date.now();
+    await ctx.db.patch(run._id, { status: "running", updatedAt: now });
+    await ctx.db.patch(run.assistantMessageId, { status: "running", updatedAt: now });
+    return { marked: true, status: "running" };
+  },
+});
+
+export const expireStaleRun = internalMutation({
+  args: {
+    runStableId: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ expired: boolean }> => {
+    const run = await ctx.db
+      .query("journalChatRuns")
+      .withIndex("by_stable", (index) => index.eq("stableId", args.runStableId))
+      .unique();
+    if (!run || (run.status !== "pending" && run.status !== "running")) {
+      return { expired: false };
+    }
+    const now = Date.now();
+    const errorMessage = "Journal assistant run timed out.";
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      error: errorMessage,
+      updatedAt: now,
+    });
+    await ctx.db.patch(run.assistantMessageId, {
+      status: "failed",
+      error: errorMessage,
+      updatedAt: now,
+    });
+    return { expired: true };
   },
 });
 
