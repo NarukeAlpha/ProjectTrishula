@@ -2,6 +2,7 @@ import { z } from "zod";
 import { discordCompactionThreshold } from "./discord/compaction.js";
 import { DISCORD_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION } from "./discord/native-compaction.js";
 import { ASTRA_CODEX_MODEL_ID } from "./pi/codex-catalog.js";
+import { journalReasoningEfforts, type JournalReasoningEffort } from "./journal/model.js";
 
 const positiveInteger = z.coerce.number().int().positive();
 const nonnegativeMoney = z.coerce.number().finite().nonnegative();
@@ -80,6 +81,9 @@ const environmentSchema = z.object({
   ]).default("pending"),
   EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST: positiveMoney.max(100).optional(),
   PI_MARKET_RESEARCH_MODEL: z.string().trim().min(1).default(ASTRA_CODEX_MODEL_ID).transform(migrateSolModel),
+  CHART_IMG_API_KEY: z.string().trim().min(1).optional(),
+  JOURNAL_MODEL: z.string().trim().min(1).default(ASTRA_CODEX_MODEL_ID).transform(migrateSolModel),
+  JOURNAL_REASONING_EFFORT: z.enum(journalReasoningEfforts).default("high"),
 });
 
 export interface AppConfig {
@@ -141,6 +145,9 @@ export interface AppConfig {
   financialDatasetsOwnerDecision: "pending" | "approved" | "partial" | "rejected";
   financialDatasetsMaxCostUsdPerRequest: number | undefined;
   marketResearchModel: string;
+  chartImgApiKey: string | undefined;
+  journalModel: string;
+  journalReasoningEffort: JournalReasoningEffort;
 }
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -280,6 +287,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     financialDatasetsMaxCostUsdPerRequest:
       value.EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST,
     marketResearchModel: value.PI_MARKET_RESEARCH_MODEL,
+    chartImgApiKey: value.CHART_IMG_API_KEY,
+    journalModel: value.JOURNAL_MODEL,
+    journalReasoningEffort: value.JOURNAL_REASONING_EFFORT,
   };
   if (value.ROBINHOOD_OAUTH_CLIENT_ID !== undefined) config.robinhoodOAuthClientId = value.ROBINHOOD_OAUTH_CLIENT_ID;
   return config;

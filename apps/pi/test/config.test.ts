@@ -204,4 +204,21 @@ describe("loadConfig", () => {
     expect(config.financialDatasetsOwnerDecision).toBe("approved");
     expect(config.financialDatasetsMaxCostUsdPerRequest).toBe(0.25);
   });
+
+  it("loads optional journal configuration with valid Codex defaults", () => {
+    const defaults = loadConfig(base);
+    expect(defaults.chartImgApiKey).toBeUndefined();
+    expect(defaults.journalModel).toBe("gpt-6-astra");
+    expect(defaults.journalReasoningEffort).toBe("high");
+
+    const configured = loadConfig({
+      ...base,
+      CHART_IMG_API_KEY: "test-chart-img-key",
+      JOURNAL_MODEL: "gpt-5.6-sol",
+      JOURNAL_REASONING_EFFORT: "xhigh",
+    });
+    expect(configured.chartImgApiKey).toBe("test-chart-img-key");
+    expect(configured.journalModel).toBe("gpt-6-astra");
+    expect(configured.journalReasoningEffort).toBe("xhigh");
+  });
 });
