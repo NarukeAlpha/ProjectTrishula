@@ -607,7 +607,6 @@ export interface JournalDiaryReadModel {
   trades: JournalTradeReadModel[];
   lessons: JournalLessonReadModel[];
   orderDays: JournalOrderBatchReadModel[];
-  chartUrls: Record<string, string>;
 }
 
 export interface JournalUploadedChartReadModel {

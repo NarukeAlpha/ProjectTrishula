@@ -311,3 +311,16 @@ export function readChartReview(stored: string | null): ChartReview | null {
   if (note !== undefined) review.note = note;
   return review;
 }
+
+export function referencedChartImageKeys(stored: string | null): string[] {
+  const review = readChartReview(stored);
+  if (!review) return [];
+  return [...new Set(review.charts.map((chart) => chart.image))];
+}
+
+export function chartUrlsQueryArgs(
+  stored: string | null,
+): { imageKeys: string[] } | "skip" {
+  const imageKeys = referencedChartImageKeys(stored);
+  return imageKeys.length > 0 ? { imageKeys } : "skip";
+}

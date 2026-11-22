@@ -32,6 +32,7 @@ interface PendingAttachment {
   id: string;
   file: File;
   previewUrl: string | null;
+  uploadedImageKey?: string;
 }
 
 function isAllowedMimeType(type: string): boolean {
@@ -152,6 +153,7 @@ export function JournalChatPane({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
   const attachmentsRef = useRef<PendingAttachment[]>(attachments);
   attachmentsRef.current = attachments;
 
@@ -178,11 +180,12 @@ export function JournalChatPane({
   }, [messages.length, latestMessage?.text, latestMessage?.toolEvents?.length]);
 
   function addFiles(incoming: File[]) {
-    if (incoming.length === 0) return;
+    if (incoming.length === 0 || sendingRef.current) return;
     setError(null);
     const errors: string[] = [];
     const accepted: PendingAttachment[] = [];
-    let remainingSlots = MAX_ATTACHMENTS_PER_MESSAGE - attachments.length;
+    let remainingSlots =
+      MAX_ATTACHMENTS_PER_MESSAGE - attachmentsRef.current.length;
 
     for (const file of incoming) {
       if (!isAllowedMimeType(file.type)) {
@@ -215,7 +218,9 @@ export function JournalChatPane({
     }
 
     if (accepted.length > 0) {
-      setAttachments((current) => [...current, ...accepted]);
+      const next = [...attachmentsRef.current, ...accepted];
+      attachmentsRef.current = next;
+      setAttachments(next);
     }
     if (errors.length > 0) {
       setError(errors[0] ?? "Could not attach image.");
@@ -223,14 +228,18 @@ export function JournalChatPane({
   }
 
   function removeAttachment(id: string) {
+    if (sendingRef.current) return;
     setAttachments((current) => {
       const target = current.find((item) => item.id === id);
       if (target) revokePreviewUrl(target.previewUrl);
-      return current.filter((item) => item.id !== id);
+      const next = current.filter((item) => item.id !== id);
+      attachmentsRef.current = next;
+      return next;
     });
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (sendingRef.current) return;
     const items = event.clipboardData?.items;
     if (!items) return;
     const files: File[] = [];
@@ -248,6 +257,7 @@ export function JournalChatPane({
 
   function handleDragOver(event: DragEvent<HTMLElement>) {
     event.preventDefault();
+    if (sendingRef.current) return;
     if (!dragActive) setDragActive(true);
   }
 
@@ -264,26 +274,47 @@ export function JournalChatPane({
   function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDragActive(false);
+    if (sendingRef.current) return;
     const dropped = Array.from(event.dataTransfer.files);
     addFiles(dropped);
   }
 
   async function handleSubmit(event?: FormEvent) {
     event?.preventDefault();
-    if (busyAction !== null || hasActiveRun) return;
+    if (sendingRef.current || busyAction !== null || hasActiveRun) return;
     const trimmed = text.trim();
-    if (!trimmed && attachments.length === 0) return;
+    const captured = attachmentsRef.current.slice();
+    if (!trimmed && captured.length === 0) return;
 
+    sendingRef.current = true;
+    const capturedIds = new Set(captured.map((item) => item.id));
     setBusyAction("sending");
     setError(null);
     try {
       const uploadedAttachments: JournalChatAttachmentRef[] = [];
-      for (const pending of attachments) {
-        const base64Data = await readFileAsBase64(pending.file);
+      for (const pending of captured) {
         const filename = pending.file.name.trim() || "screenshot.png";
-        const uploaded = await onUploadChart({ base64Data, filename });
+        let imageKey = pending.uploadedImageKey;
+        if (!imageKey) {
+          const base64Data = await readFileAsBase64(pending.file);
+          const uploaded = await onUploadChart({ base64Data, filename });
+          imageKey = uploaded.imageKey;
+          const resolvedKey = imageKey;
+          attachmentsRef.current = attachmentsRef.current.map((item) =>
+            item.id === pending.id
+              ? { ...item, uploadedImageKey: resolvedKey }
+              : item,
+          );
+          setAttachments((current) =>
+            current.map((item) =>
+              item.id === pending.id
+                ? { ...item, uploadedImageKey: resolvedKey }
+                : item,
+            ),
+          );
+        }
         uploadedAttachments.push({
-          imageKey: uploaded.imageKey,
+          imageKey,
           filename,
         });
       }
@@ -291,10 +322,16 @@ export function JournalChatPane({
         text: trimmed,
         attachments: uploadedAttachments,
       });
-      for (const pending of attachments) {
-        revokePreviewUrl(pending.previewUrl);
-      }
-      setAttachments([]);
+      setAttachments((current) => {
+        for (const item of current) {
+          if (capturedIds.has(item.id)) {
+            revokePreviewUrl(item.previewUrl);
+          }
+        }
+        const remaining = current.filter((item) => !capturedIds.has(item.id));
+        attachmentsRef.current = remaining;
+        return remaining;
+      });
       setText("");
       textareaRef.current?.focus();
     } catch (failure) {
@@ -304,6 +341,7 @@ export function JournalChatPane({
           : "Could not send message. Try again.",
       );
     } finally {
+      sendingRef.current = false;
       setBusyAction(null);
     }
   }

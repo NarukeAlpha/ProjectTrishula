@@ -12,13 +12,17 @@ import { AppShell } from "../../app/App";
 import type {
   JournalChatMessageReadModel,
   JournalDiaryReadModel,
+  JournalUploadedChartReadModel,
 } from "../../convex/types";
 import { ChartReview } from "./ChartReview";
 import { readChartReview } from "./chartReviewParser";
+import { clearAllChatHistory } from "./chatHistory";
+import { dollarsToCents, localIsoDate } from "./formatting";
 import {
   JournalWorkspaceView,
   type JournalWorkspaceHandlers,
 } from "./JournalPage";
+import type { ChartUrlsQueryHook } from "./TradeReviewSheet";
 
 afterEach(() => {
   cleanup();
@@ -195,9 +199,6 @@ function createDiary(
         updatedAt: now,
       },
     ],
-    chartUrls: {
-      [SAMPLE_IMAGE_KEY]: SAMPLE_CHART_URL,
-    },
     ...overrides,
   };
 }
@@ -624,5 +625,253 @@ describe("Trading Journal workspace", () => {
     expect(
       screen.queryByRole("complementary", { name: "Nested thread sidebar" }),
     ).toBeNull();
+  });
+
+  it("queries getChartUrls only for the open review's imageKeys and skips prose reviews", () => {
+    const handlers = createHandlers();
+    const chartQuerySpy = vi.fn<ChartUrlsQueryHook>((args) => {
+      if (args === "skip") return undefined;
+      return { [SAMPLE_IMAGE_KEY]: SAMPLE_CHART_URL };
+    });
+
+    render(
+      <JournalWorkspaceView
+        diary={createDiary()}
+        chatMessages={[]}
+        initialChatOpen={false}
+        useChartUrls={chartQuerySpy}
+        handlers={handlers}
+      />,
+    );
+
+    // No review open yet -> query hook not called
+    expect(chartQuerySpy).not.toHaveBeenCalled();
+
+    // Open QQQ review (has structured chart review referencing SAMPLE_IMAGE_KEY)
+    fireEvent.click(screen.getByRole("button", { name: "Review QQQ" }));
+    expect(chartQuerySpy).toHaveBeenLastCalledWith({
+      imageKeys: [SAMPLE_IMAGE_KEY],
+    });
+    const reviewDialog = screen.getByRole("dialog", { name: "Review QQQ" });
+    expect(reviewDialog.querySelector("img")).toHaveAttribute(
+      "src",
+      SAMPLE_CHART_URL,
+    );
+
+    // Close QQQ and open SPY review (plain prose, no charts -> "skip")
+    fireEvent.click(
+      within(reviewDialog).getByRole("button", { name: "Close" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review SPY" }));
+    expect(chartQuerySpy).toHaveBeenLastCalledWith("skip");
+  });
+
+  it("prevents concurrent double-sends and caches uploadedImageKey across retries", async () => {
+    const key1 = "1".repeat(64);
+    const key2 = "2".repeat(64);
+    let secondUploadAttempts = 0;
+
+    const firstUploadResolvers: Array<
+      (value: JournalUploadedChartReadModel) => void
+    > = [];
+
+    const onUploadChart = vi.fn(({ filename }: { filename: string }) => {
+      if (filename === "first.png") {
+        return new Promise<JournalUploadedChartReadModel>((resolve) => {
+          firstUploadResolvers.push(resolve);
+        });
+      }
+      secondUploadAttempts += 1;
+      if (secondUploadAttempts === 1) {
+        return Promise.reject(new Error("Temporary upload error"));
+      }
+      return Promise.resolve({
+        imageKey: key2,
+        storageId: "storage-2",
+        mimeType: "image/png" as const,
+        width: 1200,
+        height: 800,
+        url: "https://convex.example.com/storage/second.png",
+      });
+    });
+
+    const handlers = createHandlers({ onUploadChart });
+
+    render(
+      <JournalWorkspaceView
+        diary={createDiary()}
+        chatMessages={[]}
+        initialChatOpen={true}
+        handlers={handlers}
+      />,
+    );
+
+    const fileInput = screen.getByLabelText("Attach screenshot files");
+    const file1 = new File(["img-1"], "first.png", { type: "image/png" });
+    const file2 = new File(["img-2"], "second.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file1, file2] } });
+
+    const chatInput = screen.getByLabelText("Message Journal Chat");
+    fireEvent.change(chatInput, { target: { value: "Two screenshots" } });
+
+    const sendButton = screen.getByRole("button", {
+      name: "Send journal message",
+    });
+
+    // Trigger rapid double-submit synchronously before first await resolves
+    const form = sendButton.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.click(sendButton);
+    if (form) fireEvent.submit(form);
+
+    await waitFor(() => {
+      expect(firstUploadResolvers).toHaveLength(1);
+    });
+
+    // Only one upload for first.png should have started despite double-submit
+    expect(onUploadChart).toHaveBeenCalledTimes(1);
+
+    // Resolve first upload; second upload fails on attempt 1
+    firstUploadResolvers[0]?.({
+      imageKey: key1,
+      storageId: "storage-1",
+      mimeType: "image/png",
+      width: 1200,
+      height: 800,
+      url: "https://convex.example.com/storage/first.png",
+    });
+
+    expect(await screen.findByText("Temporary upload error")).toBeVisible();
+    expect(handlers.onSendChatMessage).not.toHaveBeenCalled();
+
+    // Retry Send -> first.png must reuse cached uploadedImageKey without re-uploading
+    fireEvent.click(
+      screen.getByRole("button", { name: "Send journal message" }),
+    );
+
+    await waitFor(() => {
+      expect(handlers.onSendChatMessage).toHaveBeenCalledWith({
+        text: "Two screenshots",
+        attachments: [
+          { imageKey: key1, filename: "first.png" },
+          { imageKey: key2, filename: "second.png" },
+        ],
+      });
+    });
+
+    const firstFileCalls = onUploadChart.mock.calls.filter(
+      ([arg]) => arg.filename === "first.png",
+    );
+    expect(firstFileCalls).toHaveLength(1);
+    expect(secondUploadAttempts).toBe(2);
+  });
+
+  it("clears chat history past 10 batches until hasMore is false and surfaces errors", async () => {
+    let callCount = 0;
+    const clearBatch = vi.fn(async () => {
+      callCount += 1;
+      return {
+        deletedMessages: 100,
+        deletedRuns: 50,
+        hasMore: callCount < 12,
+      };
+    });
+
+    await clearAllChatHistory(clearBatch);
+    expect(clearBatch).toHaveBeenCalledTimes(12);
+
+    // Zero-progress guard prevents infinite loop
+    const stuckBatch = vi.fn().mockResolvedValue({
+      deletedMessages: 0,
+      deletedRuns: 0,
+      hasMore: true,
+    });
+    await expect(clearAllChatHistory(stuckBatch)).rejects.toThrow(
+      /could not be fully cleared/i,
+    );
+
+    // Mid-loop batch failure surfaces inline error in JournalChatPane
+    const handlers = createHandlers({
+      onClearChatHistory: vi
+        .fn()
+        .mockRejectedValue(new Error("Clear batch failed on page 2")),
+    });
+    render(
+      <JournalWorkspaceView
+        diary={createDiary()}
+        chatMessages={[
+          {
+            stableId: "msg-clear-1",
+            ordinal: 1,
+            role: "user",
+            text: "Hello",
+            attachments: [],
+            status: "completed",
+            createdAt: 1_770_000_000_000,
+            updatedAt: 1_770_000_000_000,
+          },
+        ]}
+        initialChatOpen={true}
+        handlers={handlers}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm clear" }));
+    expect(
+      await screen.findByText("Clear batch failed on page 2"),
+    ).toBeVisible();
+  });
+
+  it("parses formatted dollar amounts without float drift and defaults dates in broker timezone", async () => {
+    expect(dollarsToCents("$1,234.56")).toBe(123_456);
+    expect(dollarsToCents("-$140.50")).toBe(-14_050);
+    expect(dollarsToCents("$-140.50")).toBe(-14_050);
+    expect(dollarsToCents("19.99")).toBe(1_999);
+    expect(dollarsToCents("+$0.5")).toBe(50);
+    expect(() => dollarsToCents("$1,234.567")).toThrow(/two decimal places/i);
+    expect(() => dollarsToCents("$1,23.45")).toThrow(/valid dollar amount/i);
+
+    const midnightUtc = new Date("2026-11-19T02:30:00Z");
+    expect(localIsoDate("America/Puerto_Rico", midnightUtc)).toBe("2026-11-18");
+    expect(localIsoDate("UTC", midnightUtc)).toBe("2026-11-19");
+
+    // End-to-end formatted money entry in TradeEditorSheet
+    const handlers = createHandlers();
+    render(
+      <JournalWorkspaceView
+        diary={createDiary()}
+        chatMessages={[]}
+        initialChatOpen={false}
+        handlers={handlers}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Log trade" }));
+    const dialog = screen.getByRole("dialog", { name: "Log trade" });
+    fireEvent.change(within(dialog).getByLabelText("Symbol"), {
+      target: { value: "MSFT" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Status"), {
+      target: { value: "Closed" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Realized P&L (USD)"), {
+      target: { value: "-$140.50" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Planned risk (USD)"), {
+      target: { value: "$1,234.56" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save trade" }));
+
+    await waitFor(() => {
+      expect(handlers.onUpsertTrade).toHaveBeenCalledWith({
+        trade: expect.objectContaining({
+          symbol: "MSFT",
+          status: "Closed",
+          realizedPnlCents: -14_050,
+          plannedRiskCents: 123_456,
+        }),
+      });
+    });
   });
 });

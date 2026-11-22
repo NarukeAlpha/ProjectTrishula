@@ -9,19 +9,25 @@ function percent(value: number, total: number): string {
 function ChartFigure({
   chart,
   source,
+  loading,
   timeZone,
 }: {
   chart: ReviewChart;
   source: string | undefined;
+  loading: boolean;
   timeZone: string;
 }) {
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const { crop, focus } = chart;
-  const unavailable = !source || failedSource === source;
+  const unavailable = !loading && (!source || failedSource === source);
 
   return (
     <figure className="journal-review-chart">
-      {unavailable ? (
+      {loading ? (
+        <p className="journal-chart-unavailable" role="status">
+          Loading chart screenshot…
+        </p>
+      ) : unavailable ? (
         <p className="journal-chart-unavailable" role="status">
           The chart screenshot is unavailable.
         </p>
@@ -37,7 +43,9 @@ function ChartFigure({
                 alt=""
                 width={chart.width}
                 height={chart.height}
-                onError={() => setFailedSource(source)}
+                onError={() => {
+                  if (source) setFailedSource(source);
+                }}
                 style={{
                   left: percent(-crop.x, crop.width),
                   top: percent(-crop.y, crop.height),
@@ -116,7 +124,7 @@ export function ChartReview({
   chartUrls,
 }: {
   assistantReview: string | null;
-  chartUrls: Record<string, string>;
+  chartUrls: Record<string, string> | undefined;
 }) {
   if (!assistantReview) {
     return (
@@ -141,6 +149,8 @@ export function ChartReview({
     );
   }
 
+  const loading = chartUrls === undefined;
+
   return (
     <div className="journal-illustrated-review">
       <p className="journal-review-summary">{review.summary}</p>
@@ -160,7 +170,8 @@ export function ChartReview({
           <p>{chart.text}</p>
           <ChartFigure
             chart={chart}
-            source={chartUrls[chart.image]}
+            source={chartUrls?.[chart.image]}
+            loading={loading}
             timeZone={review.timeZone}
           />
         </section>

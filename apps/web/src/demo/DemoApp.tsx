@@ -164,7 +164,6 @@ function createDemoDiary(): JournalDiaryReadModel {
       },
     ],
     orderDays: [],
-    chartUrls: {},
   };
 }
 

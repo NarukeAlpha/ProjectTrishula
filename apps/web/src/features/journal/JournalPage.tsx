@@ -11,13 +11,15 @@ import type {
   JournalTradeReadModel,
   JournalUploadedChartReadModel,
 } from "../../convex/types";
+import { clearAllChatHistory } from "./chatHistory";
+import { DEFAULT_BROKER_TIME_ZONE } from "./constants";
 import { ChatPaneIcon, PlusIcon, SettingsIcon } from "./icons";
 import { JournalChatPane } from "./JournalChatPane";
 import { JournalSettingsPopover } from "./JournalSettingsPopover";
 import { LessonEditorSheet } from "./LessonEditorSheet";
 import { LessonsView } from "./LessonsView";
 import { TradeEditorSheet } from "./TradeEditorSheet";
-import { TradeReviewSheet } from "./TradeReviewSheet";
+import { TradeReviewSheet, type ChartUrlsQueryHook } from "./TradeReviewSheet";
 import { TradesLedger } from "./TradesLedger";
 import "./journal.css";
 
@@ -33,6 +35,12 @@ type ActiveSheet =
 
 function isWideViewport(): boolean {
   return window.innerWidth >= 1100;
+}
+
+function useConvexChartUrls(
+  args: { imageKeys: string[] } | "skip",
+): Record<string, string> | undefined {
+  return useQuery(publicApi.journal.getChartUrls, args);
 }
 
 export interface JournalWorkspaceHandlers {
@@ -68,12 +76,14 @@ export function JournalWorkspaceView({
   chatMessages,
   chatLoading = false,
   initialChatOpen,
+  useChartUrls,
   handlers,
 }: {
   diary: JournalDiaryReadModel | undefined;
   chatMessages: JournalChatMessageReadModel[];
   chatLoading?: boolean;
   initialChatOpen?: boolean;
+  useChartUrls?: ChartUrlsQueryHook;
   handlers: JournalWorkspaceHandlers;
 }) {
   const [tab, setTab] = useState<JournalViewTab>("trades");
@@ -93,7 +103,8 @@ export function JournalWorkspaceView({
   const trades = diary?.trades ?? [];
   const lessons = diary?.lessons ?? [];
   const orderDays = diary?.orderDays ?? [];
-  const chartUrls = diary?.chartUrls ?? {};
+  const brokerTimeZone =
+    diary?.settings.brokerTimeZone ?? DEFAULT_BROKER_TIME_ZONE;
 
   function openTrade(trade: JournalTradeReadModel) {
     if (trade.status === "Closed") {
@@ -265,7 +276,7 @@ export function JournalWorkspaceView({
       {activeReviewTrade && (
         <TradeReviewSheet
           trade={activeReviewTrade}
-          chartUrls={chartUrls}
+          useChartUrls={useChartUrls}
           onEdit={() =>
             setSheet({
               kind: "editTrade",
@@ -289,6 +300,7 @@ export function JournalWorkspaceView({
       {(sheet.kind === "newTrade" || activeEditTrade !== null) && (
         <TradeEditorSheet
           trade={activeEditTrade}
+          brokerTimeZone={brokerTimeZone}
           onSave={async (tradeInput) => {
             if (activeEditTrade) {
               await handlers.onUpsertTrade({
@@ -381,6 +393,7 @@ export function JournalPage() {
       diary={diary}
       chatMessages={chatMessages ?? []}
       chatLoading={chatMessages === undefined}
+      useChartUrls={useConvexChartUrls}
       handlers={{
         onSaveSettings: async (input) => {
           await saveSettings(input);
@@ -416,10 +429,7 @@ export function JournalPage() {
           await cancelActiveRun({});
         },
         onClearChatHistory: async () => {
-          for (let attempt = 0; attempt < 10; attempt += 1) {
-            const result = await clearChatHistory({ batchSize: 100 });
-            if (!result.hasMore) break;
-          }
+          await clearAllChatHistory((args) => clearChatHistory(args));
         },
       }}
     />

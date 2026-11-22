@@ -221,6 +221,11 @@ export const publicApi = {
       NoArguments,
       JournalDiaryReadModel
     >("journal:getDiary"),
+    getChartUrls: makeFunctionReference<
+      "query",
+      { imageKeys: string[] },
+      Record<string, string>
+    >("journal:getChartUrls"),
     saveSettings: makeFunctionReference<
       "mutation",
       { brokerTimeZone: string; tradingViewLayoutId?: string | null },

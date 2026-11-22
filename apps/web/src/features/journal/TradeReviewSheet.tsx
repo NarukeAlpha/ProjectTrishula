@@ -1,19 +1,26 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { JournalTradeReadModel } from "../../convex/types";
 import { ChartReview } from "./ChartReview";
+import { chartUrlsQueryArgs } from "./chartReviewParser";
 import { formatDateLabel, formatMoney, pnlTone } from "./formatting";
 import { JournalSheet } from "./JournalSheet";
 
+export type ChartUrlsQueryHook = (
+  args: { imageKeys: string[] } | "skip",
+) => Record<string, string> | undefined;
+
+const emptyChartUrlsHook: ChartUrlsQueryHook = () => ({});
+
 export function TradeReviewSheet({
   trade,
-  chartUrls,
+  useChartUrls = emptyChartUrlsHook,
   onEdit,
   onWriteLesson,
   onClearReview,
   onClose,
 }: {
   trade: JournalTradeReadModel;
-  chartUrls: Record<string, string>;
+  useChartUrls?: ChartUrlsQueryHook;
   onEdit: () => void;
   onWriteLesson: () => void;
   onClearReview: (stableId: string) => Promise<void>;
@@ -22,6 +29,11 @@ export function TradeReviewSheet({
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const queryArgs = useMemo(
+    () => chartUrlsQueryArgs(trade.assistantReview),
+    [trade.assistantReview],
+  );
+  const chartUrls = useChartUrls(queryArgs);
 
   async function handleClearReview() {
     if (clearing) return;

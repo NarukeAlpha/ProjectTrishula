@@ -1,4 +1,9 @@
 import type { JournalTradeReadModel } from "../../convex/types";
+import { DEFAULT_BROKER_TIME_ZONE } from "./constants";
+
+const MAX_ABS_CENTS = 1_000_000_000_000;
+const PLAIN_DOLLARS_PATTERN = /^(\d+)(?:\.(\d*))?$|^()\.(\d+)$/;
+const GROUPED_DOLLARS_PATTERN = /^(\d{1,3}(?:,\d{3})+)(?:\.(\d*))?$/;
 
 const usdFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -56,13 +61,55 @@ export function pnlTone(cents: number | null): "positive" | "negative" | "" {
 }
 
 export function dollarsToCents(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    throw new Error("Enter a valid dollar amount.");
+  let cursor = raw.trim();
+  if (!cursor) return null;
+
+  let sign = 1;
+  if (cursor.startsWith("+") || cursor.startsWith("-")) {
+    if (cursor.startsWith("-")) sign = -1;
+    cursor = cursor.slice(1).trimStart();
   }
-  return Math.round(parsed * 100);
+  if (cursor.startsWith("$")) {
+    cursor = cursor.slice(1).trimStart();
+  }
+  if (
+    sign === 1 &&
+    (cursor.startsWith("+") || cursor.startsWith("-")) &&
+    raw.trim().startsWith("$")
+  ) {
+    if (cursor.startsWith("-")) sign = -1;
+    cursor = cursor.slice(1).trimStart();
+  }
+
+  let wholeDigits: string;
+  let fracDigits: string;
+  const groupedMatch = GROUPED_DOLLARS_PATTERN.exec(cursor);
+  if (groupedMatch) {
+    wholeDigits = (groupedMatch[1] ?? "").replaceAll(",", "");
+    fracDigits = groupedMatch[2] ?? "";
+  } else {
+    const plainMatch = PLAIN_DOLLARS_PATTERN.exec(cursor);
+    if (!plainMatch) {
+      throw new Error(
+        "Enter a valid dollar amount (for example 125.50 or -$40.00).",
+      );
+    }
+    wholeDigits = plainMatch[1] ?? plainMatch[3] ?? "0";
+    fracDigits = plainMatch[2] ?? plainMatch[4] ?? "";
+  }
+
+  if (fracDigits.length > 2) {
+    throw new Error("Enter at most two decimal places for dollar amounts.");
+  }
+
+  const wholeValue = BigInt(wholeDigits || "0");
+  const fracValue = BigInt(fracDigits.padEnd(2, "0"));
+  const totalBig = wholeValue * 100n + fracValue;
+  if (totalBig > BigInt(MAX_ABS_CENTS)) {
+    throw new Error("Dollar amount is outside the supported range.");
+  }
+  const signedCents = sign * Number(totalBig);
+  return Object.is(signedCents, -0) ? 0 : signedCents;
 }
 
 export function centsToDollars(cents: number | null | undefined): string {
@@ -74,12 +121,34 @@ export function pluralize(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export function localIsoDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function formatIsoDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  const fallbackMonth = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const fallbackDay = String(date.getUTCDate()).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${fallbackMonth}-${fallbackDay}`;
+}
+
+export function localIsoDate(
+  timeZone: string = DEFAULT_BROKER_TIME_ZONE,
+  now: Date = new Date(),
+): string {
+  const candidate = timeZone.trim() || DEFAULT_BROKER_TIME_ZONE;
+  try {
+    return formatIsoDateInTimeZone(now, candidate);
+  } catch {
+    return formatIsoDateInTimeZone(now, DEFAULT_BROKER_TIME_ZONE);
+  }
 }
 
 export function formatFileSize(bytes: number): string {

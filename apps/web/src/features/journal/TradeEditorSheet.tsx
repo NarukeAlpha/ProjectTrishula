@@ -10,6 +10,7 @@ import type {
   JournalTradeReadModel,
 } from "../../convex/types";
 import {
+  DEFAULT_BROKER_TIME_ZONE,
   JOURNAL_ACCOUNTS,
   JOURNAL_ADHERENCE_OPTIONS,
   JOURNAL_DIRECTIONS,
@@ -32,16 +33,18 @@ function parseChoice<T extends string>(
 
 export function TradeEditorSheet({
   trade,
+  brokerTimeZone = DEFAULT_BROKER_TIME_ZONE,
   onSave,
   onDelete,
   onClose,
 }: {
   trade: JournalTradeReadModel | null;
+  brokerTimeZone?: string;
   onSave: (input: JournalTradeInput) => Promise<void>;
   onDelete?: () => Promise<void>;
   onClose: () => void;
 }) {
-  const today = localIsoDate();
+  const today = localIsoDate(brokerTimeZone);
   const [status, setStatus] = useState<JournalStatus>(trade?.status ?? "Open");
   const [mistakes, setMistakes] = useState<JournalMistake[]>(
     trade?.mistakes ?? [],
@@ -262,14 +265,12 @@ export function TradeEditorSheet({
                     <span>Realized P&amp;L (USD)</span>
                     <input
                       name="realizedPnl"
-                      type="number"
+                      type="text"
                       inputMode="decimal"
-                      min="-10000000000"
-                      max="10000000000"
-                      step="0.01"
+                      autoComplete="off"
                       disabled={!closed}
                       defaultValue={centsToDollars(trade?.realizedPnlCents)}
-                      placeholder="0.00"
+                      placeholder="e.g. 125.50 or -$40.00"
                     />
                   </label>
                 </div>
@@ -321,13 +322,11 @@ export function TradeEditorSheet({
                     <span>Planned risk (USD)</span>
                     <input
                       name="plannedRisk"
-                      type="number"
+                      type="text"
                       inputMode="decimal"
-                      min="0.01"
-                      max="10000000000"
-                      step="0.01"
+                      autoComplete="off"
                       defaultValue={centsToDollars(trade?.plannedRiskCents)}
-                      placeholder="0.00"
+                      placeholder="e.g. 100.00"
                     />
                   </label>
                 </div>
