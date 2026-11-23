@@ -114,7 +114,15 @@ export async function executionRequest<TBody>(
   body: TBody,
   options: ExecutionRequestOptions = {},
 ): Promise<Response> {
-  return postExecutionJson(await executionUrl(actorId, path), body, options);
+  const normalizedPath = requirePath(path);
+  const executionBaseUrl = process.env.EXECUTION_BASE_URL?.trim();
+  const url = executionBaseUrl
+    ? `${normalizeBaseUrl(executionBaseUrl, "EXECUTION_BASE_URL")}${normalizedPath}`
+    : await executionUrl(actorId, normalizedPath);
+  const effectiveOptions: ExecutionRequestOptions = {
+    timeoutMs: options.timeoutMs ?? 30_000,
+  };
+  return postExecutionJson(url, body, effectiveOptions, true);
 }
 
 export async function journalExecutionRequest<TBody>(

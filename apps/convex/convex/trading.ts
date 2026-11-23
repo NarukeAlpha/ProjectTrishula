@@ -22,12 +22,18 @@ import {
 import { executionRequest } from "./lib/execution.js";
 import {
   ROBINHOOD_OAUTH_TRANSACTION_TTL_MS,
+  parseRobinhoodCallbackInput,
   requireRobinhoodAuthorizationUrl,
   requireRobinhoodOAuthState,
 } from "./lib/robinhood_oauth.js";
 import { assertProposalApprovable } from "./lib/trade_approval.js";
 
-type BrokerConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
+type BrokerConnectionStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "reauth_required"
+  | "error";
 type TradeProposalStatus =
   | "awaiting_confirmation"
   | "approved"
@@ -345,14 +351,24 @@ export const createBrokerOAuthTransaction = internalMutation({
 export const consumeBrokerOAuthTransaction = internalMutation({
   args: {
     stateHash: v.string(),
+    expectedOwnerId: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<BrokerOAuthTransaction | null> => {
     const stateHash = requireBrokerOAuthStateHash(args.stateHash);
+    if (args.expectedOwnerId !== undefined) {
+      requireCredentialVaultOwnerId(args.expectedOwnerId);
+    }
     const transaction = await ctx.db
       .query("brokerOAuthTransactions")
       .withIndex("by_stateHash", (index) => index.eq("stateHash", stateHash))
       .unique();
     if (!transaction) return null;
+    if (
+      args.expectedOwnerId !== undefined &&
+      transaction.ownerId !== args.expectedOwnerId
+    ) {
+      return null;
+    }
     await ctx.db.delete(transaction._id);
     if (transaction.expiresAt <= Date.now()) return null;
     return {
@@ -524,6 +540,7 @@ export const setConnectionStatus = internalMutation({
       v.literal("disconnected"),
       v.literal("connecting"),
       v.literal("connected"),
+      v.literal("reauth_required"),
       v.literal("error"),
     ),
     label: v.optional(v.string()),
@@ -606,6 +623,70 @@ export const startRobinhoodConnection = action({
         ownerId: actor.id,
         status: "error",
         errorCode: "authorization_start_failed",
+      });
+      throw error;
+    }
+  },
+});
+
+export const completeRobinhoodConnection = action({
+  args: {
+    callbackUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = actorFromIdentity(await ctx.auth.getUserIdentity());
+    const parsedCallback = parseRobinhoodCallbackInput(args.callbackUrl);
+    const transaction = await ctx.runMutation(
+      internal.trading.consumeBrokerOAuthTransaction,
+      {
+        stateHash: await sha256Hex(parsedCallback.state),
+        expectedOwnerId: actor.id,
+      },
+    );
+    if (!transaction) {
+      throw new Error(
+        "This Robinhood authorization link expired or does not match your account. Start a new connection.",
+      );
+    }
+    if (parsedCallback.error !== undefined || parsedCallback.code === undefined) {
+      await ctx.runMutation(internal.trading.setConnectionStatus, {
+        ownerId: actor.id,
+        status: "error",
+        errorCode: "authorization_denied",
+      });
+      throw new Error("Robinhood authorization was denied or incomplete. Start again.");
+    }
+    try {
+      const response = await executionRequest(
+        actor.id,
+        "/connections/robinhood/complete",
+        {
+          actorId: actor.id,
+          code: parsedCallback.code,
+          state: parsedCallback.state,
+        },
+      );
+      const result = await parsedResponse(
+        response,
+        connectionResponseSchema,
+        "Robinhood authorization could not finish.",
+      );
+      if (result.status !== "connected") {
+        throw new Error("Robinhood did not confirm the connection.");
+      }
+      const connectionArgs: ConnectionStatusArguments = {
+        ownerId: actor.id,
+        status: "connected",
+        grantedScopes: result.grantedScopes,
+      };
+      if (result.label !== undefined) connectionArgs.label = result.label;
+      await ctx.runMutation(internal.trading.setConnectionStatus, connectionArgs);
+      return result;
+    } catch (error) {
+      await ctx.runMutation(internal.trading.setConnectionStatus, {
+        ownerId: actor.id,
+        status: "error",
+        errorCode: "authorization_callback_failed",
       });
       throw error;
     }

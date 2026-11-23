@@ -102,7 +102,9 @@ export function toTradingDashboardModel(
     brokerConnection: value.connection?.status ?? "disconnected",
     brokerIsMock: /\b(?:demo|mock|simulation)\b/i.test(brokerLabel),
     brokerLabel,
-    connectionNeedsAttention: value.connection?.status === "error",
+    connectionNeedsAttention:
+      value.connection?.status === "error" ||
+      value.connection?.status === "reauth_required",
     portfolio,
     positions,
     proposals,

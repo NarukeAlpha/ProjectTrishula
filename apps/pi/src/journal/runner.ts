@@ -7,6 +7,11 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import type {
+  RobinhoodRunSession,
+  RobinhoodSessionOpenResult,
+  TradingBroker,
+} from "../broker/types.js";
 import type { Logger } from "../runtime/logger.js";
 import {
   fetchJournalAttachment,
@@ -29,11 +34,15 @@ import {
   type JournalRunProgressInput,
 } from "./convex-client.js";
 import type { JournalModelAdapter, JournalModelReadiness } from "./model.js";
-import { buildJournalSystemPrompt } from "./prompt.js";
 import {
+  buildJournalSystemPrompt,
+  type JournalBrokerPromptState,
+} from "./prompt.js";
+import {
+  buildJournalToolsWithBroker,
   describeToolStart,
   executeJournalTool,
-  journalTools,
+  type JournalToolExecutionContext,
 } from "./tools.js";
 
 export const DEFAULT_MAX_JOURNAL_ITERATIONS = 16;
@@ -56,6 +65,7 @@ export interface JournalAgentRunnerOptions {
   model: JournalModelAdapter;
   convex: JournalConvexClient;
   chartProvider: ChartProvider;
+  broker?: TradingBroker;
   convexSiteUrl: string;
   convexCloudOrigin?: string;
   allowedAttachmentOrigins?: readonly string[];
@@ -312,6 +322,7 @@ class DefaultJournalAgentRunner implements JournalAgentRunner {
       }
     };
 
+    let brokerSession: RobinhoodRunSession | undefined;
     try {
       signal.throwIfAborted();
       const fetchOptions: AttachmentFetchOptions = {
@@ -327,7 +338,37 @@ class DefaultJournalAgentRunner implements JournalAgentRunner {
         fetchOptions.fetch = this.options.attachmentFetch;
       }
 
-      const systemPrompt = buildJournalSystemPrompt(request.settings);
+      let brokerPromptState: JournalBrokerPromptState = { status: "disconnected" };
+      if (this.options.broker) {
+        try {
+          const opened: RobinhoodSessionOpenResult = await this.options.broker.openRunSession(
+            request.ownerId,
+            signal,
+          );
+          if (opened.status === "connected") {
+            brokerSession = opened.session;
+          } else if (opened.status === "reauth_required") {
+            brokerPromptState = { status: "reauth_required" };
+          }
+        } catch (brokerError) {
+          this.options.logger.warn("journal_robinhood_session_open_failed", {
+            runId: request.runId,
+            error: brokerError instanceof Error ? brokerError.message.slice(0, 200) : "broker_open_failed",
+          });
+        }
+      }
+
+      const { tools: activeTools, brokerToolNameMap } = buildJournalToolsWithBroker(
+        brokerSession?.tools ?? [],
+      );
+      if (brokerSession && brokerToolNameMap.size > 0) {
+        brokerPromptState = {
+          status: "connected",
+          toolNames: [...brokerToolNameMap.keys()],
+        };
+      }
+
+      const systemPrompt = buildJournalSystemPrompt(request.settings, brokerPromptState);
       const messages = await buildInitialMessages(
         request,
         fetchOptions,
@@ -344,7 +385,7 @@ class DefaultJournalAgentRunner implements JournalAgentRunner {
           context: {
             systemPrompt,
             messages,
-            tools: journalTools,
+            tools: activeTools,
           },
           signal,
         });
@@ -392,13 +433,18 @@ class DefaultJournalAgentRunner implements JournalAgentRunner {
           }
           await pushProgress(text.length > 0 ? text : undefined);
 
-          const result = await executeJournalTool(toolCall, {
+          const toolContext: JournalToolExecutionContext = {
             credentials,
             settings: request.settings,
             convex: this.options.convex,
             chartProvider: this.options.chartProvider,
+            brokerToolNameMap,
             signal,
-          });
+          };
+          if (brokerSession !== undefined) {
+            toolContext.brokerSession = brokerSession;
+          }
+          const result = await executeJournalTool(toolCall, toolContext);
 
           if (eventIndex >= 0) {
             toolEvents[eventIndex] = {
@@ -476,6 +522,9 @@ class DefaultJournalAgentRunner implements JournalAgentRunner {
         error: message || "Unexpected journal agent error.",
       };
     } finally {
+      if (brokerSession) {
+        await brokerSession.close().catch(() => undefined);
+      }
       if (!inactiveStop && !finalized) {
         finalized = true;
         const completePayload: JournalRunCompleteInput = {

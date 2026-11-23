@@ -16,6 +16,14 @@ const nonnegativeMoney = z.coerce.number().finite().nonnegative();
 const positiveMoney = z.coerce.number().finite().positive();
 const stableActorId = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9:_-]+$/);
 const migrateSolModel = (model: string) => model === "gpt-5.6-sol" ? ASTRA_CODEX_MODEL_ID : model;
+export const DEFAULT_ROBINHOOD_OAUTH_REDIRECT_URI = "http://127.0.0.1:8787/callback";
+
+function isLoopbackRedirectUrl(url: URL): boolean {
+  if (url.protocol !== "http:") return false;
+  const host = url.hostname.toLowerCase();
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]") return false;
+  return url.username === "" && url.password === "" && url.search === "" && url.hash === "";
+}
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
@@ -31,6 +39,7 @@ const environmentSchema = z.object({
   CONVEX_RETRY_ATTEMPTS: positiveInteger.max(8).default(4),
   SHUTDOWN_TIMEOUT_MS: positiveInteger.max(120_000).default(25_000),
   BOUND_ACTOR_ID: stableActorId.optional(),
+  MULTI_ACTOR_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   PI_AUTH_PATH: z.string().trim().min(1).default("/data/auth.json"),
   PI_CREDENTIAL_ENCRYPTION_KEY: z.string().trim().min(32).optional(),
   PI_CREDENTIAL_KEY_VERSION: positiveInteger.max(1_000_000).default(1),
@@ -109,6 +118,7 @@ export interface AppConfig {
   retryAttempts: number;
   shutdownTimeoutMs: number;
   boundActorId: string | undefined;
+  multiActorEnabled: boolean;
   piAuthPath: string;
   piCredentialEncryptionKey: string | undefined;
   piCredentialKeyVersion: number;
@@ -199,8 +209,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     }
     convexCloudOrigin = parsedCloudOrigin.origin;
   }
-  if (value.NODE_ENV === "production" && value.BOUND_ACTOR_ID === undefined) {
-    throw new Error("BOUND_ACTOR_ID is required in production.");
+  if (value.NODE_ENV === "production" && !value.MULTI_ACTOR_ENABLED && value.BOUND_ACTOR_ID === undefined) {
+    throw new Error("BOUND_ACTOR_ID is required in production unless MULTI_ACTOR_ENABLED is true.");
   }
   if (value.PI_DISCORD_SHARED_SECRET === value.SERVICE_SHARED_SECRET) {
     throw new Error("PI_DISCORD_SHARED_SECRET must be independent from SERVICE_SHARED_SECRET.");
@@ -241,20 +251,22 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
 
   const robinhoodOAuthRedirectUri = value.ROBINHOOD_OAUTH_REDIRECT_URI
-    ?? `${value.CONVEX_SITE_URL}/broker/robinhood/callback`;
+    ?? DEFAULT_ROBINHOOD_OAUTH_REDIRECT_URI;
   const robinhoodRedirectUrl = new URL(robinhoodOAuthRedirectUri);
-  if (
-    robinhoodRedirectUrl.pathname !== "/http/broker/robinhood/callback"
-    || robinhoodRedirectUrl.search !== ""
-    || robinhoodRedirectUrl.hash !== ""
-  ) {
-    throw new Error("ROBINHOOD_OAUTH_REDIRECT_URI must use the exact /http/broker/robinhood/callback path.");
-  }
-  if (value.NODE_ENV === "production" && robinhoodRedirectUrl.protocol !== "https:") {
-    throw new Error("ROBINHOOD_OAUTH_REDIRECT_URI must use HTTPS in production.");
-  }
-  if (robinhoodRedirectUrl.origin !== convexUrl.origin) {
-    throw new Error("ROBINHOOD_OAUTH_REDIRECT_URI must use the CONVEX_SITE_URL origin.");
+  if (!isLoopbackRedirectUrl(robinhoodRedirectUrl)) {
+    if (
+      robinhoodRedirectUrl.pathname !== "/http/broker/robinhood/callback"
+      || robinhoodRedirectUrl.search !== ""
+      || robinhoodRedirectUrl.hash !== ""
+    ) {
+      throw new Error("ROBINHOOD_OAUTH_REDIRECT_URI must be a localhost loopback URI or use the exact /http/broker/robinhood/callback path.");
+    }
+    if (value.NODE_ENV === "production" && robinhoodRedirectUrl.protocol !== "https:") {
+      throw new Error("ROBINHOOD_OAUTH_REDIRECT_URI must use HTTPS in production.");
+    }
+    if (robinhoodRedirectUrl.origin !== convexUrl.origin) {
+      throw new Error("ROBINHOOD_OAUTH_REDIRECT_URI must use the CONVEX_SITE_URL origin.");
+    }
   }
 
   const compaction = discordCompactionThreshold({
@@ -276,6 +288,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     retryAttempts: value.CONVEX_RETRY_ATTEMPTS,
     shutdownTimeoutMs: value.SHUTDOWN_TIMEOUT_MS,
     boundActorId: value.BOUND_ACTOR_ID,
+    multiActorEnabled: value.MULTI_ACTOR_ENABLED,
     piAuthPath: value.PI_AUTH_PATH,
     piCredentialEncryptionKey: value.PI_CREDENTIAL_ENCRYPTION_KEY,
     piCredentialKeyVersion: value.PI_CREDENTIAL_KEY_VERSION,

@@ -1,5 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+  auth,
+  refreshAuthorization,
+  type OAuthClientProvider,
+} from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type {
@@ -8,6 +12,7 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { z } from "zod";
 import type { CanonicalJsonValue } from "../results/canonical-json.js";
 import {
   defaultConnection,
@@ -16,14 +21,27 @@ import {
   type StoredOAuthTransaction,
   type StoredRobinhoodConnection,
 } from "./actor-store.js";
-import type { ApplicationToolArguments } from "./types.js";
+import type {
+  ApplicationToolArguments,
+  McpDiscoveredTool,
+  McpToolSchemaObject,
+  RobinhoodRunSession,
+  RobinhoodSessionOpenResult,
+} from "./types.js";
 
 export const ROBINHOOD_MCP_URL = "https://agent.robinhood.com/mcp/trading";
 export const ROBINHOOD_MCP_ISSUER = "https://agent.robinhood.com/mcp/trading";
+export const ROBINHOOD_OAUTH_TOKEN_URL = "https://api.robinhood.com/oauth2/token/";
 export const ROBINHOOD_OAUTH_SCOPE = "internal";
 export const OAUTH_TRANSACTION_TTL_MS = 20 * 60 * 1_000;
+export const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1_000;
+const DEFAULT_ROBINHOOD_FETCH_TIMEOUT_MS = 20_000;
 
 const ROBINHOOD_AUTHORIZATION_URL = "https://robinhood.com/oauth";
+const ALLOWED_ROBINHOOD_API_HOSTS: ReadonlySet<string> = new Set([
+  "agent.robinhood.com",
+  "api.robinhood.com",
+]);
 const CLIENT_REGISTRATION_PROFILE_VERSION = 1 as const;
 
 export const APPLICATION_MCP_TOOLS = [
@@ -37,10 +55,21 @@ export const APPLICATION_MCP_TOOLS = [
 export type ApplicationMcpTool = (typeof APPLICATION_MCP_TOOLS)[number];
 
 export interface RobinhoodConnectionStatus {
-  status: "authorization_required" | "connected" | "disconnected";
+  status: "authorization_required" | "connected" | "reauth_required" | "disconnected";
   authorizationUrl?: string;
   label?: string;
   grantedScopes?: string[];
+  errorCode?: string;
+}
+
+export class RobinhoodReauthRequiredError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "RobinhoodReauthRequiredError";
+  }
 }
 
 interface AuthStartOptions {
@@ -63,9 +92,120 @@ export interface RobinhoodMcpClientOptions {
   redirectUri: string;
   clientId?: string;
   fetchFn?: FetchLike;
+  fetchTimeoutMs?: number;
   now?: () => number;
   authorize?: Authorize;
   verifyConnection?: (actorId: string) => Promise<void>;
+  onReauthRequired?: (actorId: string, errorCode: string) => Promise<void>;
+}
+
+const MUTATING_TOOL_VERBS = [
+  "place",
+  "submit",
+  "create",
+  "cancel",
+  "replace",
+  "modify",
+  "edit",
+  "update",
+  "delete",
+  "remove",
+  "buy",
+  "sell",
+  "trade",
+  "execute",
+  "transfer",
+  "withdraw",
+  "deposit",
+  "close",
+  "approve",
+  "revoke",
+  "set",
+  "write",
+  "post",
+] as const;
+
+const READ_ONLY_TOOL_PREFIXES = [
+  "get_",
+  "list_",
+  "read_",
+  "fetch_",
+  "search_",
+  "lookup_",
+  "find_",
+  "describe_",
+  "check_",
+  "view_",
+  "query_",
+  "show_",
+] as const;
+
+const READ_ONLY_TOOL_KEYWORDS = [
+  "quote",
+  "quotes",
+  "portfolio",
+  "account",
+  "accounts",
+  "position",
+  "positions",
+  "holdings",
+  "orders",
+  "history",
+  "watchlist",
+  "fundamentals",
+  "market",
+  "option",
+  "options",
+  "earnings",
+  "news",
+  "ratings",
+  "balance",
+  "balances",
+  "buying_power",
+  "dividend",
+  "dividends",
+  "split",
+  "splits",
+  "instrument",
+  "instruments",
+  "bar",
+  "bars",
+  "candle",
+  "candles",
+  "chain",
+] as const;
+
+export interface ToolReadOnlyCandidate {
+  readonly name: string;
+  readonly annotations?: {
+    readonly readOnlyHint?: boolean | undefined;
+    readonly destructiveHint?: boolean | undefined;
+  } | undefined;
+}
+
+export function isReadOnlyRobinhoodTool(tool: ToolReadOnlyCandidate): boolean {
+  const normalized = tool.name.trim().toLowerCase();
+  if (!/^[a-z0-9_.:-]{1,128}$/.test(normalized)) return false;
+  if (tool.annotations?.destructiveHint === true) return false;
+  const tokens = normalized.split(/[^a-z0-9]+/).filter(Boolean);
+  if (tokens.some((token) => MUTATING_TOOL_VERBS.some((verb) => verb === token))) {
+    return false;
+  }
+  if (tool.annotations?.readOnlyHint === true) return true;
+  if (READ_ONLY_TOOL_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return true;
+  }
+  return tokens.some((token) => READ_ONLY_TOOL_KEYWORDS.some((keyword) => keyword === token));
+}
+
+export function isLoopbackRedirectUri(redirectUri: string): boolean {
+  try {
+    const parsed = new URL(redirectUri);
+    const host = parsed.hostname.toLowerCase();
+    return parsed.protocol === "http:" && (host === "127.0.0.1" || host === "localhost" || host === "[::1]");
+  } catch {
+    return false;
+  }
 }
 
 function safeActorId(actorId: string): void {
@@ -78,8 +218,36 @@ function stateMatches(expected: string, supplied: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function createGuardedRobinhoodFetch(
+  baseFetch: FetchLike,
+  timeoutMs: number,
+): FetchLike {
+  return async (input, init) => {
+    const url = input instanceof URL ? input : new URL(input);
+    const host = url.hostname.toLowerCase();
+    if (
+      url.protocol !== "https:"
+      || !ALLOWED_ROBINHOOD_API_HOSTS.has(host)
+      || url.username !== ""
+      || url.password !== ""
+      || (url.port !== "" && url.port !== "443")
+    ) {
+      throw new Error("Blocked outbound request outside the allowlisted Robinhood HTTPS hosts.");
+    }
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, timeoutSignal])
+      : timeoutSignal;
+    return baseFetch(url, {
+      ...init,
+      redirect: "error",
+      signal,
+    });
+  };
+}
+
 interface RobinhoodClientMetadata extends OAuthClientMetadata {
-  application_type: "web";
+  application_type: "web" | "native";
   scope: typeof ROBINHOOD_OAUTH_SCOPE;
 }
 
@@ -89,8 +257,8 @@ function clientMetadata(redirectUri: string): RobinhoodClientMetadata {
     token_endpoint_auth_method: "none",
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
-    client_name: "Phone Trading POC",
-    application_type: "web",
+    client_name: "Project Trishula",
+    application_type: isLoopbackRedirectUri(redirectUri) ? "native" : "web",
     scope: ROBINHOOD_OAUTH_SCOPE,
   };
 }
@@ -213,9 +381,34 @@ interface McpToolResult {
 }
 
 interface TransportOptions {
-  authProvider: ActorOAuthProvider;
+  authProvider: OAuthClientProvider;
   requestInit: RequestInit;
-  fetch?: FetchLike;
+  fetch: FetchLike;
+}
+
+const jsonRecordSchema = z.record(z.string(), z.json());
+
+interface MutableToolSchemaObject {
+  [key: string]: CanonicalJsonValue;
+}
+
+function normalizedToolSchema(rawSchema: z.infer<typeof jsonRecordSchema> | undefined): McpToolSchemaObject {
+  const fallback: McpToolSchemaObject = {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  };
+  if (!rawSchema) return fallback;
+  const parsed = jsonRecordSchema.safeParse(rawSchema);
+  if (!parsed.success) return fallback;
+  const schema: MutableToolSchemaObject = { ...parsed.data };
+  if (schema.type !== "object") {
+    schema.type = "object";
+  }
+  if (!schema.properties || Array.isArray(schema.properties) || !(schema.properties instanceof Object)) {
+    schema.properties = {};
+  }
+  return schema;
 }
 
 function normalizedToolData(result: McpToolResult): CanonicalJsonValue {
@@ -225,12 +418,36 @@ function normalizedToolData(result: McpToolResult): CanonicalJsonValue {
   if (!content) return {};
   const text = content.map((part) => part.text).join("\n");
   if (!text) return {};
+  const bounded = text.slice(0, 64 * 1024);
   try {
     // SAFETY: MCP text content is parsed only as the bounded JSON result returned by the approved tool.
-    return JSON.parse(text) as CanonicalJsonValue;
+    return JSON.parse(bounded) as CanonicalJsonValue;
   } catch {
-    return { text: text.slice(0, 64 * 1024) };
+    return { text: bounded };
   }
+}
+
+function tokenExpiryFrom(tokens: OAuthTokens, obtainedAt: number): number | undefined {
+  if (tokens.expires_in === undefined || !Number.isFinite(tokens.expires_in) || tokens.expires_in <= 0) {
+    return undefined;
+  }
+  return obtainedAt + Math.round(tokens.expires_in * 1_000);
+}
+
+function isTokenRefreshFailure(error: Error): boolean {
+  const name = error.name.toLowerCase();
+  const message = error.message.toLowerCase();
+  return (
+    name.includes("invalidgrant")
+    || name.includes("invalidclient")
+    || name.includes("unauthorizedclient")
+    || message.includes("invalid_grant")
+    || message.includes("invalid_client")
+    || message.includes("invalid_token")
+    || message.includes("unauthorized")
+    || message.includes("http 400")
+    || message.includes("http 401")
+  );
 }
 
 class ActorOAuthProvider implements OAuthClientProvider {
@@ -240,6 +457,7 @@ class ActorOAuthProvider implements OAuthClientProvider {
     private readonly redirectUri: string,
     private readonly configuredClientId: string | undefined,
     private readonly now: () => number,
+    private readonly interactive: boolean,
   ) {}
 
   get redirectUrl(): string {
@@ -277,15 +495,29 @@ class ActorOAuthProvider implements OAuthClientProvider {
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    await this.store.update(this.actorId, (current) => ({
-      ...(current ?? defaultConnection(this.actorId)),
-      tokens,
-      grantedScopes: tokens.scope?.split(" ").filter(Boolean) ?? current?.grantedScopes ?? [],
-      updatedAt: this.now(),
-    }));
+    const obtainedAt = this.now();
+    const expiresAt = tokenExpiryFrom(tokens, obtainedAt);
+    await this.store.update(this.actorId, (current) => {
+      const next: StoredRobinhoodConnection = {
+        ...(current ?? defaultConnection(this.actorId)),
+        tokens,
+        tokenObtainedAt: obtainedAt,
+        grantedScopes: tokens.scope?.split(" ").filter(Boolean) ?? current?.grantedScopes ?? [],
+        updatedAt: obtainedAt,
+      };
+      if (expiresAt !== undefined) next.tokenExpiresAt = expiresAt;
+      else next.tokenExpiresAt = undefined;
+      return next;
+    });
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+    if (!this.interactive) {
+      throw new RobinhoodReauthRequiredError(
+        "token_reauth_required",
+        "Robinhood session expired and requires interactive re-authentication.",
+      );
+    }
     await this.store.update(this.actorId, (current) => {
       const connection = requiredConnection(current);
       const transaction = currentTransaction(connection);
@@ -301,6 +533,12 @@ class ActorOAuthProvider implements OAuthClientProvider {
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
+    if (!this.interactive) {
+      throw new RobinhoodReauthRequiredError(
+        "token_reauth_required",
+        "Robinhood session expired and requires interactive re-authentication.",
+      );
+    }
     await this.store.update(this.actorId, (current) => {
       const connection = requiredConnection(current);
       const transaction = currentTransaction(connection);
@@ -319,6 +557,12 @@ class ActorOAuthProvider implements OAuthClientProvider {
   }
 
   async state(): Promise<string> {
+    if (!this.interactive) {
+      throw new RobinhoodReauthRequiredError(
+        "token_reauth_required",
+        "Robinhood session expired and requires interactive re-authentication.",
+      );
+    }
     return currentTransaction(requiredConnection(await this.store.read(this.actorId))).state;
   }
 
@@ -329,7 +573,11 @@ class ActorOAuthProvider implements OAuthClientProvider {
         next.clientInformation = undefined;
         next.clientRegistration = undefined;
       }
-      if (scope === "all" || scope === "tokens") next.tokens = undefined;
+      if (scope === "all" || scope === "tokens") {
+        next.tokens = undefined;
+        next.tokenObtainedAt = undefined;
+        next.tokenExpiresAt = undefined;
+      }
       if ((scope === "all" || scope === "verifier") && next.oauthTransaction) {
         const { authorizationUrl: _authorizationUrl, codeVerifier: _codeVerifier, ...transaction } = next.oauthTransaction;
         next.oauthTransaction = transaction;
@@ -343,8 +591,9 @@ class ActorOAuthProvider implements OAuthClientProvider {
 export class RobinhoodMcpClient {
   private readonly serverUrl: URL;
   private readonly now: () => number;
+  private readonly guardedFetch: FetchLike;
   private readonly authorize: Authorize;
-  private operationTail: Promise<void> = Promise.resolve();
+  private readonly actorLocks = new Map<string, Promise<void>>();
 
   constructor(private readonly options: RobinhoodMcpClientOptions) {
     this.serverUrl = new URL(options.serverUrl);
@@ -352,6 +601,10 @@ export class RobinhoodMcpClient {
       throw new Error("Robinhood MCP URL must be the fixed official HTTPS endpoint.");
     }
     this.now = options.now ?? Date.now;
+    this.guardedFetch = createGuardedRobinhoodFetch(
+      options.fetchFn ?? fetch,
+      options.fetchTimeoutMs ?? DEFAULT_ROBINHOOD_FETCH_TIMEOUT_MS,
+    );
     this.authorize = options.authorize ?? (async (provider, authorizationOptions) => {
       if ("authorizationCode" in authorizationOptions) {
         await auth(provider, authorizationOptions);
@@ -362,15 +615,15 @@ export class RobinhoodMcpClient {
   }
 
   start(actorId: string): Promise<RobinhoodConnectionStatus> {
-    return this.serialized(() => this.startUnlocked(actorId));
+    return this.serialized(actorId, () => this.startUnlocked(actorId));
   }
 
   complete(actorId: string, code: string, state: string): Promise<RobinhoodConnectionStatus> {
-    return this.serialized(() => this.completeUnlocked(actorId, code, state));
+    return this.serialized(actorId, () => this.completeUnlocked(actorId, code, state));
   }
 
   status(actorId: string): Promise<RobinhoodConnectionStatus> {
-    return this.serialized(async () => {
+    return this.serialized(actorId, async () => {
       safeActorId(actorId);
       const record = await this.options.store.read(actorId);
       return record ? this.statusFrom(record) : { status: "disconnected" };
@@ -378,11 +631,108 @@ export class RobinhoodMcpClient {
   }
 
   disconnect(actorId: string): Promise<RobinhoodConnectionStatus> {
-    return this.serialized(async () => {
+    return this.serialized(actorId, async () => {
       safeActorId(actorId);
       await this.options.store.delete(actorId);
       return { status: "disconnected" };
     });
+  }
+
+  async ensureFreshTokens(actorId: string): Promise<OAuthTokens> {
+    return this.serialized(actorId, () => this.ensureFreshTokensUnlocked(actorId));
+  }
+
+  async openRunSession(actorId: string, signal?: AbortSignal): Promise<RobinhoodSessionOpenResult> {
+    safeActorId(actorId);
+    const existing = await this.options.store.read(actorId);
+    if (!existing?.tokens) {
+      return { status: "disconnected" };
+    }
+    try {
+      await this.ensureFreshTokens(actorId);
+    } catch (error) {
+      if (error instanceof RobinhoodReauthRequiredError) {
+        return { status: "reauth_required", reason: error.code };
+      }
+      throw error;
+    }
+
+    const provider = this.provider(actorId, false);
+    const transportOptions: TransportOptions = {
+      authProvider: provider,
+      requestInit: { headers: { "User-Agent": "project-trishula/0.1" } },
+      fetch: this.guardedFetch,
+    };
+    const transport = new StreamableHTTPClientTransport(this.serverUrl, transportOptions);
+    const client = new Client(
+      { name: "project-trishula", version: "0.1.0" },
+      { capabilities: {} },
+    );
+
+    try {
+      if (signal?.aborted) {
+        throw new Error("Robinhood MCP run session setup was aborted.");
+      }
+      // SAFETY: StreamableHTTPClientTransport implements the MCP Transport interface; exactOptionalPropertyTypes requires narrowing here.
+      await client.connect(transport as never);
+      const listed = await client.listTools(undefined, signal ? { signal, timeout: 20_000 } : { timeout: 20_000 });
+      const discoveredTools: McpDiscoveredTool[] = [];
+      const allowedNames = new Set<string>();
+      for (const tool of listed.tools) {
+        const candidate: ToolReadOnlyCandidate = tool.annotations !== undefined
+          ? { name: tool.name, annotations: tool.annotations }
+          : { name: tool.name };
+        if (!isReadOnlyRobinhoodTool(candidate)) continue;
+        allowedNames.add(tool.name);
+        const parsedSchema = jsonRecordSchema.safeParse(tool.inputSchema);
+        discoveredTools.push({
+          name: tool.name,
+          description: tool.description?.trim() || `Read data using Robinhood MCP tool ${tool.name}.`,
+          inputSchema: normalizedToolSchema(parsedSchema.success ? parsedSchema.data : undefined),
+        });
+      }
+
+      let closed = false;
+      const session: RobinhoodRunSession = {
+        actorId,
+        tools: discoveredTools,
+        callTool: async (name, args, callSignal) => {
+          if (closed) throw new Error("Robinhood MCP run session is closed.");
+          if (!allowedNames.has(name)) {
+            throw new Error(`Robinhood MCP tool ${name} is not in the read-only run allowlist.`);
+          }
+          try {
+            const result = await client.callTool(
+              { name, arguments: args },
+              undefined,
+              callSignal ? { signal: callSignal, timeout: 30_000 } : { timeout: 30_000 },
+            );
+            // SAFETY: The MCP SDK has validated the response envelope; this adapter accepts only structured JSON or text content.
+            return normalizedToolData(result as McpToolResult);
+          } catch (error) {
+            if (error instanceof RobinhoodReauthRequiredError) {
+              await this.handleReauthRequired(actorId, error.code);
+            }
+            throw error;
+          }
+        },
+        close: async () => {
+          if (closed) return;
+          closed = true;
+          await client.close().catch(() => undefined);
+          await transport.close().catch(() => undefined);
+        },
+      };
+      return { status: "connected", session };
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      await transport.close().catch(() => undefined);
+      if (error instanceof RobinhoodReauthRequiredError) {
+        await this.handleReauthRequired(actorId, error.code);
+        return { status: "reauth_required", reason: error.code };
+      }
+      throw error;
+    }
   }
 
   callTool(
@@ -391,13 +741,12 @@ export class RobinhoodMcpClient {
     args: ApplicationToolArguments,
     signal?: AbortSignal,
   ): Promise<CanonicalJsonValue> {
-    return this.serialized(async () => {
+    return this.serialized(actorId, async () => {
       safeActorId(actorId);
       if (!APPLICATION_MCP_TOOLS.includes(name)) {
         throw new Error("MCP tool is not in the application allowlist.");
       }
-      const record = await this.options.store.read(actorId);
-      if (!record?.tokens) throw new Error("Robinhood connection is not authorized.");
+      await this.ensureFreshTokensUnlocked(actorId);
       return this.withClient(actorId, async (client) => {
         const listed = await client.listTools();
         if (!listed.tools.some((tool) => tool.name === name)) {
@@ -412,6 +761,75 @@ export class RobinhoodMcpClient {
         return normalizedToolData(result as McpToolResult);
       });
     });
+  }
+
+  private async ensureFreshTokensUnlocked(actorId: string): Promise<OAuthTokens> {
+    safeActorId(actorId);
+    const record = await this.options.store.read(actorId);
+    const tokens = record?.tokens;
+    if (!tokens) {
+      throw new RobinhoodReauthRequiredError(
+        "not_connected",
+        "Robinhood connection is not authorized.",
+      );
+    }
+    const now = this.now();
+    const expiresAt = record.tokenExpiresAt;
+    if (expiresAt === undefined || expiresAt - TOKEN_REFRESH_SKEW_MS > now) {
+      return tokens;
+    }
+    if (!tokens.refresh_token) {
+      await this.handleReauthRequired(actorId, "token_expired");
+      throw new RobinhoodReauthRequiredError(
+        "token_expired",
+        "Robinhood access token expired and no refresh token is stored.",
+      );
+    }
+    const clientInformation = this.options.clientId
+      ? { client_id: this.options.clientId }
+      : record.clientInformation;
+    if (!clientInformation) {
+      await this.handleReauthRequired(actorId, "client_registration_missing");
+      throw new RobinhoodReauthRequiredError(
+        "client_registration_missing",
+        "Robinhood OAuth client registration is missing.",
+      );
+    }
+    try {
+      const refreshed = await refreshAuthorization(this.serverUrl, {
+        metadata: {
+          issuer: ROBINHOOD_MCP_ISSUER,
+          authorization_endpoint: ROBINHOOD_AUTHORIZATION_URL,
+          token_endpoint: ROBINHOOD_OAUTH_TOKEN_URL,
+          response_types_supported: ["code"],
+          token_endpoint_auth_methods_supported: ["none"],
+        },
+        clientInformation,
+        refreshToken: tokens.refresh_token,
+        resource: this.serverUrl,
+        fetchFn: this.guardedFetch,
+      });
+      const provider = this.provider(actorId, false);
+      await provider.saveTokens(refreshed);
+      return refreshed;
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error("Robinhood token refresh failed.");
+      if (isTokenRefreshFailure(failure)) {
+        await this.handleReauthRequired(actorId, "token_refresh_failed");
+        throw new RobinhoodReauthRequiredError(
+          "token_refresh_failed",
+          "Robinhood session expired. Reconnect Robinhood in the app.",
+        );
+      }
+      throw failure;
+    }
+  }
+
+  private async handleReauthRequired(actorId: string, errorCode: string): Promise<void> {
+    await this.clearTransaction(actorId, true).catch(() => undefined);
+    if (this.options.onReauthRequired) {
+      await this.options.onReauthRequired(actorId, errorCode).catch(() => undefined);
+    }
   }
 
   private async startUnlocked(actorId: string): Promise<RobinhoodConnectionStatus> {
@@ -431,9 +849,11 @@ export class RobinhoodMcpClient {
       },
       updatedAt: createdAt,
     }));
-    const provider = this.provider(actorId);
-    const authOptions: AuthStartOptions = { serverUrl: this.serverUrl };
-    if (this.options.fetchFn) authOptions.fetchFn = this.options.fetchFn;
+    const provider = this.provider(actorId, true);
+    const authOptions: AuthStartOptions = {
+      serverUrl: this.serverUrl,
+      fetchFn: this.guardedFetch,
+    };
     try {
       await this.authorize(provider, authOptions);
       const record = await this.options.store.read(actorId);
@@ -487,12 +907,12 @@ export class RobinhoodMcpClient {
     });
     if (terminalTransactionError) throw terminalTransactionError;
 
-    const provider = this.provider(actorId);
+    const provider = this.provider(actorId, true);
     const authOptions: AuthCompleteOptions = {
       serverUrl: this.serverUrl,
       authorizationCode: code,
+      fetchFn: this.guardedFetch,
     };
-    if (this.options.fetchFn) authOptions.fetchFn = this.options.fetchFn;
     try {
       await this.authorize(provider, authOptions);
       const connected = await this.options.store.update(actorId, (current) => {
@@ -518,13 +938,14 @@ export class RobinhoodMcpClient {
     }
   }
 
-  private provider(actorId: string): ActorOAuthProvider {
+  private provider(actorId: string, interactive: boolean): ActorOAuthProvider {
     return new ActorOAuthProvider(
       actorId,
       this.options.store,
       this.options.redirectUri,
       this.options.clientId,
       this.now,
+      interactive,
     );
   }
 
@@ -537,6 +958,8 @@ export class RobinhoodMcpClient {
       next.oauthTransaction = undefined;
       if (clearTokens) {
         next.tokens = undefined;
+        next.tokenObtainedAt = undefined;
+        next.tokenExpiresAt = undefined;
         next.grantedScopes = [];
       }
       next.updatedAt = this.now();
@@ -544,20 +967,27 @@ export class RobinhoodMcpClient {
     });
   }
 
-  private serialized<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.operationTail.then(operation, operation);
-    this.operationTail = result.then(
+  private serialized<T>(actorId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.actorLocks.get(actorId) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const tail = result.then(
       () => undefined,
       () => undefined,
     );
+    this.actorLocks.set(actorId, tail);
+    void tail.finally(() => {
+      if (this.actorLocks.get(actorId) === tail) {
+        this.actorLocks.delete(actorId);
+      }
+    });
     return result;
   }
 
   private async verifyTools(actorId: string): Promise<void> {
     await this.withClient(actorId, async (client) => {
       const listed = await client.listTools();
-      if (!listed.tools.some((tool) => isApplicationMcpTool(tool.name))) {
-        throw new Error("Robinhood MCP did not expose an approved application tool.");
+      if (listed.tools.length === 0) {
+        throw new Error("Robinhood MCP did not expose any tools for this session.");
       }
     });
   }
@@ -566,21 +996,26 @@ export class RobinhoodMcpClient {
     actorId: string,
     operation: (client: Client) => Promise<T>,
   ): Promise<T> {
-    const provider = this.provider(actorId);
+    const provider = this.provider(actorId, false);
     const transportOptions: TransportOptions = {
       authProvider: provider,
-      requestInit: { headers: { "User-Agent": "phone-trading-poc/0.1" } },
+      requestInit: { headers: { "User-Agent": "project-trishula/0.1" } },
+      fetch: this.guardedFetch,
     };
-    if (this.options.fetchFn) transportOptions.fetch = this.options.fetchFn;
     const transport = new StreamableHTTPClientTransport(this.serverUrl, transportOptions);
     const client = new Client(
-      { name: "phone-trading-poc", version: "0.1.0" },
+      { name: "project-trishula", version: "0.1.0" },
       { capabilities: {} },
     );
     try {
-      // SAFETY: StreamableHTTPClientTransport implements the MCP Transport interface; the SDK declaration has an exact-optional mismatch under this TypeScript version.
+      // SAFETY: StreamableHTTPClientTransport implements the MCP Transport interface; exactOptionalPropertyTypes requires narrowing here.
       await client.connect(transport as never);
       return await operation(client);
+    } catch (error) {
+      if (error instanceof RobinhoodReauthRequiredError) {
+        await this.handleReauthRequired(actorId, error.code);
+      }
+      throw error;
     } finally {
       await client.close().catch(() => undefined);
       await transport.close().catch(() => undefined);
@@ -601,8 +1036,4 @@ export class RobinhoodMcpClient {
     if (record.label) status.label = record.label;
     return status;
   }
-}
-
-function isApplicationMcpTool(name: string): name is ApplicationMcpTool {
-  return APPLICATION_MCP_TOOLS.some((candidate) => candidate === name);
 }

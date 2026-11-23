@@ -194,6 +194,11 @@ export const publicApi = {
       NoArguments,
       RobinhoodConnectionResult
     >("trading:startRobinhoodConnection"),
+    completeRobinhoodConnection: makeFunctionReference<
+      "action",
+      { callbackUrl: string },
+      Extract<RobinhoodConnectionResult, { status: "connected" }>
+    >("trading:completeRobinhoodConnection"),
     disconnectRobinhood: makeFunctionReference<
       "action",
       NoArguments,

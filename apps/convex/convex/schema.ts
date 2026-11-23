@@ -62,6 +62,7 @@ export const brokerConnectionStatusValidator = v.union(
   v.literal("disconnected"),
   v.literal("connecting"),
   v.literal("connected"),
+  v.literal("reauth_required"),
   v.literal("error"),
 );
 

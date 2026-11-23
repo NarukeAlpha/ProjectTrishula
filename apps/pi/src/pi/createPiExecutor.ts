@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
+import { z } from "zod";
 import type { AppConfig } from "../config.js";
 import type {
   ConversationHistoryMessage,
@@ -26,7 +27,12 @@ import type {
   SessionScope,
 } from "../execution/executor.js";
 import { createTradingBroker } from "../broker/trading-broker.js";
-import type { ApplicationToolArguments, TradingBroker } from "../broker/types.js";
+import type {
+  McpDiscoveredTool,
+  RobinhoodRunSession,
+  RobinhoodSessionOpenResult,
+  TradingBroker,
+} from "../broker/types.js";
 import { createCodexRuntime, type CodexRuntime } from "./codex-runtime.js";
 
 interface SafeError {
@@ -47,31 +53,37 @@ interface ToolResultDetails {
   };
 }
 
-const allowedToolNames = [
-  "get_accounts",
-  "get_portfolio",
-  "get_equity_positions",
-  "get_equity_quotes",
-  "get_equity_orders",
-  "propose_order",
-] as const;
 const MAX_PENDING_PI_EVENTS = 256;
 const MAX_PENDING_PI_EVENT_BYTES = 256 * 1_024;
 const IN_MEMORY_RUNTIME_CWD = "/tmp";
+const jsonArgumentsSchema = z.record(z.string(), z.json());
 
-const systemPrompt = `You are a phone-first trading assistant.
+function buildChatSystemPrompt(
+  brokerStatus: RobinhoodSessionOpenResult["status"],
+  discoveredToolNames: readonly string[],
+): string {
+  const toolSummary = discoveredToolNames.length > 0
+    ? `Live read-only Robinhood MCP tools available for this run: ${discoveredToolNames.join(", ")}, plus propose_order.`
+    : brokerStatus === "reauth_required"
+      ? "The user's Robinhood MCP session expired and needs re-authentication in the app settings before brokerage read tools can be used. Only propose_order is available."
+      : "No Robinhood MCP account is currently connected for this user. Only propose_order is available; advise the user to connect Robinhood in the app settings if they ask for live account, position, quote, or order data.";
 
-Your only application tools are get_accounts, get_portfolio, get_equity_positions, get_equity_quotes, get_equity_orders, and propose_order. You have no shell, process, code execution, write, edit, browser, general filesystem, or general network tools.
+  return `You are a phone-first trading assistant.
 
-Use read tools to answer account, portfolio, position, quote, and order questions. A proposed order must include the symbol, side, sizing, order type, time in force, and review reference. propose_order only creates a reviewable proposal. It never submits an order. Never claim that an order was placed. The user approval flow is the only path that can submit a reviewed proposal.
+${toolSummary} You have no shell, process, code execution, write, edit, browser, general filesystem, or general network tools.
+
+Use the discovered read-only Robinhood tools to answer account, portfolio, position, quote, and order questions. A proposed order must include the symbol, side, sizing, order type, time in force, and review reference. propose_order only creates a reviewable proposal. It never submits an order. Never claim that an order was placed. The user approval flow is the only path that can submit a reviewed proposal.
 
 Keep answers concise, state the data source status, and do not expose access tokens, OAuth codes, or stored credentials.`;
+}
 
 interface SessionEntry {
   session: AgentSession;
+  toolSignature: string;
   active: boolean;
   activeTools: Map<string, { name: string; startedAt: number }>;
   toolContext: { actorId: string; threadId: string; runId: string } | undefined;
+  brokerSession: RobinhoodRunSession | undefined;
 }
 
 function scopeKey(scope: SessionScope): string {
@@ -192,14 +204,41 @@ class PiExecutionExecutor implements ExecutionExecutor {
   async execute(request: RunExecutionRequest, emit: EmitPiEvent, signal: AbortSignal): Promise<void> {
     if (!this.modelRuntime || !this.model) throw new Error("Pi is not ready.");
     const key = scopeKey({ actorId: request.actorId, threadId: request.threadId });
-    let entry = this.sessions.get(key);
-    if (!entry) {
-      entry = await this.createSession(request.history);
+    const existingEntry = this.sessions.get(key);
+    if (existingEntry?.active) throw new Error("A Pi run is already active for this thread.");
+
+    let brokerResult: RobinhoodSessionOpenResult;
+    try {
+      brokerResult = await this.broker.openRunSession(request.actorId, signal);
+    } catch {
+      brokerResult = { status: "disconnected" };
+    }
+    const brokerSession = brokerResult.status === "connected" ? brokerResult.session : undefined;
+    const discoveredTools: readonly McpDiscoveredTool[] = brokerSession?.tools ?? [];
+    const toolSignature = `${brokerResult.status}:${discoveredTools.map((tool) => tool.name).sort().join(",")}`;
+
+    let entry = existingEntry;
+    if (!entry || entry.toolSignature !== toolSignature) {
+      if (entry) {
+        entry.session.dispose();
+        this.sessions.delete(key);
+      }
+      try {
+        entry = await this.createSession(
+          request.history,
+          brokerResult.status,
+          discoveredTools,
+          toolSignature,
+        );
+      } catch (error) {
+        await brokerSession?.close();
+        throw error;
+      }
       this.sessions.set(key, entry);
     }
-    if (entry.active) throw new Error("A Pi run is already active for this thread.");
     entry.active = true;
     entry.toolContext = { actorId: request.actorId, threadId: request.threadId, runId: request.runId };
+    entry.brokerSession = brokerSession;
 
     let terminalSent = false;
     let eventWrites = Promise.resolve();
@@ -334,7 +373,9 @@ class PiExecutionExecutor implements ExecutionExecutor {
       unsubscribe();
       entry.active = false;
       entry.toolContext = undefined;
+      entry.brokerSession = undefined;
       entry.activeTools.clear();
+      await brokerSession?.close();
     }
   }
 
@@ -355,7 +396,12 @@ class PiExecutionExecutor implements ExecutionExecutor {
     this.sessions.clear();
   }
 
-  private async createSession(history: ConversationHistoryMessage[]): Promise<SessionEntry> {
+  private async createSession(
+    history: ConversationHistoryMessage[],
+    brokerStatus: RobinhoodSessionOpenResult["status"],
+    discoveredTools: readonly McpDiscoveredTool[],
+    toolSignature: string,
+  ): Promise<SessionEntry> {
     if (!this.modelRuntime || !this.model) throw new Error("Pi is not ready.");
     const sessionManager = SessionManager.inMemory(IN_MEMORY_RUNTIME_CWD);
     for (const message of history) {
@@ -371,6 +417,8 @@ class PiExecutionExecutor implements ExecutionExecutor {
       compaction: { enabled: true },
       retry: { enabled: true, maxRetries: 2 },
     });
+    const dynamicToolNames = discoveredTools.map((tool) => tool.name);
+    const systemPrompt = buildChatSystemPrompt(brokerStatus, dynamicToolNames);
     const loader = new DefaultResourceLoader({
       cwd: IN_MEMORY_RUNTIME_CWD,
       agentDir: IN_MEMORY_RUNTIME_CWD,
@@ -383,15 +431,14 @@ class PiExecutionExecutor implements ExecutionExecutor {
     const placeholder: SessionEntry = {
       // SAFETY: createAgentSession assigns the placeholder before any execution can use it.
       session: undefined as never,
+      toolSignature,
       active: false,
       activeTools: new Map(),
       toolContext: undefined,
+      brokerSession: undefined,
     };
-    const tools = this.createTools(placeholder);
-    const actualNames = tools.map((tool) => tool.name).sort();
-    if (actualNames.join("\0") !== [...allowedToolNames].sort().join("\0")) {
-      throw new Error("The effective Pi tool set does not match the approved allowlist.");
-    }
+    const tools = this.createTools(placeholder, discoveredTools);
+    const expectedNames = tools.map((tool) => tool.name);
     const { session } = await createAgentSession({
       cwd: IN_MEMORY_RUNTIME_CWD,
       agentDir: IN_MEMORY_RUNTIME_CWD,
@@ -399,7 +446,7 @@ class PiExecutionExecutor implements ExecutionExecutor {
       modelRuntime: this.modelRuntime,
       thinkingLevel: "high",
       noTools: "all",
-      tools: [...allowedToolNames],
+      tools: expectedNames,
       customTools: tools,
       resourceLoader: loader,
       sessionManager,
@@ -409,35 +456,45 @@ class PiExecutionExecutor implements ExecutionExecutor {
     return placeholder;
   }
 
-  private createTools(entry: SessionEntry) {
-    const readTool = (name: "get_accounts" | "get_portfolio" | "get_equity_positions" | "get_equity_quotes" | "get_equity_orders", label: string, description: string, parameters: ReturnType<typeof Type.Object>) => defineTool({
-      name,
-      label,
-      description,
-      parameters,
-      execute: async (_id, params, signal) => {
-        if (!entry.toolContext) return {
-          content: [{ type: "text" as const, text: "Trusted run context is unavailable." }],
-          details: { ok: false },
-          isError: true,
-        };
-        try {
-          // SAFETY: The TypeBox schema for each read tool restricts parameters to the ApplicationToolArguments fields.
-          const toolArguments = params as ApplicationToolArguments;
-          const result = await this.broker.callApplicationTool(entry.toolContext.actorId, name, toolArguments, signal);
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify(result) }],
-            details: { ok: true },
-          };
-        } catch {
-          return {
-            content: [{ type: "text" as const, text: "The Robinhood data request failed." }],
-            details: { ok: false },
-            isError: true,
-          };
-        }
-      },
-    });
+  private createTools(entry: SessionEntry, discoveredTools: readonly McpDiscoveredTool[]) {
+    const readTools = discoveredTools
+      .filter((tool) => tool.name !== "propose_order")
+      .map((tool) => defineTool({
+        name: tool.name,
+        label: tool.name,
+        description: tool.description,
+        parameters: Type.Unsafe(tool.inputSchema),
+        execute: async (_id, params, signal) => {
+          if (!entry.toolContext || !entry.brokerSession) {
+            return {
+              content: [{ type: "text" as const, text: "Robinhood MCP session is unavailable for this run." }],
+              details: { ok: false },
+              isError: true,
+            };
+          }
+          const parsedArgs = jsonArgumentsSchema.safeParse(params ?? {});
+          if (!parsedArgs.success) {
+            return {
+              content: [{ type: "text" as const, text: "Invalid Robinhood tool arguments." }],
+              details: { ok: false },
+              isError: true,
+            };
+          }
+          try {
+            const result = await entry.brokerSession.callTool(tool.name, parsedArgs.data, signal);
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(result) }],
+              details: { ok: true },
+            };
+          } catch {
+            return {
+              content: [{ type: "text" as const, text: "The Robinhood data request failed." }],
+              details: { ok: false },
+              isError: true,
+            };
+          }
+        },
+      }));
     const propose = defineTool({
       name: "propose_order",
       label: "Propose order",
@@ -486,14 +543,7 @@ class PiExecutionExecutor implements ExecutionExecutor {
         }
       },
     });
-    return [
-      readTool("get_accounts", "List accounts", "Read the connected account summary.", Type.Object({})),
-      readTool("get_portfolio", "Read portfolio", "Read normalized portfolio totals.", Type.Object({})),
-      readTool("get_equity_positions", "List positions", "Read equity positions.", Type.Object({})),
-      readTool("get_equity_quotes", "Read quotes", "Read current equity quotes.", Type.Object({ symbol: Type.Optional(Type.String({ minLength: 1, maxLength: 16 })), symbols: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 16 }), { maxItems: 32 })) })),
-      readTool("get_equity_orders", "List orders", "Read recent equity orders.", Type.Object({ status: Type.Optional(Type.String({ maxLength: 32 })) })),
-      propose,
-    ];
+    return [...readTools, propose];
   }
 
   private summarizeToolInput(name: string, input: ToolInput): string | undefined {

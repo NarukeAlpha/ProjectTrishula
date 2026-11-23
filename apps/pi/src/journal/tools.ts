@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import type { ImageContent, TextContent, Tool, ToolCall } from "@earendil-works/pi-ai";
 import { z } from "zod";
+import type { McpDiscoveredTool, RobinhoodRunSession } from "../broker/types.js";
 import {
   ChartProviderError,
   MAX_CHART_HEIGHT,
@@ -266,6 +267,36 @@ export const journalTools: Tool[] = [
   },
 ];
 
+export const ROBINHOOD_JOURNAL_TOOL_PREFIX = "robinhood_";
+
+const builtinJournalToolNames = new Set(journalTools.map((tool) => tool.name));
+const robinhoodToolArgsSchema = z.record(z.string(), z.json());
+
+export interface BuiltJournalBrokerTools {
+  tools: Tool[];
+  brokerToolNameMap: Map<string, string>;
+}
+
+export function buildJournalToolsWithBroker(
+  discoveredBrokerTools: readonly McpDiscoveredTool[],
+): BuiltJournalBrokerTools {
+  const tools: Tool[] = [...journalTools];
+  const brokerToolNameMap = new Map<string, string>();
+  for (const discovered of discoveredBrokerTools) {
+    const exposedName = `${ROBINHOOD_JOURNAL_TOOL_PREFIX}${discovered.name}`;
+    if (builtinJournalToolNames.has(exposedName) || brokerToolNameMap.has(exposedName)) {
+      continue;
+    }
+    brokerToolNameMap.set(exposedName, discovered.name);
+    tools.push({
+      name: exposedName,
+      description: `${discovered.description} (Read-only Robinhood MCP tool.)`,
+      parameters: Type.Unsafe(discovered.inputSchema),
+    });
+  }
+  return { tools, brokerToolNameMap };
+}
+
 interface CompactChartMetadata {
   imageKey: string;
   mimeType: string;
@@ -281,6 +312,8 @@ export interface JournalToolExecutionContext {
   settings: JournalSettings;
   convex: JournalConvexClient;
   chartProvider: ChartProvider;
+  brokerSession?: RobinhoodRunSession;
+  brokerToolNameMap?: ReadonlyMap<string, string>;
   signal: AbortSignal;
 }
 
@@ -404,6 +437,10 @@ export function describeToolStart(toolCall: ToolCall): string {
       return title ? `Saving lesson: ${title.slice(0, 60)}…` : "Saving lesson…";
     }
     default:
+      if (toolCall.name.startsWith(ROBINHOOD_JOURNAL_TOOL_PREFIX)) {
+        const rawName = toolCall.name.slice(ROBINHOOD_JOURNAL_TOOL_PREFIX.length);
+        return `Reading Robinhood (${rawName})…`;
+      }
       return `Running ${toolCall.name}…`;
   }
 }
@@ -667,12 +704,40 @@ export async function executeJournalTool(
         );
       }
 
-      default:
+      default: {
+        const rawBrokerToolName = context.brokerToolNameMap?.get(toolCall.name);
+        if (rawBrokerToolName !== undefined) {
+          if (!context.brokerSession) {
+            return textResult(
+              "Robinhood MCP session is unavailable for this run.",
+              `${toolCall.name} unavailable`,
+              true,
+            );
+          }
+          const parsedArgs = robinhoodToolArgsSchema.safeParse(toolCall.arguments ?? {});
+          if (!parsedArgs.success) {
+            return textResult(
+              `Invalid ${toolCall.name} arguments: ${formatZodIssues(parsedArgs.error)}`,
+              `${toolCall.name} validation failed`,
+              true,
+            );
+          }
+          const result = await context.brokerSession.callTool(
+            rawBrokerToolName,
+            parsedArgs.data,
+            context.signal,
+          );
+          return textResult(
+            JSON.stringify(result),
+            `Read Robinhood data (${rawBrokerToolName})`,
+          );
+        }
         return textResult(
           `Unknown tool '${toolCall.name}'.`,
           `Unknown tool ${toolCall.name}`,
           true,
         );
+      }
     }
   } catch (error) {
     if (error instanceof JournalRunInactiveError) {

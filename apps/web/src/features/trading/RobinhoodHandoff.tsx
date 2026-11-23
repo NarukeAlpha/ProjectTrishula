@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useId, useState, type FormEvent } from "react";
 
 export interface RobinhoodHandoffProps {
   authorizationUrl: string;
   onDismiss(): void;
+  onCompleteCallback?: (callbackUrl: string) => Promise<void>;
+  completing?: boolean;
+  completionError?: string | null;
 }
 
 type CopyStatus = "idle" | "copied" | "failed";
@@ -10,8 +13,14 @@ type CopyStatus = "idle" | "copied" | "failed";
 export function RobinhoodHandoff({
   authorizationUrl,
   onDismiss,
+  onCompleteCallback,
+  completing = false,
+  completionError = null,
 }: RobinhoodHandoffProps) {
+  const inputId = useId();
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("idle");
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
 
   async function copyLink() {
     try {
@@ -20,6 +29,20 @@ export function RobinhoodHandoff({
     } catch {
       setCopyStatus("failed");
     }
+  }
+
+  async function handleCompleteSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!onCompleteCallback || completing) return;
+    const trimmed = callbackUrl.trim();
+    if (!trimmed) {
+      setLocalError(
+        "Paste the full redirected URL from your browser address bar.",
+      );
+      return;
+    }
+    setLocalError(null);
+    await onCompleteCallback(trimmed);
   }
 
   return (
@@ -70,6 +93,49 @@ export function RobinhoodHandoff({
             ? "Signal could not copy the link. Open it on this device instead."
             : "The link stays only in this open page."}
       </p>
+      {onCompleteCallback && (
+        <form
+          className="broker-callback-form"
+          onSubmit={(event) => void handleCompleteSubmit(event)}
+        >
+          <label className="broker-callback-label" htmlFor={inputId}>
+            <span>Step 2: Paste the redirected localhost URL</span>
+            <small>
+              After you click Allow in Robinhood, your browser opens a{" "}
+              <code>127.0.0.1</code> address that will not load. Copy the full
+              URL from the address bar and paste it below.
+            </small>
+          </label>
+          <div className="broker-callback-row">
+            <input
+              id={inputId}
+              className="broker-callback-input"
+              type="url"
+              value={callbackUrl}
+              onChange={(event) => {
+                setCallbackUrl(event.target.value);
+                if (localError) setLocalError(null);
+              }}
+              placeholder="http://127.0.0.1:8787/callback?code=...&state=..."
+              autoComplete="off"
+              spellCheck={false}
+              disabled={completing}
+            />
+            <button
+              className="primary-action broker-handoff-action"
+              type="submit"
+              disabled={completing}
+            >
+              {completing ? "Finishing…" : "Finish connection"}
+            </button>
+          </div>
+          {(localError ?? completionError) && (
+            <p className="connection-note connection-note--error" role="alert">
+              {localError ?? completionError}
+            </p>
+          )}
+        </form>
+      )}
     </section>
   );
 }

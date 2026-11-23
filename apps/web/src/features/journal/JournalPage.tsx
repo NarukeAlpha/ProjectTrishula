@@ -1,6 +1,7 @@
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { publicApi } from "../../convex/functions";
+import { RobinhoodMcpPanel } from "../trading/RobinhoodMcpPanel";
 import type {
   JournalChatAttachmentRef,
   JournalChatMessageReadModel,
@@ -77,6 +78,7 @@ export function JournalWorkspaceView({
   chatLoading = false,
   initialChatOpen,
   useChartUrls,
+  brokerSection,
   handlers,
 }: {
   diary: JournalDiaryReadModel | undefined;
@@ -84,6 +86,7 @@ export function JournalWorkspaceView({
   chatLoading?: boolean;
   initialChatOpen?: boolean;
   useChartUrls?: ChartUrlsQueryHook;
+  brokerSection?: ReactNode;
   handlers: JournalWorkspaceHandlers;
 }) {
   const [tab, setTab] = useState<JournalViewTab>("trades");
@@ -217,6 +220,7 @@ export function JournalWorkspaceView({
           {settingsOpen && diary && (
             <JournalSettingsPopover
               settings={diary.settings}
+              brokerSection={brokerSection}
               onSave={async (input) => {
                 await handlers.onSaveSettings(input);
                 setToast("Journal settings updated.");
@@ -394,6 +398,7 @@ export function JournalPage() {
       chatMessages={chatMessages ?? []}
       chatLoading={chatMessages === undefined}
       useChartUrls={useConvexChartUrls}
+      brokerSection={<RobinhoodMcpPanel />}
       handlers={{
         onSaveSettings: async (input) => {
           await saveSettings(input);

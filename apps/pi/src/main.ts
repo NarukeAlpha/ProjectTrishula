@@ -71,6 +71,7 @@ async function main(): Promise<void> {
       apiKey: config.chartImgApiKey,
       plan: config.chartImgPlan,
     }),
+    broker,
     convexSiteUrl: config.convexSiteUrl,
     ...(config.convexCloudOrigin === undefined ? {} : { convexCloudOrigin: config.convexCloudOrigin }),
     logger: consoleLogger,

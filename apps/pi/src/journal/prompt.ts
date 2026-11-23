@@ -1,9 +1,32 @@
 import type { JournalSettings } from "./contracts.js";
 
-export function buildJournalSystemPrompt(settings: JournalSettings): string {
+export type JournalBrokerPromptState =
+  | { readonly status: "connected"; readonly toolNames: readonly string[] }
+  | { readonly status: "reauth_required" }
+  | { readonly status: "disconnected" };
+
+export function buildJournalSystemPrompt(
+  settings: JournalSettings,
+  brokerState: JournalBrokerPromptState = { status: "disconnected" },
+): string {
   const layoutLine = settings.tradingViewLayoutId
     ? `Saved TradingView layout ID: ${settings.tradingViewLayoutId} (pass useSavedLayout: true to capture_chart only when the user asks to use their saved layout).`
     : "No saved TradingView layout ID is configured.";
+  const brokerSection = brokerState.status === "connected" && brokerState.toolNames.length > 0
+    ? [
+        "",
+        "### Connected Robinhood MCP (Read-Only)",
+        `- Live read-only Robinhood MCP tools are attached for this run: ${brokerState.toolNames.join(", ")}.`,
+        "- Use these tools to fetch real-time or recent accounts, portfolio, positions, quotes, and orders directly when the user asks to sync, inspect, or log trades without needing screenshots.",
+        "- Never expose access tokens, OAuth codes, or stored credentials. Order placement is disabled in Journal Chat.",
+      ]
+    : brokerState.status === "reauth_required"
+      ? [
+          "",
+          "### Connected Robinhood MCP",
+          "- The user's Robinhood MCP session expired and needs re-authentication in Journal Settings before live broker data can be read.",
+        ]
+      : [];
 
   return [
     "You are the Project Trishula Trading Journal assistant.",
@@ -14,6 +37,7 @@ export function buildJournalSystemPrompt(settings: JournalSettings): string {
     `- ${layoutLine}`,
     "- Broker order timestamps are reported in the user's broker time zone. Always convert them accurately to America/New_York (ET) when aligning fills with market candles and when choosing capture_chart from/to UTC ISO timestamps.",
     "- Keep submittedAt in import_orders as HH:MM:SS from the broker screenshot (broker time zone), and record market candle timing in ET (timeZone: \"ET\") inside structured chart reviews.",
+    ...brokerSection,
     "",
     "### Chart Timeframe Convention",
     "- Short-term options and intraday trades: capture 1m and 5m charts (preset: \"intraday\").",

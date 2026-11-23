@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import type { JournalSettingsReadModel } from "../../convex/types";
 import {
   COMMON_BROKER_TIME_ZONES,
@@ -8,10 +8,12 @@ import { CloseIcon } from "./icons";
 
 export function JournalSettingsPopover({
   settings,
+  brokerSection,
   onSave,
   onClose,
 }: {
   settings: JournalSettingsReadModel;
+  brokerSection?: ReactNode;
   onSave: (input: {
     brokerTimeZone: string;
     tradingViewLayoutId: string | null;
@@ -140,6 +142,9 @@ export function JournalSettingsPopover({
           </button>
         </div>
       </form>
+      {brokerSection && (
+        <div className="journal-settings-broker">{brokerSection}</div>
+      )}
     </section>
   );
 }
