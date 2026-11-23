@@ -72,15 +72,42 @@ describe("Project Trishula demo mode", () => {
 
     fireEvent.click(screen.getAllByRole("link", { name: "Trade Reviews" })[0]);
     expect(router.state.location.pathname).toBe("/trade-reviews");
+    expect(
+      screen.getByRole("heading", { name: "Trade Reviews" }),
+    ).toHaveFocus();
+    expect(window.scrollTo).toHaveBeenCalledWith(0, 0);
     fireEvent.click(screen.getByRole("button", { name: "Review QQQ" }));
     expect(screen.getByRole("dialog", { name: "Review QQQ" })).toBeVisible();
 
+    vi.mocked(window.scrollTo).mockClear();
     await act(() => router.navigate(-1));
+    expect(window.scrollTo).not.toHaveBeenCalled();
     expect(router.state.location.pathname).toBe("/lessons");
     expect(
       screen.getByRole("heading", { name: "Lessons", level: 1 }),
     ).toBeVisible();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the shared chat draft and attachment when switching journal pages", () => {
+    vi.stubGlobal("innerWidth", 1440);
+    render(
+      <MemoryRouter initialEntries={["/trade-reviews"]}>
+        <DemoApp config={config} />
+      </MemoryRouter>,
+    );
+    const draft = "Check the entry against this chart";
+    fireEvent.change(screen.getByLabelText("Message Journal Chat"), {
+      target: { value: draft },
+    });
+    fireEvent.change(screen.getByLabelText("Attach screenshot files"), {
+      target: {
+        files: [new File(["chart"], "entry.png", { type: "image/png" })],
+      },
+    });
+    fireEvent.click(screen.getAllByRole("link", { name: "Lessons" })[0]);
+    expect(screen.getByLabelText("Message Journal Chat")).toHaveValue(draft);
+    expect(screen.getByText("entry.png")).toBeVisible();
   });
 
   it("keeps the chat composer and returns a deterministic local reply", () => {

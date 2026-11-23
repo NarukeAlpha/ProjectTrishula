@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "../../app/App";
@@ -28,6 +29,10 @@ import type { ChartUrlsQueryHook } from "./TradeReviewSheet";
 afterEach(() => {
   cleanup();
 });
+
+function renderWorkspace(element: ReactElement) {
+  return render(element, { wrapper: MemoryRouter });
+}
 
 const SAMPLE_IMAGE_KEY = "a".repeat(64);
 const SAMPLE_CHART_URL = "https://convex.example.com/storage/chart-qqq.png";
@@ -232,7 +237,7 @@ function createHandlers(
 describe("Trading Journal workspace", () => {
   it("groups trades by date newest-first, totals daily realized P&L, and expands source orders", () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}
@@ -267,7 +272,7 @@ describe("Trading Journal workspace", () => {
 
   it("opens review sheet for closed trades, clears review, and edits/deletes open trades", async () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}
@@ -328,7 +333,7 @@ describe("Trading Journal workspace", () => {
 
   it("saves journal settings from the header settings popover", async () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}
@@ -357,7 +362,7 @@ describe("Trading Journal workspace", () => {
 
   it("filters lessons by search query and jumps to a linked trade review", () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={lessonsPage}
         diary={createDiary()}
@@ -506,7 +511,7 @@ describe("Trading Journal workspace", () => {
       },
     ];
 
-    const { rerender } = render(
+    const { rerender } = renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}
@@ -650,7 +655,7 @@ describe("Trading Journal workspace", () => {
       return { [SAMPLE_IMAGE_KEY]: SAMPLE_CHART_URL };
     });
 
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}
@@ -714,7 +719,7 @@ describe("Trading Journal workspace", () => {
 
     const handlers = createHandlers({ onUploadChart });
 
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}
@@ -814,7 +819,7 @@ describe("Trading Journal workspace", () => {
         .fn()
         .mockRejectedValue(new Error("Clear batch failed on page 2")),
     });
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}
@@ -857,7 +862,7 @@ describe("Trading Journal workspace", () => {
 
     // End-to-end formatted money entry in TradeEditorSheet
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
         section={tradeReviewsPage}
         diary={createDiary()}

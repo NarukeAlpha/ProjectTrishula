@@ -227,7 +227,7 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
             </main>
           }
         >
-          <JournalPage key={section.path} section={section} />
+          <JournalPage section={section} />
         </Suspense>
       )}
       askElement={

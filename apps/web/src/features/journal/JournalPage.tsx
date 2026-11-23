@@ -1,5 +1,6 @@
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useNavigationType } from "react-router-dom";
 import { publicApi } from "../../convex/functions";
 import { tradeReviewsPage, type JournalSection } from "../navigation/routes";
 import type {
@@ -88,12 +89,32 @@ export function JournalWorkspaceView({
   handlers: JournalWorkspaceHandlers;
 }) {
   const showTrades = section.path === tradeReviewsPage.path;
+  const navigationType = useNavigationType();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const [previousPath, setPreviousPath] = useState(section.path);
   const [sheet, setSheet] = useState<ActiveSheet>({ kind: "none" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState<boolean>(() =>
     initialChatOpen !== undefined ? initialChatOpen : isWideViewport(),
   );
   const [toast, setToast] = useState<string | null>(null);
+
+  if (previousPath !== section.path) {
+    setPreviousPath(section.path);
+    setSheet({ kind: "none" });
+  }
+
+  useLayoutEffect(() => {
+    if (navigationType === "PUSH") {
+      headingRef.current?.focus({ preventScroll: true });
+      window.scrollTo(0, 0);
+    }
+  }, [section.path, navigationType]);
+
+  function closeSheet() {
+    // A save can finish after navigation has opened another sheet.
+    setSheet((current) => (current === sheet ? { kind: "none" } : current));
+  }
 
   useEffect(() => {
     if (!toast) return;
@@ -144,7 +165,9 @@ export function JournalWorkspaceView({
           <header className="journal-page-header">
             <div className="journal-header-left">
               <p className="journal-kicker">Forest Ledger</p>
-              <h1>{section.title}</h1>
+              <h1 ref={headingRef} tabIndex={-1}>
+                {section.title}
+              </h1>
             </div>
 
             <div className="journal-header-actions">
@@ -272,7 +295,7 @@ export function JournalWorkspaceView({
             await handlers.onClearTradeReview(stableId);
             setToast("Assistant review cleared.");
           }}
-          onClose={() => setSheet({ kind: "none" })}
+          onClose={closeSheet}
         />
       )}
 
@@ -291,18 +314,18 @@ export function JournalWorkspaceView({
               await handlers.onUpsertTrade({ trade: tradeInput });
               setToast(`Logged ${tradeInput.symbol}.`);
             }
-            setSheet({ kind: "none" });
+            closeSheet();
           }}
           onDelete={
             activeEditTrade
               ? async () => {
                   await handlers.onDeleteTrade(activeEditTrade.stableId);
                   setToast(`Deleted ${activeEditTrade.symbol}.`);
-                  setSheet({ kind: "none" });
+                  closeSheet();
                 }
               : undefined
           }
-          onClose={() => setSheet({ kind: "none" })}
+          onClose={closeSheet}
         />
       )}
 
@@ -324,18 +347,18 @@ export function JournalWorkspaceView({
               await handlers.onUpsertLesson({ lesson: lessonInput });
               setToast("Lesson saved.");
             }
-            setSheet({ kind: "none" });
+            closeSheet();
           }}
           onDelete={
             activeEditLesson
               ? async () => {
                   await handlers.onDeleteLesson(activeEditLesson.stableId);
                   setToast("Lesson deleted.");
-                  setSheet({ kind: "none" });
+                  closeSheet();
                 }
               : undefined
           }
-          onClose={() => setSheet({ kind: "none" })}
+          onClose={closeSheet}
         />
       )}
 

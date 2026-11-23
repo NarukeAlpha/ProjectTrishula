@@ -497,7 +497,6 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
               path={section.path}
               element={
                 <JournalWorkspaceView
-                  key={section.path}
                   section={section}
                   diary={diary}
                   chatMessages={journalChat}
