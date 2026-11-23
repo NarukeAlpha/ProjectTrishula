@@ -1,6 +1,21 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { storedNativeCompactionValidator } from "./lib/discord_native_checkpoint.js";
+import {
+  journalAccountValidator,
+  journalAdherenceValidator,
+  journalChartMimeTypeValidator,
+  journalChartSourceValidator,
+  journalChatAttachmentValidator,
+  journalChatRoleValidator,
+  journalChatStatusValidator,
+  journalDirectionValidator,
+  journalInstrumentValidator,
+  journalMistakeValidator,
+  journalOrderValidator,
+  journalStatusValidator,
+  journalToolEventValidator,
+} from "./lib/journal.js";
 
 export const commandTypeValidator = v.union(
   v.literal("thread.prompt"),
@@ -1414,5 +1429,111 @@ export default defineSchema({
     .index("by_owner_overrideId", ["ownerId", "overrideId"])
     .index("by_owner_calendar_date", ["ownerId", "calendarId", "date"])
     .index("by_owner_createdAt", ["ownerId", "createdAt"]),
+
+  journalSettings: defineTable({
+    ownerId: v.string(),
+    brokerTimeZone: v.string(),
+    tradingViewLayoutId: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_owner", ["ownerId"]),
+
+  journalTrades: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    symbol: v.string(),
+    instrument: journalInstrumentValidator,
+    account: journalAccountValidator,
+    direction: journalDirectionValidator,
+    status: journalStatusValidator,
+    openedOn: v.string(),
+    closedOn: v.union(v.string(), v.null()),
+    setup: v.string(),
+    size: v.string(),
+    details: v.string(),
+    plannedRiskCents: v.union(v.number(), v.null()),
+    realizedPnlCents: v.union(v.number(), v.null()),
+    thesis: v.string(),
+    plan: v.string(),
+    review: v.string(),
+    adherence: journalAdherenceValidator,
+    mistakes: v.array(journalMistakeValidator),
+    assistantReview: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_owner_stable", ["ownerId", "stableId"]),
+
+  journalOrderBatches: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    date: v.string(),
+    note: v.string(),
+    orders: v.array(journalOrderValidator),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_owner_stable", ["ownerId", "stableId"]),
+
+  journalLessons: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    title: v.string(),
+    body: v.string(),
+    tradeStableId: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_owner_stable", ["ownerId", "stableId"])
+    .index("by_owner_trade", ["ownerId", "tradeStableId"]),
+
+  journalCharts: defineTable({
+    ownerId: v.string(),
+    imageKey: v.string(),
+    storageId: v.id("_storage"),
+    mimeType: journalChartMimeTypeValidator,
+    width: v.optional(v.number()),
+    height: v.optional(v.number()),
+    symbol: v.optional(v.string()),
+    interval: v.optional(v.string()),
+    source: journalChartSourceValidator,
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_owner_image_key", ["ownerId", "imageKey"])
+    .index("by_storage_id", ["storageId"]),
+
+  journalChatMessages: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    ordinal: v.number(),
+    role: journalChatRoleValidator,
+    text: v.string(),
+    attachments: v.array(journalChatAttachmentValidator),
+    toolEvents: v.optional(v.array(journalToolEventValidator)),
+    runStableId: v.optional(v.string()),
+    status: journalChatStatusValidator,
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_ordinal", ["ownerId", "ordinal"])
+    .index("by_owner_stable", ["ownerId", "stableId"]),
+
+  journalChatRuns: defineTable({
+    ownerId: v.string(),
+    stableId: v.string(),
+    userMessageId: v.id("journalChatMessages"),
+    assistantMessageId: v.id("journalChatMessages"),
+    status: journalChatStatusValidator,
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_owner_status", ["ownerId", "status"])
+    .index("by_stable", ["stableId"]),
 
 });

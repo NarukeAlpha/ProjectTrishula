@@ -36,6 +36,26 @@ export interface ExecutionRequestOptions {
   timeoutMs?: number;
 }
 
+function normalizeBaseUrl(raw: string, envName: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${envName} is invalid.`);
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:")
+    || url.username !== ""
+    || url.password !== ""
+    || url.search !== ""
+    || url.hash !== ""
+  ) {
+    throw new Error(`${envName} must be an http:// or https:// base URL.`);
+  }
+  const pathname = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${pathname}`;
+}
+
 export async function executionServiceName(actorId: string): Promise<string> {
   const digest = await sha256Hex(requireActorId(actorId));
   return `pi-u-${digest.slice(0, 20)}`;
@@ -51,11 +71,25 @@ export async function executionUrl(actorId: string, path: string): Promise<strin
   return `http://${await executionServiceName(actorId)}.${suffix}${requirePath(path)}`;
 }
 
-export async function executionRequest<TBody>(
-  actorId: string,
-  path: string,
+export async function journalExecutionUrl(ownerId: string, path: string): Promise<string> {
+  const normalizedPath = requirePath(path);
+  const journalBaseUrl = process.env.JOURNAL_AGENT_BASE_URL?.trim();
+  if (journalBaseUrl) {
+    return `${normalizeBaseUrl(journalBaseUrl, "JOURNAL_AGENT_BASE_URL")}${normalizedPath}`;
+  }
+  const executionBaseUrl = process.env.EXECUTION_BASE_URL?.trim();
+  if (executionBaseUrl) {
+    return `${normalizeBaseUrl(executionBaseUrl, "EXECUTION_BASE_URL")}${normalizedPath}`;
+  }
+  const routedOwnerId = process.env.MARKET_RESEARCH_OWNER_ID?.trim() || ownerId;
+  return executionUrl(routedOwnerId, normalizedPath);
+}
+
+async function postExecutionJson<TBody>(
+  url: string,
   body: TBody,
-  options: ExecutionRequestOptions = {},
+  options: ExecutionRequestOptions,
+  rejectRedirects = false,
 ): Promise<Response> {
   const request: RequestInit = {
     method: "POST",
@@ -65,8 +99,29 @@ export async function executionRequest<TBody>(
     },
     body: JSON.stringify(body),
   };
+  if (rejectRedirects) {
+    request.redirect = "error";
+  }
   if (options.timeoutMs !== undefined) {
     request.signal = AbortSignal.timeout(requireTimeoutMs(options.timeoutMs));
   }
-  return fetch(await executionUrl(actorId, path), request);
+  return fetch(url, request);
+}
+
+export async function executionRequest<TBody>(
+  actorId: string,
+  path: string,
+  body: TBody,
+  options: ExecutionRequestOptions = {},
+): Promise<Response> {
+  return postExecutionJson(await executionUrl(actorId, path), body, options);
+}
+
+export async function journalExecutionRequest<TBody>(
+  ownerId: string,
+  path: string,
+  body: TBody,
+  options: ExecutionRequestOptions = {},
+): Promise<Response> {
+  return postExecutionJson(await journalExecutionUrl(ownerId, path), body, options, true);
 }

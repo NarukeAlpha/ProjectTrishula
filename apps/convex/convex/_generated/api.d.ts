@@ -14,6 +14,9 @@ import type * as discord from "../discord.js";
 import type * as discord_http from "../discord_http.js";
 import type * as dispatch from "../dispatch.js";
 import type * as http from "../http.js";
+import type * as journal from "../journal.js";
+import type * as journal_dispatch from "../journal_dispatch.js";
+import type * as journal_http from "../journal_http.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_canonical_json from "../lib/canonical_json.js";
 import type * as lib_credential_vault from "../lib/credential_vault.js";
@@ -24,6 +27,8 @@ import type * as lib_discord_native_checkpoint from "../lib/discord_native_check
 import type * as lib_discord_state from "../lib/discord_state.js";
 import type * as lib_execution from "../lib/execution.js";
 import type * as lib_invariants from "../lib/invariants.js";
+import type * as lib_journal from "../lib/journal.js";
+import type * as lib_journal_token from "../lib/journal_token.js";
 import type * as lib_market_research from "../lib/market_research.js";
 import type * as lib_market_research_theses from "../lib/market_research_theses.js";
 import type * as lib_robinhood_oauth from "../lib/robinhood_oauth.js";
@@ -53,6 +58,9 @@ declare const fullApi: ApiFromModules<{
   discord_http: typeof discord_http;
   dispatch: typeof dispatch;
   http: typeof http;
+  journal: typeof journal;
+  journal_dispatch: typeof journal_dispatch;
+  journal_http: typeof journal_http;
   "lib/auth": typeof lib_auth;
   "lib/canonical_json": typeof lib_canonical_json;
   "lib/credential_vault": typeof lib_credential_vault;
@@ -63,6 +71,8 @@ declare const fullApi: ApiFromModules<{
   "lib/discord_state": typeof lib_discord_state;
   "lib/execution": typeof lib_execution;
   "lib/invariants": typeof lib_invariants;
+  "lib/journal": typeof lib_journal;
+  "lib/journal_token": typeof lib_journal_token;
   "lib/market_research": typeof lib_market_research;
   "lib/market_research_theses": typeof lib_market_research_theses;
   "lib/robinhood_oauth": typeof lib_robinhood_oauth;

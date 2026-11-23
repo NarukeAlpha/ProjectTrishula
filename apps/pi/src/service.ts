@@ -12,6 +12,8 @@ import type { DiscordAgentRunner } from "./discord/runner.js";
 import { DiscordAgentJobRegistry } from "./discord/jobs.js";
 import type { MarketResearchRunner } from "./market-research/runner.js";
 import { MarketResearchJobRegistry } from "./market-research/jobs.js";
+import type { JournalAgentRunner } from "./journal/runner.js";
+import { JournalJobRegistry } from "./journal/jobs.js";
 
 export interface RunningExecutionService {
   server: Server;
@@ -26,6 +28,7 @@ export async function startExecutionService(
   broker: TradingBroker = createTradingBroker(config),
   discordAgents?: DiscordAgentRunner,
   marketResearch?: MarketResearchRunner,
+  journal?: JournalAgentRunner,
 ): Promise<RunningExecutionService> {
   await executor.initialize();
   if (!executor.readiness().ready) {
@@ -41,6 +44,20 @@ export async function startExecutionService(
     await marketResearch.initialize();
     if (!marketResearch.readiness().ready) {
       throw new Error(`Market research is not ready: ${marketResearch.readiness().reason ?? "unknown reason"}`);
+    }
+  }
+  if (journal) {
+    try {
+      await journal.initialize();
+      if (!journal.readiness().ready) {
+        logger.error("journal_agent_not_ready", {
+          reason: journal.readiness().reason ?? "unknown_reason",
+        });
+      }
+    } catch (error) {
+      logger.error("journal_agent_init_failed", {
+        error: error instanceof Error ? error.message.slice(0, 200) : "unknown_error",
+      });
     }
   }
 
@@ -67,6 +84,9 @@ export async function startExecutionService(
   const marketResearchJobs = marketResearch
     ? new MarketResearchJobRegistry({ runner: marketResearch, logger })
     : undefined;
+  const journalJobs = journal
+    ? new JournalJobRegistry({ runner: journal, logger })
+    : undefined;
   const appDependencies: AppDependencies = {
     sharedSecret: config.sharedSecret,
     discordSharedSecret: config.discordSharedSecret,
@@ -83,6 +103,10 @@ export async function startExecutionService(
   if (marketResearch && marketResearchJobs) {
     appDependencies.marketResearch = marketResearch;
     appDependencies.marketResearchJobs = marketResearchJobs;
+  }
+  if (journal && journalJobs) {
+    appDependencies.journal = journal;
+    appDependencies.journalJobs = journalJobs;
   }
   const app = createApp(config.boundActorId
     ? { ...appDependencies, boundActorId: config.boundActorId }
@@ -105,12 +129,14 @@ export async function startExecutionService(
         const work = (async () => {
           await discordAgentJobs?.dispose();
           await marketResearchJobs?.dispose();
+          await journalJobs?.dispose();
           await registry.shutdown();
           await registry.waitForIdle();
           await sessions.dispose();
           await broker.dispose();
           await discordAgents?.dispose();
           await marketResearch?.dispose();
+          await journal?.dispose();
           await executor.dispose();
         })();
         await Promise.race([

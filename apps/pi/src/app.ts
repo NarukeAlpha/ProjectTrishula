@@ -23,6 +23,9 @@ import {
 } from "./market-research/contracts.js";
 import type { MarketResearchRunner } from "./market-research/runner.js";
 import type { MarketResearchJobRegistry } from "./market-research/jobs.js";
+import type { JournalJobRegistryBoundary } from "./journal/jobs.js";
+import { mountJournalRoutes } from "./journal/routes.js";
+import type { JournalAgentRunner } from "./journal/runner.js";
 
 export type MarketResearchJobRegistryBoundary = Pick<
   MarketResearchJobRegistry,
@@ -42,6 +45,8 @@ export interface AppDependencies {
   exaConfigured?: boolean;
   marketResearch?: MarketResearchRunner;
   marketResearchJobs?: MarketResearchJobRegistryBoundary;
+  journal?: JournalAgentRunner;
+  journalJobs?: JournalJobRegistryBoundary;
 }
 
 export interface AppRunRegistry {
@@ -62,6 +67,7 @@ interface HealthResponse {
     exaConfigured: boolean;
     runner?: ReturnType<MarketResearchRunner["readiness"]>;
   };
+  journal?: ReturnType<JournalAgentRunner["readiness"]>;
 }
 
 export function createApp(dependencies: AppDependencies): express.Express {
@@ -84,7 +90,13 @@ export function createApp(dependencies: AppDependencies): express.Express {
       && marketResearchRunner?.ready === true
       && dependencies.marketResearchJobs !== undefined
     );
-    const ready = acceptingRuns && executor.ready && (discordAgents?.ready ?? true) && marketResearchReady;
+    const journal = dependencies.journal?.readiness();
+    // Isolate journal readiness from overall Pi/Discord health so journal-only init issues
+    // return 503 on /v1/journal/* and surface in health.journal without taking down Pi/Discord.
+    const ready = acceptingRuns
+      && executor.ready
+      && (discordAgents?.ready ?? true)
+      && marketResearchReady;
     const health: HealthResponse = {
       ok: ready,
       service: "project-trishula-pi",
@@ -97,7 +109,15 @@ export function createApp(dependencies: AppDependencies): express.Express {
       },
     };
     if (discordAgents) health.discordAgents = discordAgents;
+    if (journal) health.journal = journal;
     response.status(ready ? 200 : 503).json(health);
+  });
+
+  mountJournalRoutes(app, {
+    authenticate,
+    json,
+    ...(dependencies.journal ? { runner: dependencies.journal } : {}),
+    ...(dependencies.journalJobs ? { jobs: dependencies.journalJobs } : {}),
   });
 
   app.post("/market-research/jobs", authenticate, json, (request, response) => {

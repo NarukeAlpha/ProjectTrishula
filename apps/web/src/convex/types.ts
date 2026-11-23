@@ -500,3 +500,153 @@ export type SaveMarketResearchControlSettings = {
   includeCharts?: boolean;
   maximumCharts?: number;
 };
+
+export type JournalInstrument = "Shares" | "Options" | "Futures" | "Other";
+export type JournalAccount = "Live" | "Paper" | "Unspecified";
+export type JournalDirection = "" | "Long" | "Short" | "Multi-leg";
+export type JournalStatus = "Open" | "Closed";
+export type JournalAdherence =
+  | "Unreviewed"
+  | "Followed"
+  | "Partly followed"
+  | "Deviated";
+export type JournalMistake =
+  | "Entry timing"
+  | "Position sizing"
+  | "Risk management"
+  | "Exit execution"
+  | "Impulsive trade"
+  | "Missed context"
+  | "Other";
+
+export type JournalOrderStatus = "Filled" | "Canceled";
+export type JournalOrderSide = "Buy" | "Sell";
+export type JournalOrderType = "Market" | "Limit";
+export type JournalChartMimeType = "image/jpeg" | "image/png" | "image/webp";
+export type JournalChatRole = "user" | "assistant";
+export type JournalChatStatus =
+  | "completed"
+  | "pending"
+  | "running"
+  | "failed"
+  | "canceled";
+export type JournalToolEventStatus = "running" | "completed" | "failed";
+
+export interface JournalSettingsReadModel {
+  brokerTimeZone: string;
+  tradingViewLayoutId?: string;
+  updatedAt: number;
+}
+
+export interface JournalOrderReadModel {
+  contract: string;
+  submittedAt: string;
+  status: JournalOrderStatus;
+  side: JournalOrderSide;
+  type: JournalOrderType;
+  quantity: number;
+  averageFillCents: number | null;
+  realizedPnlCents: number | null;
+  cashCents: number;
+  limitCents: number | null;
+}
+
+export interface JournalTradeInput {
+  symbol: string;
+  instrument: JournalInstrument;
+  account: JournalAccount;
+  direction: JournalDirection;
+  status: JournalStatus;
+  openedOn: string;
+  closedOn: string | null;
+  setup: string;
+  size: string;
+  details: string;
+  plannedRiskCents: number | null;
+  realizedPnlCents: number | null;
+  thesis: string;
+  plan: string;
+  review: string;
+  adherence: JournalAdherence;
+  mistakes: JournalMistake[];
+}
+
+export interface JournalTradeReadModel extends JournalTradeInput {
+  stableId: string;
+  assistantReview: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface JournalLessonInput {
+  title: string;
+  body: string;
+  tradeStableId: string | null;
+}
+
+export interface JournalLessonReadModel extends JournalLessonInput {
+  stableId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface JournalOrderBatchInput {
+  date: string;
+  note: string;
+  orders: JournalOrderReadModel[];
+}
+
+export interface JournalOrderBatchReadModel extends JournalOrderBatchInput {
+  stableId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface JournalDiaryReadModel {
+  settings: JournalSettingsReadModel;
+  trades: JournalTradeReadModel[];
+  lessons: JournalLessonReadModel[];
+  orderDays: JournalOrderBatchReadModel[];
+}
+
+export interface JournalUploadedChartReadModel {
+  imageKey: string;
+  storageId: string;
+  mimeType: JournalChartMimeType;
+  width: number;
+  height: number;
+  url: string;
+}
+
+export interface JournalToolEventReadModel {
+  name: string;
+  status: JournalToolEventStatus;
+  summary?: string;
+}
+
+export interface JournalChatAttachmentReadModel {
+  storageId: string;
+  imageKey: string;
+  mimeType: string;
+  filename: string;
+  url: string | null;
+}
+
+export interface JournalChatAttachmentRef {
+  imageKey: string;
+  filename: string;
+}
+
+export interface JournalChatMessageReadModel {
+  stableId: string;
+  ordinal: number;
+  role: JournalChatRole;
+  text: string;
+  attachments: JournalChatAttachmentReadModel[];
+  toolEvents?: JournalToolEventReadModel[];
+  runStableId?: string;
+  status: JournalChatStatus;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}

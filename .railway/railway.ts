@@ -165,6 +165,7 @@ export default defineRailway(() => {
     env: {
       BOUND_ACTOR_ID: preserve(),
       BROKER_MODE: preserve(),
+      CHART_IMG_API_KEY: discord.env.CHART_IMG_API_KEY,
       CODEX_AUTH_MODE: preserve(),
       CONVEX_SITE_URL: preserve(),
       EXA_API_KEY: preserve(),
