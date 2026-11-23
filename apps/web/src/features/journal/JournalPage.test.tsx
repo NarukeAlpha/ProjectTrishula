@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "../../app/App";
@@ -14,6 +15,7 @@ import type {
   JournalDiaryReadModel,
   JournalUploadedChartReadModel,
 } from "../../convex/types";
+import { lessonsPage, tradeReviewsPage } from "../navigation/routes";
 import { ChartReview } from "./ChartReview";
 import { readChartReview } from "./chartReviewParser";
 import { clearAllChatHistory } from "./chatHistory";
@@ -27,6 +29,10 @@ import type { ChartUrlsQueryHook } from "./TradeReviewSheet";
 afterEach(() => {
   cleanup();
 });
+
+function renderWorkspace(element: ReactElement) {
+  return render(element, { wrapper: MemoryRouter });
+}
 
 const SAMPLE_IMAGE_KEY = "a".repeat(64);
 const SAMPLE_CHART_URL = "https://convex.example.com/storage/chart-qqq.png";
@@ -231,8 +237,9 @@ function createHandlers(
 describe("Trading Journal workspace", () => {
   it("groups trades by date newest-first, totals daily realized P&L, and expands source orders", () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={[]}
         initialChatOpen={false}
@@ -265,8 +272,9 @@ describe("Trading Journal workspace", () => {
 
   it("opens review sheet for closed trades, clears review, and edits/deletes open trades", async () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={[]}
         initialChatOpen={false}
@@ -325,8 +333,9 @@ describe("Trading Journal workspace", () => {
 
   it("saves journal settings from the header settings popover", async () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={[]}
         initialChatOpen={false}
@@ -353,8 +362,9 @@ describe("Trading Journal workspace", () => {
 
   it("filters lessons by search query and jumps to a linked trade review", () => {
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={lessonsPage}
         diary={createDiary()}
         chatMessages={[]}
         initialChatOpen={false}
@@ -362,7 +372,7 @@ describe("Trading Journal workspace", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Lessons/ }));
+    expect(screen.getByRole("heading", { name: "Lessons" })).toBeVisible();
     expect(screen.getByText("2 lessons")).toBeVisible();
 
     const searchInput = screen.getByRole("searchbox", {
@@ -501,8 +511,9 @@ describe("Trading Journal workspace", () => {
       },
     ];
 
-    const { rerender } = render(
+    const { rerender } = renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={completedMessages}
         initialChatOpen={true}
@@ -573,6 +584,7 @@ describe("Trading Journal workspace", () => {
 
     rerender(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={activeMessages}
         initialChatOpen={true}
@@ -588,44 +600,53 @@ describe("Trading Journal workspace", () => {
     });
   });
 
-  it("redirects / to /journal and displays nested ThreadSidebar when clicking Chat", () => {
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <AppShell
-          subtitle="Trading journal & research"
-          userLabel="Alex Trader"
-          onSignOut={vi.fn()}
-          renderThreadSidebar={() => (
-            <aside aria-label="Nested thread sidebar">Thread History</aside>
-          )}
-          journalElement={<div>Journal View</div>}
-          askElement={<div>Chat View</div>}
-          threadElement={<div>Thread View</div>}
-          discordElement={<div>Discord View</div>}
-        />
-      </MemoryRouter>,
-    );
+  it.each(["/", "/journal"])(
+    "opens Trade Reviews from %s and shows history only in Chat",
+    (entry) => {
+      render(
+        <MemoryRouter initialEntries={[entry]}>
+          <AppShell
+            subtitle="Trading journal & research"
+            userLabel="Alex Trader"
+            onSignOut={vi.fn()}
+            renderThreadSidebar={() => (
+              <aside aria-label="Nested thread sidebar">Thread History</aside>
+            )}
+            renderJournalPage={(section) => <h1>{section.title}</h1>}
+            askElement={<div>Chat View</div>}
+            threadElement={<div>Thread View</div>}
+            discordElement={<div>Discord View</div>}
+          />
+        </MemoryRouter>,
+      );
 
-    // Default route redirects / -> /journal and does NOT show ThreadSidebar
-    expect(screen.getByText("Journal View")).toBeVisible();
-    expect(
-      screen.queryByRole("complementary", { name: "Nested thread sidebar" }),
-    ).toBeNull();
+      expect(
+        screen.getByRole("heading", { name: "Trade Reviews" }),
+      ).toBeVisible();
+      expect(
+        screen.getAllByRole("link", { name: "Trade Reviews" })[0],
+      ).toHaveAttribute("aria-current", "page");
+      fireEvent.click(screen.getAllByRole("link", { name: "Lessons" })[0]);
+      expect(screen.getByRole("heading", { name: "Lessons" })).toBeVisible();
+      expect(
+        screen.queryByRole("complementary", { name: "Nested thread sidebar" }),
+      ).toBeNull();
 
-    // Clicking Chat opens Chat View + nested ThreadSidebar
-    fireEvent.click(screen.getAllByRole("link", { name: "Chat" })[0]);
-    expect(screen.getByText("Chat View")).toBeVisible();
-    expect(
-      screen.getByRole("complementary", { name: "Nested thread sidebar" }),
-    ).toBeVisible();
+      // Clicking Chat opens Chat View + nested ThreadSidebar
+      fireEvent.click(screen.getAllByRole("link", { name: "Chat" })[0]);
+      expect(screen.getByText("Chat View")).toBeVisible();
+      expect(
+        screen.getByRole("complementary", { name: "Nested thread sidebar" }),
+      ).toBeVisible();
 
-    // Clicking Discord hides ThreadSidebar
-    fireEvent.click(screen.getAllByRole("link", { name: "Discord" })[0]);
-    expect(screen.getByText("Discord View")).toBeVisible();
-    expect(
-      screen.queryByRole("complementary", { name: "Nested thread sidebar" }),
-    ).toBeNull();
-  });
+      // Clicking Discord hides ThreadSidebar
+      fireEvent.click(screen.getAllByRole("link", { name: "Discord" })[0]);
+      expect(screen.getByText("Discord View")).toBeVisible();
+      expect(
+        screen.queryByRole("complementary", { name: "Nested thread sidebar" }),
+      ).toBeNull();
+    },
+  );
 
   it("queries getChartUrls only for the open review's imageKeys and skips prose reviews", () => {
     const handlers = createHandlers();
@@ -634,8 +655,9 @@ describe("Trading Journal workspace", () => {
       return { [SAMPLE_IMAGE_KEY]: SAMPLE_CHART_URL };
     });
 
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={[]}
         initialChatOpen={false}
@@ -697,8 +719,9 @@ describe("Trading Journal workspace", () => {
 
     const handlers = createHandlers({ onUploadChart });
 
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={[]}
         initialChatOpen={true}
@@ -796,8 +819,9 @@ describe("Trading Journal workspace", () => {
         .fn()
         .mockRejectedValue(new Error("Clear batch failed on page 2")),
     });
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={[
           {
@@ -838,8 +862,9 @@ describe("Trading Journal workspace", () => {
 
     // End-to-end formatted money entry in TradeEditorSheet
     const handlers = createHandlers();
-    render(
+    renderWorkspace(
       <JournalWorkspaceView
+        section={tradeReviewsPage}
         diary={createDiary()}
         chatMessages={[]}
         initialChatOpen={false}

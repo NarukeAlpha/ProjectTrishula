@@ -1,13 +1,23 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
-import { BottomNavigation, DesktopNavigation } from "./BottomNavigation";
-import { isChatPathname, isJournalPathname } from "./routes";
+import {
+  BottomNavigation,
+  DesktopNavigation,
+  PrimaryRail,
+} from "./BottomNavigation";
+import { isChatPathname } from "./routes";
 
 afterEach(cleanup);
 
 describe("primary navigation", () => {
-  it("contains Journal, Chat, and Discord", () => {
+  it("links to the same four destinations on desktop and mobile", () => {
     render(
       <MemoryRouter initialEntries={["/discord"]}>
         <BottomNavigation />
@@ -15,37 +25,65 @@ describe("primary navigation", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getAllByRole("link", { name: "Journal" })).toHaveLength(2);
-    expect(screen.getAllByRole("link", { name: "Chat" })).toHaveLength(2);
-    expect(screen.getAllByRole("link", { name: "Discord" })).toHaveLength(2);
-    expect(screen.queryByRole("link", { name: "Overview" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Activity" })).toBeNull();
-    for (const link of screen.getAllByRole("link", { name: "Discord" })) {
-      expect(link).toHaveClass("active");
+    for (const nav of screen.getAllByRole("navigation")) {
+      const links = within(nav);
+      expect(links.getAllByRole("link")).toHaveLength(4);
+      for (const [name, path] of [
+        ["Trade Reviews", "/trade-reviews"],
+        ["Lessons", "/lessons"],
+        ["Chat", "/ask"],
+        ["Discord", "/discord"],
+      ]) {
+        expect(links.getByRole("link", { name })).toHaveAttribute("href", path);
+      }
     }
   });
 
-  it("keeps Journal active for root and journal routes", () => {
+  it.each([
+    ["/trade-reviews", "Trade Reviews"],
+    ["/lessons", "Lessons"],
+    ["/threads/thread_1", "Chat"],
+    ["/discord", "Discord"],
+  ])("marks the current destination on %s", (path, name) => {
     render(
-      <MemoryRouter initialEntries={["/journal"]}>
-        <BottomNavigation />
-        <DesktopNavigation />
-      </MemoryRouter>,
-    );
-
-    for (const link of screen.getAllByRole("link", { name: "Journal" })) {
-      expect(link).toHaveClass("active");
-    }
-  });
-
-  it("keeps Chat active for conversation routes", () => {
-    render(
-      <MemoryRouter initialEntries={["/threads/thread_1"]}>
+      <MemoryRouter initialEntries={[path]}>
         <BottomNavigation />
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: "Chat" })).toHaveClass("active");
+    expect(screen.getByRole("link", { current: "page" })).toHaveAccessibleName(
+      name,
+    );
+    expect(screen.getByRole("link", { name })).toHaveClass("active");
+  });
+
+  it("keeps the edge control available with the sidebar open or closed", () => {
+    render(
+      <MemoryRouter initialEntries={["/lessons"]}>
+        <PrimaryRail subtitle="Demo" footer={<button>Reset</button>} />
+      </MemoryRouter>,
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Collapse sidebar",
+      expanded: true,
+    });
+    const panel = document.getElementById(
+      toggle.getAttribute("aria-controls")!,
+    );
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAccessibleName("Expand sidebar");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(panel).not.toBeVisible();
+    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(panel).toBeVisible();
+    expect(toggle).toHaveAccessibleName("Collapse sidebar");
+    expect(screen.getByRole("link", { current: "page" })).toHaveAccessibleName(
+      "Lessons",
+    );
   });
 
   it("scopes path helpers cleanly", () => {
@@ -54,10 +92,5 @@ describe("primary navigation", () => {
     expect(isChatPathname("/journal")).toBe(false);
     expect(isChatPathname("/discord")).toBe(false);
     expect(isChatPathname("/")).toBe(false);
-
-    expect(isJournalPathname("/")).toBe(true);
-    expect(isJournalPathname("/journal")).toBe(true);
-    expect(isJournalPathname("/ask")).toBe(false);
-    expect(isJournalPathname("/discord")).toBe(false);
   });
 });

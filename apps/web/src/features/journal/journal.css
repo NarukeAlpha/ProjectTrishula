@@ -64,42 +64,6 @@
   letter-spacing: -0.03em;
 }
 
-.journal-view-tabs {
-  display: flex;
-  gap: 20px;
-  margin-top: 14px;
-}
-
-.journal-tab {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
-  min-height: 36px;
-  padding: 4px 0 8px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  font-size: 0.94rem;
-  font-weight: 600;
-}
-
-.journal-tab:hover {
-  color: var(--ink);
-}
-
-.journal-tab[data-active="true"] {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
-
-.journal-tab-count {
-  color: var(--faint);
-  font-size: 0.8125rem;
-  font-variant-numeric: tabular-nums;
-}
-
 .journal-header-actions {
   display: flex;
   flex-wrap: wrap;

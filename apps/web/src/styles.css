@@ -465,7 +465,7 @@ summary:focus-visible {
   left: 0;
   display: grid;
   min-height: calc(var(--mobile-nav-height) + var(--safe-bottom));
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 5px max(8px, var(--safe-right)) max(5px, var(--safe-bottom))
     max(8px, var(--safe-left));
   background: var(--panel);
@@ -2755,18 +2755,59 @@ summary:focus-visible {
     --mobile-nav-height: 0px;
   }
 
+  .shell:has(> .primary-rail[data-collapsed]) {
+    --rail-width: 0px;
+  }
+
   .primary-rail {
     position: fixed;
     z-index: 26;
     inset: 0 auto 0 0;
-    display: flex;
+    display: block;
     width: var(--rail-width);
     height: 100dvh;
-    flex-direction: column;
-    padding: 20px 14px 16px;
     background: var(--rail);
     color: var(--rail-ink);
+  }
+
+  .rail-panel:not([hidden]) {
+    display: flex;
+    height: 100%;
+    flex-direction: column;
+    padding: 20px 14px 16px;
+    overflow-y: auto;
     border-right: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .rail-edge-toggle {
+    position: absolute;
+    top: 50%;
+    left: 100%;
+    display: grid;
+    width: 24px;
+    height: 48px;
+    padding: 0;
+    place-items: center;
+    color: var(--rail-ink);
+    background: var(--rail);
+    border: 1px solid var(--rail-border);
+    border-left: 0;
+    border-radius: 0 6px 6px 0;
+    transform: translateY(-50%);
+  }
+
+  .rail-edge-toggle:hover {
+    background: var(--accent);
+  }
+
+  .rail-edge-toggle svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.75;
   }
 
   .rail-brand {

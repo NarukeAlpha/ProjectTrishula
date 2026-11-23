@@ -1,6 +1,8 @@
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useNavigationType } from "react-router-dom";
 import { publicApi } from "../../convex/functions";
+import { tradeReviewsPage, type JournalSection } from "../navigation/routes";
 import type {
   JournalChatAttachmentRef,
   JournalChatMessageReadModel,
@@ -22,8 +24,6 @@ import { TradeEditorSheet } from "./TradeEditorSheet";
 import { TradeReviewSheet, type ChartUrlsQueryHook } from "./TradeReviewSheet";
 import { TradesLedger } from "./TradesLedger";
 import "./journal.css";
-
-type JournalViewTab = "trades" | "lessons";
 
 type ActiveSheet =
   | { kind: "none" }
@@ -72,6 +72,7 @@ export interface JournalWorkspaceHandlers {
 }
 
 export function JournalWorkspaceView({
+  section,
   diary,
   chatMessages,
   chatLoading = false,
@@ -79,6 +80,7 @@ export function JournalWorkspaceView({
   useChartUrls,
   handlers,
 }: {
+  section: JournalSection;
   diary: JournalDiaryReadModel | undefined;
   chatMessages: JournalChatMessageReadModel[];
   chatLoading?: boolean;
@@ -86,13 +88,33 @@ export function JournalWorkspaceView({
   useChartUrls?: ChartUrlsQueryHook;
   handlers: JournalWorkspaceHandlers;
 }) {
-  const [tab, setTab] = useState<JournalViewTab>("trades");
+  const showTrades = section.path === tradeReviewsPage.path;
+  const navigationType = useNavigationType();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const [previousPath, setPreviousPath] = useState(section.path);
   const [sheet, setSheet] = useState<ActiveSheet>({ kind: "none" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState<boolean>(() =>
     initialChatOpen !== undefined ? initialChatOpen : isWideViewport(),
   );
   const [toast, setToast] = useState<string | null>(null);
+
+  if (previousPath !== section.path) {
+    setPreviousPath(section.path);
+    setSheet({ kind: "none" });
+  }
+
+  useLayoutEffect(() => {
+    if (navigationType === "PUSH") {
+      headingRef.current?.focus({ preventScroll: true });
+      window.scrollTo(0, 0);
+    }
+  }, [section.path, navigationType]);
+
+  function closeSheet() {
+    // A save can finish after navigation has opened another sheet.
+    setSheet((current) => (current === sheet ? { kind: "none" } : current));
+  }
 
   useEffect(() => {
     if (!toast) return;
@@ -143,33 +165,13 @@ export function JournalWorkspaceView({
           <header className="journal-page-header">
             <div className="journal-header-left">
               <p className="journal-kicker">Forest Ledger</p>
-              <h1>Trading Journal</h1>
-              <nav className="journal-view-tabs" aria-label="Journal views">
-                <button
-                  type="button"
-                  className="journal-tab"
-                  aria-pressed={tab === "trades"}
-                  data-active={tab === "trades" ? "true" : undefined}
-                  onClick={() => setTab("trades")}
-                >
-                  Trades
-                  <span className="journal-tab-count">{trades.length}</span>
-                </button>
-                <button
-                  type="button"
-                  className="journal-tab"
-                  aria-pressed={tab === "lessons"}
-                  data-active={tab === "lessons" ? "true" : undefined}
-                  onClick={() => setTab("lessons")}
-                >
-                  Lessons
-                  <span className="journal-tab-count">{lessons.length}</span>
-                </button>
-              </nav>
+              <h1 ref={headingRef} tabIndex={-1}>
+                {section.title}
+              </h1>
             </div>
 
             <div className="journal-header-actions">
-              {tab === "trades" ? (
+              {showTrades ? (
                 <button
                   type="button"
                   className="journal-button journal-button--primary"
@@ -230,9 +232,9 @@ export function JournalWorkspaceView({
               className="journal-card journal-loading-card"
               role="status"
             >
-              Loading trading journal…
+              Loading {section.title}…
             </section>
-          ) : tab === "trades" ? (
+          ) : showTrades ? (
             <TradesLedger
               trades={trades}
               orderDays={orderDays}
@@ -293,7 +295,7 @@ export function JournalWorkspaceView({
             await handlers.onClearTradeReview(stableId);
             setToast("Assistant review cleared.");
           }}
-          onClose={() => setSheet({ kind: "none" })}
+          onClose={closeSheet}
         />
       )}
 
@@ -312,18 +314,18 @@ export function JournalWorkspaceView({
               await handlers.onUpsertTrade({ trade: tradeInput });
               setToast(`Logged ${tradeInput.symbol}.`);
             }
-            setSheet({ kind: "none" });
+            closeSheet();
           }}
           onDelete={
             activeEditTrade
               ? async () => {
                   await handlers.onDeleteTrade(activeEditTrade.stableId);
                   setToast(`Deleted ${activeEditTrade.symbol}.`);
-                  setSheet({ kind: "none" });
+                  closeSheet();
                 }
               : undefined
           }
-          onClose={() => setSheet({ kind: "none" })}
+          onClose={closeSheet}
         />
       )}
 
@@ -345,18 +347,18 @@ export function JournalWorkspaceView({
               await handlers.onUpsertLesson({ lesson: lessonInput });
               setToast("Lesson saved.");
             }
-            setSheet({ kind: "none" });
+            closeSheet();
           }}
           onDelete={
             activeEditLesson
               ? async () => {
                   await handlers.onDeleteLesson(activeEditLesson.stableId);
                   setToast("Lesson deleted.");
-                  setSheet({ kind: "none" });
+                  closeSheet();
                 }
               : undefined
           }
-          onClose={() => setSheet({ kind: "none" })}
+          onClose={closeSheet}
         />
       )}
 
@@ -369,7 +371,7 @@ export function JournalWorkspaceView({
   );
 }
 
-export function JournalPage() {
+export function JournalPage({ section }: { section: JournalSection }) {
   const diary = useQuery(publicApi.journal.getDiary, {});
   const chatMessages = useQuery(publicApi.journal.listChatMessages, {
     limit: 100,
@@ -390,6 +392,7 @@ export function JournalPage() {
 
   return (
     <JournalWorkspaceView
+      section={section}
       diary={diary}
       chatMessages={chatMessages ?? []}
       chatLoading={chatMessages === undefined}
