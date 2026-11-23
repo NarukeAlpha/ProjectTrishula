@@ -17,7 +17,9 @@ import {
 } from "../features/navigation/BottomNavigation";
 import {
   isChatPathname,
-  isJournalPathname,
+  journalPages,
+  tradeReviewsPage,
+  type JournalSection,
 } from "../features/navigation/routes";
 import { ThreadSidebar } from "../features/threads/ThreadSidebar";
 import { Welcome } from "../features/threads/Welcome";
@@ -86,7 +88,7 @@ export function AppShell({
   reconnecting = false,
   renderThreadSidebar,
   renderRecoveryBanner,
-  journalElement,
+  renderJournalPage,
   askElement,
   threadElement,
   discordElement,
@@ -101,7 +103,7 @@ export function AppShell({
     onClose: () => void;
   }) => ReactNode;
   renderRecoveryBanner?: (locationKey: string) => ReactNode;
-  journalElement: ReactNode;
+  renderJournalPage: (section: JournalSection) => ReactNode;
   askElement: ReactNode;
   threadElement: ReactNode;
   discordElement: ReactNode;
@@ -109,11 +111,9 @@ export function AppShell({
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isChatRoute = isChatPathname(location.pathname);
-  const isJournalRoute = isJournalPathname(location.pathname);
-  const section = isJournalRoute ? "journal" : isChatRoute ? "chat" : "discord";
 
   return (
-    <div className="shell" data-section={section}>
+    <div className="shell">
       <KeyboardShortcuts />
       <PrimaryRail
         subtitle={subtitle}
@@ -171,12 +171,20 @@ export function AppShell({
         )}
         {isChatRoute && renderRecoveryBanner?.(location.key)}
         <Routes>
-          <Route path="/" element={<Navigate to="/journal" replace />} />
-          <Route path="/journal" element={journalElement} />
+          {journalPages.map((section) => (
+            <Route
+              key={section.path}
+              path={section.path}
+              element={renderJournalPage(section)}
+            />
+          ))}
           <Route path="/ask" element={askElement} />
           <Route path="/threads/:threadId" element={threadElement} />
           <Route path="/discord" element={discordElement} />
-          <Route path="*" element={<Navigate to="/journal" replace />} />
+          <Route
+            path="*"
+            element={<Navigate to={tradeReviewsPage.path} replace />}
+          />
         </Routes>
         <BottomNavigation />
       </div>
@@ -211,17 +219,17 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
       renderRecoveryBanner={(locationKey) => (
         <RecoveryBanner key={locationKey} />
       )}
-      journalElement={
+      renderJournalPage={(section) => (
         <Suspense
           fallback={
             <main className="workspace-body">
-              <div className="loading">Loading trading journal…</div>
+              <div className="loading">Loading {section.title}…</div>
             </main>
           }
         >
-          <JournalPage />
+          <JournalPage key={section.path} section={section} />
         </Suspense>
-      }
+      )}
       askElement={
         <>
           <main className="workspace-body workspace-body--with-composer">

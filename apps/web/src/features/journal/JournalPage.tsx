@@ -1,6 +1,7 @@
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useEffect, useState } from "react";
 import { publicApi } from "../../convex/functions";
+import { tradeReviewsPage, type JournalSection } from "../navigation/routes";
 import type {
   JournalChatAttachmentRef,
   JournalChatMessageReadModel,
@@ -22,8 +23,6 @@ import { TradeEditorSheet } from "./TradeEditorSheet";
 import { TradeReviewSheet, type ChartUrlsQueryHook } from "./TradeReviewSheet";
 import { TradesLedger } from "./TradesLedger";
 import "./journal.css";
-
-type JournalViewTab = "trades" | "lessons";
 
 type ActiveSheet =
   | { kind: "none" }
@@ -72,6 +71,7 @@ export interface JournalWorkspaceHandlers {
 }
 
 export function JournalWorkspaceView({
+  section,
   diary,
   chatMessages,
   chatLoading = false,
@@ -79,6 +79,7 @@ export function JournalWorkspaceView({
   useChartUrls,
   handlers,
 }: {
+  section: JournalSection;
   diary: JournalDiaryReadModel | undefined;
   chatMessages: JournalChatMessageReadModel[];
   chatLoading?: boolean;
@@ -86,7 +87,7 @@ export function JournalWorkspaceView({
   useChartUrls?: ChartUrlsQueryHook;
   handlers: JournalWorkspaceHandlers;
 }) {
-  const [tab, setTab] = useState<JournalViewTab>("trades");
+  const showTrades = section.path === tradeReviewsPage.path;
   const [sheet, setSheet] = useState<ActiveSheet>({ kind: "none" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState<boolean>(() =>
@@ -143,33 +144,11 @@ export function JournalWorkspaceView({
           <header className="journal-page-header">
             <div className="journal-header-left">
               <p className="journal-kicker">Forest Ledger</p>
-              <h1>Trading Journal</h1>
-              <nav className="journal-view-tabs" aria-label="Journal views">
-                <button
-                  type="button"
-                  className="journal-tab"
-                  aria-pressed={tab === "trades"}
-                  data-active={tab === "trades" ? "true" : undefined}
-                  onClick={() => setTab("trades")}
-                >
-                  Trades
-                  <span className="journal-tab-count">{trades.length}</span>
-                </button>
-                <button
-                  type="button"
-                  className="journal-tab"
-                  aria-pressed={tab === "lessons"}
-                  data-active={tab === "lessons" ? "true" : undefined}
-                  onClick={() => setTab("lessons")}
-                >
-                  Lessons
-                  <span className="journal-tab-count">{lessons.length}</span>
-                </button>
-              </nav>
+              <h1>{section.title}</h1>
             </div>
 
             <div className="journal-header-actions">
-              {tab === "trades" ? (
+              {showTrades ? (
                 <button
                   type="button"
                   className="journal-button journal-button--primary"
@@ -230,9 +209,9 @@ export function JournalWorkspaceView({
               className="journal-card journal-loading-card"
               role="status"
             >
-              Loading trading journal…
+              Loading {section.title}…
             </section>
-          ) : tab === "trades" ? (
+          ) : showTrades ? (
             <TradesLedger
               trades={trades}
               orderDays={orderDays}
@@ -369,7 +348,7 @@ export function JournalWorkspaceView({
   );
 }
 
-export function JournalPage() {
+export function JournalPage({ section }: { section: JournalSection }) {
   const diary = useQuery(publicApi.journal.getDiary, {});
   const chatMessages = useQuery(publicApi.journal.listChatMessages, {
     limit: 100,
@@ -390,6 +369,7 @@ export function JournalPage() {
 
   return (
     <JournalWorkspaceView
+      section={section}
       diary={diary}
       chatMessages={chatMessages ?? []}
       chatLoading={chatMessages === undefined}

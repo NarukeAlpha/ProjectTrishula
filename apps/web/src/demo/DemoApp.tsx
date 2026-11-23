@@ -8,12 +8,16 @@ import type {
   MessageReadModel,
 } from "../convex/types";
 import { DiscordControlView } from "../features/discord/DiscordControlPage";
-import { JournalWorkspaceView } from "../features/journal/JournalPage";
+import {
+  JournalWorkspaceView,
+  type JournalWorkspaceHandlers,
+} from "../features/journal/JournalPage";
 import { MessageList } from "../features/messages/MessageList";
 import {
   BottomNavigation,
   PrimaryRail,
 } from "../features/navigation/BottomNavigation";
+import { journalPages, tradeReviewsPage } from "../features/navigation/routes";
 import { Welcome } from "../features/threads/Welcome";
 
 const demoDiscord: DiscordControlPlaneReadModel = {
@@ -338,8 +342,138 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
     setMessages([]);
     setDiary(createDemoDiary());
     setJournalChat([]);
-    navigate("/journal");
+    navigate(tradeReviewsPage.path);
   }
+
+  const journalHandlers: JournalWorkspaceHandlers = {
+    onSaveSettings: async (input) => {
+      setDiary((current) => {
+        const nextSettings: JournalDiaryReadModel["settings"] = {
+          brokerTimeZone: input.brokerTimeZone,
+          updatedAt: Date.now(),
+        };
+        if (input.tradingViewLayoutId) {
+          nextSettings.tradingViewLayoutId = input.tradingViewLayoutId;
+        }
+        return {
+          ...current,
+          settings: nextSettings,
+        };
+      });
+    },
+    onUpsertTrade: async ({ stableId, trade }) => {
+      const now = Date.now();
+      const id = stableId ?? `demo-trade-${now}`;
+      setDiary((current) => {
+        const exists = current.trades.some((item) => item.stableId === id);
+        const nextTrades = exists
+          ? current.trades.map((item) =>
+              item.stableId === id
+                ? { ...item, ...trade, updatedAt: now }
+                : item,
+            )
+          : [
+              {
+                stableId: id,
+                ...trade,
+                assistantReview: null,
+                createdAt: now,
+                updatedAt: now,
+              },
+              ...current.trades,
+            ];
+        return { ...current, trades: nextTrades };
+      });
+    },
+    onClearTradeReview: async (stableId) => {
+      setDiary((current) => ({
+        ...current,
+        trades: current.trades.map((item) =>
+          item.stableId === stableId
+            ? { ...item, assistantReview: null }
+            : item,
+        ),
+      }));
+    },
+    onDeleteTrade: async (stableId) => {
+      setDiary((current) => ({
+        ...current,
+        trades: current.trades.filter((item) => item.stableId !== stableId),
+        lessons: current.lessons.map((lesson) =>
+          lesson.tradeStableId === stableId
+            ? { ...lesson, tradeStableId: null }
+            : lesson,
+        ),
+      }));
+    },
+    onUpsertLesson: async ({ stableId, lesson }) => {
+      const now = Date.now();
+      const id = stableId ?? `demo-lesson-${now}`;
+      setDiary((current) => {
+        const exists = current.lessons.some((item) => item.stableId === id);
+        const nextLessons = exists
+          ? current.lessons.map((item) =>
+              item.stableId === id
+                ? { ...item, ...lesson, updatedAt: now }
+                : item,
+            )
+          : [
+              {
+                stableId: id,
+                ...lesson,
+                createdAt: now,
+                updatedAt: now,
+              },
+              ...current.lessons,
+            ];
+        return { ...current, lessons: nextLessons };
+      });
+    },
+    onDeleteLesson: async (stableId) => {
+      setDiary((current) => ({
+        ...current,
+        lessons: current.lessons.filter((item) => item.stableId !== stableId),
+      }));
+    },
+    onUploadChart: async () => ({
+      imageKey: "0".repeat(64),
+      storageId: "demo-storage",
+      mimeType: "image/png",
+      width: 1200,
+      height: 800,
+      url: "",
+    }),
+    onSendChatMessage: async ({ text }) => {
+      const now = Date.now();
+      setJournalChat((current) => [
+        ...current,
+        {
+          stableId: `demo-jchat-user-${now}`,
+          ordinal: current.length + 1,
+          role: "user",
+          text,
+          attachments: [],
+          status: "completed",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          stableId: `demo-jchat-assistant-${now}`,
+          ordinal: current.length + 2,
+          role: "assistant",
+          text: "Demo mode uses fixed local data. Connect Convex and Codex to import fills and run TradingView reviews.",
+          attachments: [],
+          status: "completed",
+          createdAt: now + 1,
+          updatedAt: now + 1,
+        },
+      ]);
+    },
+    onCancelActiveRun: async () => {},
+    onClearChatHistory: async () => {
+      setJournalChat([]);
+    },
+  };
 
   return (
     <div className="shell demo-shell" data-environment={config.environment}>
@@ -357,154 +491,21 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
       <div className="workspace demo-workspace workspace--full">
         <DemoHeader onReset={reset} />
         <Routes>
-          <Route path="/" element={<Navigate to="/journal" replace />} />
-          <Route
-            path="/journal"
-            element={
-              <JournalWorkspaceView
-                diary={diary}
-                chatMessages={journalChat}
-                handlers={{
-                  onSaveSettings: async (input) => {
-                    setDiary((current) => {
-                      const nextSettings: JournalDiaryReadModel["settings"] = {
-                        brokerTimeZone: input.brokerTimeZone,
-                        updatedAt: Date.now(),
-                      };
-                      if (input.tradingViewLayoutId) {
-                        nextSettings.tradingViewLayoutId =
-                          input.tradingViewLayoutId;
-                      }
-                      return {
-                        ...current,
-                        settings: nextSettings,
-                      };
-                    });
-                  },
-                  onUpsertTrade: async ({ stableId, trade }) => {
-                    const now = Date.now();
-                    const id = stableId ?? `demo-trade-${now}`;
-                    setDiary((current) => {
-                      const exists = current.trades.some(
-                        (item) => item.stableId === id,
-                      );
-                      const nextTrades = exists
-                        ? current.trades.map((item) =>
-                            item.stableId === id
-                              ? { ...item, ...trade, updatedAt: now }
-                              : item,
-                          )
-                        : [
-                            {
-                              stableId: id,
-                              ...trade,
-                              assistantReview: null,
-                              createdAt: now,
-                              updatedAt: now,
-                            },
-                            ...current.trades,
-                          ];
-                      return { ...current, trades: nextTrades };
-                    });
-                  },
-                  onClearTradeReview: async (stableId) => {
-                    setDiary((current) => ({
-                      ...current,
-                      trades: current.trades.map((item) =>
-                        item.stableId === stableId
-                          ? { ...item, assistantReview: null }
-                          : item,
-                      ),
-                    }));
-                  },
-                  onDeleteTrade: async (stableId) => {
-                    setDiary((current) => ({
-                      ...current,
-                      trades: current.trades.filter(
-                        (item) => item.stableId !== stableId,
-                      ),
-                      lessons: current.lessons.map((lesson) =>
-                        lesson.tradeStableId === stableId
-                          ? { ...lesson, tradeStableId: null }
-                          : lesson,
-                      ),
-                    }));
-                  },
-                  onUpsertLesson: async ({ stableId, lesson }) => {
-                    const now = Date.now();
-                    const id = stableId ?? `demo-lesson-${now}`;
-                    setDiary((current) => {
-                      const exists = current.lessons.some(
-                        (item) => item.stableId === id,
-                      );
-                      const nextLessons = exists
-                        ? current.lessons.map((item) =>
-                            item.stableId === id
-                              ? { ...item, ...lesson, updatedAt: now }
-                              : item,
-                          )
-                        : [
-                            {
-                              stableId: id,
-                              ...lesson,
-                              createdAt: now,
-                              updatedAt: now,
-                            },
-                            ...current.lessons,
-                          ];
-                      return { ...current, lessons: nextLessons };
-                    });
-                  },
-                  onDeleteLesson: async (stableId) => {
-                    setDiary((current) => ({
-                      ...current,
-                      lessons: current.lessons.filter(
-                        (item) => item.stableId !== stableId,
-                      ),
-                    }));
-                  },
-                  onUploadChart: async () => ({
-                    imageKey: "0".repeat(64),
-                    storageId: "demo-storage",
-                    mimeType: "image/png",
-                    width: 1200,
-                    height: 800,
-                    url: "",
-                  }),
-                  onSendChatMessage: async ({ text }) => {
-                    const now = Date.now();
-                    setJournalChat((current) => [
-                      ...current,
-                      {
-                        stableId: `demo-jchat-user-${now}`,
-                        ordinal: current.length + 1,
-                        role: "user",
-                        text,
-                        attachments: [],
-                        status: "completed",
-                        createdAt: now,
-                        updatedAt: now,
-                      },
-                      {
-                        stableId: `demo-jchat-assistant-${now}`,
-                        ordinal: current.length + 2,
-                        role: "assistant",
-                        text: "Demo mode uses fixed local data. Connect Convex and Codex to import fills and run TradingView reviews.",
-                        attachments: [],
-                        status: "completed",
-                        createdAt: now + 1,
-                        updatedAt: now + 1,
-                      },
-                    ]);
-                  },
-                  onCancelActiveRun: async () => {},
-                  onClearChatHistory: async () => {
-                    setJournalChat([]);
-                  },
-                }}
-              />
-            }
-          />
+          {journalPages.map((section) => (
+            <Route
+              key={section.path}
+              path={section.path}
+              element={
+                <JournalWorkspaceView
+                  key={section.path}
+                  section={section}
+                  diary={diary}
+                  chatMessages={journalChat}
+                  handlers={journalHandlers}
+                />
+              }
+            />
+          ))}
           <Route
             path="/ask"
             element={
@@ -542,7 +543,10 @@ export function DemoApp({ config }: { config: DemoRuntimeConfig }) {
               />
             }
           />
-          <Route path="*" element={<Navigate to="/journal" replace />} />
+          <Route
+            path="*"
+            element={<Navigate to={tradeReviewsPage.path} replace />}
+          />
         </Routes>
         <BottomNavigation />
       </div>
