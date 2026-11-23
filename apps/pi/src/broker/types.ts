@@ -62,6 +62,32 @@ export type OrderExecutionResult =
   | { status: "submitted"; brokerOrderId: string }
   | { status: "failed"; errorCode: string };
 
+export interface McpToolSchemaObject {
+  readonly [key: string]: CanonicalJsonValue;
+}
+
+export interface McpDiscoveredTool {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: McpToolSchemaObject;
+}
+
+export interface RobinhoodRunSession {
+  readonly actorId: string;
+  readonly tools: readonly McpDiscoveredTool[];
+  callTool(
+    name: string,
+    args: McpToolSchemaObject,
+    signal?: AbortSignal,
+  ): Promise<CanonicalJsonValue>;
+  close(): Promise<void>;
+}
+
+export type RobinhoodSessionOpenResult =
+  | { readonly status: "connected"; readonly session: RobinhoodRunSession }
+  | { readonly status: "disconnected" }
+  | { readonly status: "reauth_required"; readonly reason: string };
+
 export interface TradingBroker {
   startConnection(actorId: string): Promise<RobinhoodConnectionStatus>;
   completeConnection(actorId: string, code: string, state: string): Promise<RobinhoodConnectionStatus>;
@@ -71,5 +97,6 @@ export interface TradingBroker {
   proposeOrder(input: TradeProposalInput): Promise<StoredTradeProposal>;
   executeOrder(actorId: string, proposalId: string, fingerprint: string): Promise<OrderExecutionResult>;
   callApplicationTool(actorId: string, name: "get_accounts" | "get_portfolio" | "get_equity_positions" | "get_equity_quotes" | "get_equity_orders", args: ApplicationToolArguments, signal?: AbortSignal): Promise<CanonicalJsonValue>;
+  openRunSession(actorId: string, signal?: AbortSignal): Promise<RobinhoodSessionOpenResult>;
   dispose(): Promise<void>;
 }

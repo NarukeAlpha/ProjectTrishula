@@ -4,6 +4,7 @@ export type ConnectionStatus =
   | "connected"
   | "connecting"
   | "disconnected"
+  | "reauth_required"
   | "error";
 export type ProposalStatus = "pending" | "approved" | "rejected";
 
@@ -87,6 +88,7 @@ function connectionLabel(
     return isMock ? "Simulation connected" : "Connected";
   }
   if (status === "connecting") return "Connecting";
+  if (status === "reauth_required") return "Reconnect required";
   if (status === "error") return "Needs attention";
   return "Not connected";
 }

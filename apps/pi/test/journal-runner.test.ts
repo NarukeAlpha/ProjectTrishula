@@ -13,6 +13,7 @@ import {
 import type { JournalModelAdapter, JournalModelCompletionRequest } from "../src/journal/model.js";
 import { createJournalAgentRunner } from "../src/journal/runner.js";
 import { executeJournalTool } from "../src/journal/tools.js";
+import type { TradingBroker } from "../src/broker/types.js";
 import type { Logger } from "../src/runtime/logger.js";
 
 const silentLogger: Logger = {
@@ -948,5 +949,117 @@ describe("JournalAgentRunner end-to-end tool loop", () => {
       const imageParts = userMsg.content.filter((part) => part.type === "image");
       expect(imageParts).toHaveLength(1);
     }
+  });
+
+  it("opens one run-scoped Robinhood MCP session, exposes discovered read tools as robinhood_*, and closes it on finish", async () => {
+    const closeSpy = vi.fn(async () => undefined);
+    const callToolSpy = vi.fn(async () => ({
+      orders: [{ symbol: "NVDA", side: "buy", quantity: 10, average_price: "140.50" }],
+    }));
+    const openRunSessionSpy = vi.fn(async () => ({
+      status: "connected" as const,
+      session: {
+        actorId: "user_trader_1",
+        tools: [
+          {
+            name: "get_equity_orders",
+            description: "List recent Robinhood equity orders.",
+            inputSchema: {
+              type: "object",
+              properties: { status: { type: "string" } },
+              additionalProperties: false,
+            },
+          },
+        ],
+        callTool: callToolSpy,
+        close: closeSpy,
+      },
+    }));
+    const broker: TradingBroker = {
+      startConnection: vi.fn(),
+      completeConnection: vi.fn(),
+      connectionStatus: vi.fn(),
+      disconnect: vi.fn(),
+      refreshPortfolio: vi.fn(),
+      proposeOrder: vi.fn(),
+      executeOrder: vi.fn(),
+      callApplicationTool: vi.fn(),
+      openRunSession: openRunSessionSpy,
+      dispose: vi.fn(async () => undefined),
+    };
+
+    const seenContexts: Context[] = [];
+    let turn = 0;
+    const model: JournalModelAdapter = {
+      provider: "openai-codex",
+      modelId: "gpt-6-astra",
+      initialize: vi.fn(async () => undefined),
+      readiness: vi.fn(() => ({ ready: true })),
+      complete: vi.fn(async (req: JournalModelCompletionRequest) => {
+        seenContexts.push(structuredClone(req.context));
+        turn += 1;
+        if (turn === 1) {
+          return makeAssistantMessage([
+            makeToolCall("tc-rh-1", "robinhood_get_equity_orders", { status: "filled" }),
+          ], "toolUse");
+        }
+        return makeAssistantMessage([{ type: "text", text: "Pulled your filled NVDA order from Robinhood." }]);
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+
+    const completions: JournalRunCompleteInput[] = [];
+    const convex: JournalConvexClient = {
+      getDiary: vi.fn(),
+      importOrders: vi.fn(),
+      upsertTrade: vi.fn(),
+      saveReview: vi.fn(),
+      upsertLesson: vi.fn(),
+      uploadChart: vi.fn(),
+      reportProgress: vi.fn(async () => ({ accepted: true, status: "running" })),
+      completeRun: vi.fn(async (_creds, input) => {
+        completions.push(structuredClone(input));
+        return { accepted: true, status: input.status };
+      }),
+    };
+
+    const runner = createJournalAgentRunner({
+      model,
+      convex,
+      chartProvider: { id: "chart_img", isConfigured: () => false, captureChart: vi.fn() },
+      broker,
+      convexSiteUrl: "https://convex.example.com/http",
+      logger: silentLogger,
+    });
+
+    await runner.run(
+      makeRunRequest({
+        userMessage: {
+          stableId: "msg-rh",
+          ordinal: 8,
+          role: "user",
+          text: "Check my recent Robinhood fills.",
+          attachments: [],
+          status: "completed",
+          createdAt: 1_700_000_008_000,
+          updatedAt: 1_700_000_008_000,
+        },
+      }),
+    );
+
+    expect(openRunSessionSpy).toHaveBeenCalledTimes(1);
+    expect(openRunSessionSpy).toHaveBeenCalledWith("user_trader_1", expect.any(AbortSignal));
+    expect(seenContexts[0]?.tools?.some((tool) => tool.name === "robinhood_get_equity_orders")).toBe(true);
+    expect(seenContexts[0]?.systemPrompt).toContain("robinhood_get_equity_orders");
+    expect(callToolSpy).toHaveBeenCalledWith("get_equity_orders", { status: "filled" }, expect.any(AbortSignal));
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(completions[0]?.status).toBe("completed");
+    expect(completions[0]?.toolEvents).toEqual([
+      {
+        name: "robinhood_get_equity_orders",
+        status: "completed",
+        summary: "Read Robinhood data (get_equity_orders)",
+      },
+    ]);
   });
 });

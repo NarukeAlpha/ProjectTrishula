@@ -1541,6 +1541,104 @@ summary:focus-visible {
   font-size: 11px;
 }
 
+.broker-callback-form {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.broker-callback-label {
+  display: grid;
+  gap: 4px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.broker-callback-label small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.broker-callback-row {
+  display: grid;
+  gap: 8px;
+}
+
+.broker-callback-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.broker-mcp-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.broker-mcp-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 16px;
+}
+
+.broker-mcp-header h4 {
+  margin: 2px 0 4px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.broker-mcp-copy {
+  max-width: 520px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.broker-mcp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.broker-mcp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.journal-settings-broker {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.ask-broker-panel {
+  width: min(100%, 720px);
+  margin: 16px auto 0;
+  padding: 0 16px 24px;
+}
+
 .connection-action {
   width: 100%;
 }

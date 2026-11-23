@@ -299,6 +299,14 @@ const robinhoodConnectedResponseSchema = z.object({
   grantedScopes: z.array(z.string()).default([]),
 }).strict();
 
+const brokerConnectionStatusUpdateSchema = z.object({
+  schemaVersion: z.literal(1),
+  actorId: credentialVaultOwnerId,
+  provider: z.literal(CREDENTIAL_VAULT_PROVIDER),
+  status: z.enum(["disconnected", "reauth_required", "error"]),
+  errorCode: z.string().trim().min(1).max(128).optional(),
+}).strict();
+
 const tradeProposalSchema = rawTradeProposalSchema.transform((value): TradeProposalArguments => {
   const result: TradeProposalArguments = {
     ownerId: value.ownerId,
@@ -600,13 +608,38 @@ export const credentialVaultDelete = httpAction(async (ctx, request) => {
   }
 });
 
+interface BrokerConnectionStatusRequest {
+  ownerId: string;
+  status: "disconnected" | "reauth_required" | "error";
+  errorCode?: string;
+}
+
+export const brokerConnectionStatus = httpAction(async (ctx, request) => {
+  if (!authorized(request)) return json({ error: "Unauthorized." }, 401);
+  const body = await parsedBody(request, brokerConnectionStatusUpdateSchema);
+  if (!body) return json({ error: "Invalid broker connection status request." }, 400);
+  const statusArgs: BrokerConnectionStatusRequest = {
+    ownerId: body.actorId,
+    status: body.status,
+  };
+  if (body.errorCode !== undefined) statusArgs.errorCode = body.errorCode;
+  await ctx.runMutation(internal.trading.setConnectionStatus, statusArgs);
+  return json({ schemaVersion: 1, updated: true, status: body.status });
+});
+
 export const robinhoodCallback = httpAction(async (ctx, request) => {
-  let code: string;
+  let code: string | undefined;
   let state: string;
+  let providerError: string | undefined;
   try {
     const url = new URL(request.url);
-    code = requireRobinhoodOAuthCode(url.searchParams.get("code") ?? "");
     state = requireRobinhoodOAuthState(url.searchParams.get("state") ?? "");
+    const rawError = url.searchParams.get("error")?.trim();
+    if (rawError) {
+      providerError = rawError.slice(0, 128);
+    } else {
+      code = requireRobinhoodOAuthCode(url.searchParams.get("code") ?? "");
+    }
   } catch {
     return brokerCallbackRedirect("failed");
   }
@@ -619,6 +652,14 @@ export const robinhoodCallback = httpAction(async (ctx, request) => {
     );
     if (!transaction) return brokerCallbackRedirect("failed");
     ownerId = transaction.ownerId;
+    if (providerError !== undefined || code === undefined) {
+      await ctx.runMutation(internal.trading.setConnectionStatus, {
+        ownerId,
+        status: "error",
+        errorCode: "authorization_denied",
+      });
+      return brokerCallbackRedirect("failed");
+    }
     const response = await executionRequest(
       ownerId,
       "/connections/robinhood/complete",
@@ -670,6 +711,11 @@ http.route({
   path: "/service/broker-credentials/delete",
   method: "POST",
   handler: credentialVaultDelete,
+});
+http.route({
+  path: "/service/broker-connections/status",
+  method: "POST",
+  handler: brokerConnectionStatus,
 });
 http.route({
   path: "/broker/robinhood/callback",

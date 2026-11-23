@@ -214,4 +214,64 @@ describe("Convex actor credential store", () => {
     });
     await expect(store.read(actorId)).rejects.toThrow(/invalid broker credential response/);
   });
+
+  it("supports isolated per-actor credentials in multi-actor mode with keyVersion-bound HKDF", async () => {
+    const records = new Map<string, { credential: Envelope | null; revision: number }>();
+    const multiFetch: typeof fetch = vi.fn(async (input, init) => {
+      const url = requestUrl(input);
+      // SAFETY: Test fake parses strict request shapes below.
+      const rawBody: unknown = JSON.parse(String(init?.body));
+      if (url.pathname.endsWith("/get")) {
+        const body = getBodySchema.parse(rawBody);
+        const existing = records.get(body.actorId) ?? { credential: null, revision: 0 };
+        return response({ schemaVersion: 1, credential: existing.credential, revision: existing.revision });
+      }
+      if (url.pathname.endsWith("/put")) {
+        const body = putBodySchema.parse(rawBody);
+        const existing = records.get(body.actorId) ?? { credential: null, revision: 0 };
+        if (body.expectedRevision !== existing.revision) {
+          return response({ error: "credential_vault_revision_conflict" }, 409);
+        }
+        const nextRevision = existing.revision + 1;
+        records.set(body.actorId, { credential: body.credential, revision: nextRevision });
+        return response({ schemaVersion: 1, stored: true, revision: nextRevision });
+      }
+      return response({ error: "not_found" }, 404);
+    });
+
+    const storeV1 = new ConvexActorStore({
+      siteUrl: "http://convex.internal/http",
+      sharedSecret: "a-secure-service-secret-with-32-chars",
+      encryptionKey,
+      keyVersion: 1,
+      requestTimeoutMs: 1_000,
+      retryAttempts: 1,
+      fetch: multiFetch,
+    });
+    const storeV2 = new ConvexActorStore({
+      siteUrl: "http://convex.internal/http",
+      sharedSecret: "a-secure-service-secret-with-32-chars",
+      encryptionKey,
+      keyVersion: 2,
+      requestTimeoutMs: 1_000,
+      retryAttempts: 1,
+      fetch: multiFetch,
+    });
+
+    await storeV1.write({
+      ...defaultConnection("workos_actor_a"),
+      tokens: { access_token: "token-a", token_type: "Bearer" },
+      tokenObtainedAt: 1_800_000_000_000,
+      tokenExpiresAt: 1_800_003_600_000,
+    });
+    await storeV1.write({
+      ...defaultConnection("workos_actor_b"),
+      tokens: { access_token: "token-b", token_type: "Bearer" },
+    });
+
+    expect((await storeV1.read("workos_actor_a"))?.tokens?.access_token).toBe("token-a");
+    expect((await storeV1.read("workos_actor_a"))?.tokenExpiresAt).toBe(1_800_003_600_000);
+    expect((await storeV1.read("workos_actor_b"))?.tokens?.access_token).toBe("token-b");
+    await expect(storeV2.read("workos_actor_a")).rejects.toThrow(/key version is unavailable/);
+  });
 });

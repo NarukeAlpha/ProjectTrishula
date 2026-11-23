@@ -21,6 +21,8 @@ import {
 } from "../features/navigation/routes";
 import { ThreadSidebar } from "../features/threads/ThreadSidebar";
 import { Welcome } from "../features/threads/Welcome";
+import { BrokerReturnPage } from "../features/trading/BrokerReturn";
+import { RobinhoodMcpPanel } from "../features/trading/RobinhoodMcpPanel";
 import { AuthStage } from "./AuthStage";
 import { RecoveryBanner } from "./RecoveryBanner";
 
@@ -176,6 +178,14 @@ export function AppShell({
           <Route path="/ask" element={askElement} />
           <Route path="/threads/:threadId" element={threadElement} />
           <Route path="/discord" element={discordElement} />
+          <Route
+            path="/broker/connected"
+            element={<BrokerReturnPage result="connected" />}
+          />
+          <Route
+            path="/broker/failed"
+            element={<BrokerReturnPage result="failed" />}
+          />
           <Route path="*" element={<Navigate to="/journal" replace />} />
         </Routes>
         <BottomNavigation />
@@ -226,6 +236,9 @@ function AuthenticatedApp({ config }: { config: ProductionRuntimeConfig }) {
         <>
           <main className="workspace-body workspace-body--with-composer">
             <Welcome />
+            <div className="ask-broker-panel">
+              <RobinhoodMcpPanel />
+            </div>
           </main>
           <Composer activeRun={null} />
         </>

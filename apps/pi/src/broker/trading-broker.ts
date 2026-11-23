@@ -19,6 +19,8 @@ import type {
   TradeProposalInput,
   TradingBroker,
   ApplicationToolArguments,
+  McpDiscoveredTool,
+  RobinhoodSessionOpenResult,
 } from "./types.js";
 import type { RobinhoodMcpClientOptions } from "./mcp-client.js";
 import { assertBoundActor } from "../identity/actor-binding.js";
@@ -191,6 +193,54 @@ function fingerprintFor(input: TradeProposalInput): string {
   }), "utf8").digest("hex");
 }
 
+interface MutableMockToolArguments {
+  readonly [key: string]: string | readonly string[] | undefined;
+  symbol?: string;
+  symbols?: readonly string[];
+  status?: string;
+}
+
+const MOCK_DISCOVERED_TOOLS: readonly McpDiscoveredTool[] = [
+  {
+    name: "get_accounts",
+    description: "Read the connected Robinhood account summary.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_portfolio",
+    description: "Read normalized Robinhood portfolio totals.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_equity_positions",
+    description: "Read Robinhood equity positions.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "get_equity_quotes",
+    description: "Read current Robinhood equity quotes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        symbol: { type: "string" },
+        symbols: { type: "array", items: { type: "string" } },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_equity_orders",
+    description: "Read recent Robinhood equity orders.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+  },
+];
+
 function mockConnection(): RobinhoodConnectionStatus {
   return { status: "connected", label: "Mock Robinhood", grantedScopes: ["read", "trade"] };
 }
@@ -208,12 +258,14 @@ export class TradingBrokerService implements TradingBroker {
     this.fetchFn = options.fetchFn ?? fetch;
     this.now = options.now ?? Date.now;
     if (config.brokerMode === "robinhood") {
-      if (!config.boundActorId) throw new Error("BOUND_ACTOR_ID is required in Robinhood mode.");
+      if (!config.multiActorEnabled && !config.boundActorId) {
+        throw new Error("BOUND_ACTOR_ID is required in Robinhood mode unless MULTI_ACTOR_ENABLED is true.");
+      }
       if (!config.piCredentialEncryptionKey) {
         throw new Error("PI_CREDENTIAL_ENCRYPTION_KEY is required in Robinhood mode.");
       }
       this.store = options.store ?? new ConvexActorStore({
-        actorId: config.boundActorId,
+        boundActorId: config.boundActorId,
         siteUrl: config.convexSiteUrl,
         sharedSecret: config.sharedSecret,
         encryptionKey: config.piCredentialEncryptionKey,
@@ -230,6 +282,7 @@ export class TradingBrokerService implements TradingBroker {
           redirectUri: config.robinhoodOAuthRedirectUri,
           fetchFn: this.fetchFn,
           now: this.now,
+          onReauthRequired: (actorId, errorCode) => this.notifyReauthRequired(actorId, errorCode),
         };
         if (config.robinhoodOAuthClientId) mcpOptions.clientId = config.robinhoodOAuthClientId;
         this.mcp = new RobinhoodMcpClient(mcpOptions);
@@ -300,6 +353,8 @@ export class TradingBrokerService implements TradingBroker {
         "content-type": "application/json",
       },
       body: JSON.stringify(convexTradeProposalPayload(proposal)),
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
     });
     if (!response.ok) throw new Error("Trade proposal could not be recorded.");
     this.proposals.set(`${input.actorId}:${proposal.proposalId}`, proposal);
@@ -333,10 +388,58 @@ export class TradingBrokerService implements TradingBroker {
     return this.mcp!.callTool(actorId, name, args, signal);
   }
 
+  async openRunSession(actorId: string, signal?: AbortSignal): Promise<RobinhoodSessionOpenResult> {
+    this.assertBoundActor(actorId);
+    if (this.config.brokerMode === "mock") {
+      return {
+        status: "connected",
+        session: {
+          actorId,
+          tools: MOCK_DISCOVERED_TOOLS,
+          callTool: async (name, args) => {
+            const matched = APPLICATION_MCP_TOOLS.find((candidate) => candidate === name);
+            if (!matched) {
+              throw new Error(`Mock Robinhood tool ${name} is unavailable.`);
+            }
+            const parsedSymbol = z.string().safeParse(args.symbol);
+            const parsedSymbols = z.array(z.string()).safeParse(args.symbols);
+            const parsedStatus = z.string().safeParse(args.status);
+            const toolArgs: MutableMockToolArguments = {};
+            if (parsedSymbol.success) toolArgs.symbol = parsedSymbol.data;
+            if (parsedSymbols.success) toolArgs.symbols = parsedSymbols.data;
+            if (parsedStatus.success) toolArgs.status = parsedStatus.data;
+            return this.mockTool(matched, toolArgs);
+          },
+          close: async () => undefined,
+        },
+      };
+    }
+    return this.mcp!.openRunSession(actorId, signal);
+  }
+
   async dispose(): Promise<void> {
     this.proposals.clear();
     this.submissions.clear();
     this.mockConnections.clear();
+  }
+
+  private async notifyReauthRequired(actorId: string, errorCode: string): Promise<void> {
+    await this.fetchFn(`${this.config.convexSiteUrl}/service/broker-connections/status`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.config.sharedSecret}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        schemaVersion: 1,
+        actorId,
+        provider: "robinhood",
+        status: "reauth_required",
+        errorCode,
+      }),
+      redirect: "error",
+      signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+    });
   }
 
   private validateOrder(input: TradeProposalInput): void {

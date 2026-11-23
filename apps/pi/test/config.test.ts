@@ -16,7 +16,8 @@ describe("loadConfig", () => {
     expect(config.piAuthPath).toBe("/data/auth.json");
     expect(config.piModel).toBe("gpt-5.6-terra");
     expect(config.brokerMode).toBe("mock");
-    expect(config.robinhoodOAuthRedirectUri).toBe("http://convex.internal/http/broker/robinhood/callback");
+    expect(config.robinhoodOAuthRedirectUri).toBe("http://127.0.0.1:8787/callback");
+    expect(config.multiActorEnabled).toBe(false);
     expect(config.piCredentialKeyVersion).toBe(1);
     expect(config.discordSharedSecret).toBe(base.PI_DISCORD_SHARED_SECRET);
     expect(config.marketResearchEnabled).toBe(false);
@@ -141,6 +142,19 @@ describe("loadConfig", () => {
       BOUND_ACTOR_ID: "actor_1",
       ROBINHOOD_OAUTH_REDIRECT_URI: "http://convex.example.com/http/broker/robinhood/callback",
     })).toThrow(/ROBINHOOD_OAUTH_REDIRECT_URI must use HTTPS/);
+  });
+
+  it("accepts loopback redirect URIs and multi-actor mode in production", () => {
+    const config = loadConfig({
+      ...base,
+      NODE_ENV: "production",
+      CONVEX_SITE_URL: "https://convex.example.com/http",
+      MULTI_ACTOR_ENABLED: "true",
+      ROBINHOOD_OAUTH_REDIRECT_URI: "http://localhost:9999/callback",
+    });
+    expect(config.multiActorEnabled).toBe(true);
+    expect(config.boundActorId).toBeUndefined();
+    expect(config.robinhoodOAuthRedirectUri).toBe("http://localhost:9999/callback");
   });
 
   it("accepts the dedicated HTTPS callback in production", () => {

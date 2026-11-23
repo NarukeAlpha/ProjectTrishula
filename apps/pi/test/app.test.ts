@@ -40,6 +40,7 @@ function makeBroker(): TradingBroker {
     }),
     executeOrder: vi.fn(async () => ({ status: "failed" as const, errorCode: "not_enabled" })),
     callApplicationTool: vi.fn(async () => ({})),
+    openRunSession: vi.fn(async () => ({ status: "disconnected" as const })),
     dispose: vi.fn(async () => undefined),
   };
 }

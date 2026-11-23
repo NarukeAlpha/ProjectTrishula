@@ -39,6 +39,52 @@ export function requireRobinhoodOAuthCode(value: string): string {
   return code;
 }
 
+export interface ParsedRobinhoodCallback {
+  state: string;
+  code?: string;
+  error?: string;
+  errorDescription?: string;
+}
+
+function isAllowedCallbackUrl(url: URL): boolean {
+  if (url.username !== "" || url.password !== "") return false;
+  if (url.protocol === "https:") return true;
+  if (url.protocol === "http:") {
+    const hostname = url.hostname.toLowerCase();
+    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+  }
+  return false;
+}
+
+export function parseRobinhoodCallbackInput(rawValue: string): ParsedRobinhoodCallback {
+  const trimmed = rawValue.trim();
+  if (trimmed.length === 0 || trimmed.length > 16_384) {
+    throw new Error("Paste the full redirect URL from your browser address bar.");
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error("Paste the full redirect URL from your browser address bar.");
+  }
+  if (!isAllowedCallbackUrl(url)) {
+    throw new Error("Robinhood callback URL must use HTTPS or a localhost loopback address.");
+  }
+  const state = requireRobinhoodOAuthState(url.searchParams.get("state") ?? "");
+  const providerError = url.searchParams.get("error")?.trim();
+  if (providerError) {
+    const parsed: ParsedRobinhoodCallback = {
+      state,
+      error: providerError.slice(0, 128),
+    };
+    const description = url.searchParams.get("error_description")?.trim();
+    if (description) parsed.errorDescription = description.slice(0, 512);
+    return parsed;
+  }
+  const code = requireRobinhoodOAuthCode(url.searchParams.get("code") ?? "");
+  return { code, state };
+}
+
 export function requireWebAppOrigin(value = process.env.WEB_APP_ORIGIN): string {
   if (!value?.trim()) throw new Error("WEB_APP_ORIGIN is not configured.");
   let url: URL;

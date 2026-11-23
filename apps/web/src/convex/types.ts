@@ -174,6 +174,7 @@ export type BrokerConnectionStatus =
   | "disconnected"
   | "connecting"
   | "connected"
+  | "reauth_required"
   | "error";
 
 export interface BrokerConnectionReadModel {

@@ -6,6 +6,7 @@ import { safeRobinhoodAuthorizationUrl } from "./robinhoodAuthorization";
 
 export type TradingOperation =
   | "connecting"
+  | "completing"
   | "disconnecting"
   | "refreshing"
   | "approving"
@@ -19,6 +20,7 @@ export interface TradingController {
   isLoading: boolean;
   operation: TradingOperation | null;
   clearError(): void;
+  completeAuthorization(callbackUrl: string): Promise<void>;
   decide(proposalId: string, decision: "approve" | "reject"): Promise<void>;
   dismissAuthorization(): void;
   refresh(): Promise<void>;
@@ -28,6 +30,9 @@ export interface TradingController {
 export function useTrading(): TradingController {
   const dashboardResult = useQuery(publicApi.trading.getDashboard, {});
   const startConnection = useAction(publicApi.trading.startRobinhoodConnection);
+  const completeConnection = useAction(
+    publicApi.trading.completeRobinhoodConnection,
+  );
   const disconnectRobinhood = useAction(publicApi.trading.disconnectRobinhood);
   const refreshPortfolio = useAction(publicApi.trading.refreshPortfolio);
   const approveProposal = useAction(publicApi.trading.approveProposal);
@@ -108,6 +113,27 @@ export function useTrading(): TradingController {
     startConnection,
   ]);
 
+  const completeAuthorization = useCallback(
+    async (callbackUrl: string): Promise<void> => {
+      if (operation) return;
+      setError(null);
+      setOperation("completing");
+      try {
+        await completeConnection({ callbackUrl });
+        setAuthorizationUrl(null);
+      } catch (failure) {
+        setError(
+          failure instanceof Error && failure.message.trim().length > 0
+            ? failure.message
+            : "Signal could not finish the Robinhood connection. Start again and paste the new redirect URL.",
+        );
+      } finally {
+        setOperation(null);
+      }
+    },
+    [completeConnection, operation],
+  );
+
   const decide = useCallback(
     async (
       proposalId: string,
@@ -161,6 +187,7 @@ export function useTrading(): TradingController {
     isLoading: dashboardResult === undefined,
     operation,
     clearError,
+    completeAuthorization,
     decide,
     dismissAuthorization,
     refresh,

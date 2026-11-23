@@ -9,6 +9,9 @@ import {
   OAUTH_TRANSACTION_TTL_MS,
   ROBINHOOD_MCP_URL,
   RobinhoodMcpClient,
+  RobinhoodReauthRequiredError,
+  TOKEN_REFRESH_SKEW_MS,
+  isReadOnlyRobinhoodTool,
   type RobinhoodMcpClientOptions,
 } from "../src/broker/mcp-client.js";
 import type { CanonicalJsonValue } from "../src/results/canonical-json.js";
@@ -21,10 +24,10 @@ const authorizationServerMetadataUrl = "https://agent.robinhood.com/.well-known/
 const registrationUrl = "https://agent.robinhood.com/oauth/trading/register";
 const tokenUrl = "https://api.robinhood.com/oauth2/token/";
 const registrationSchema = z.object({
-  application_type: z.literal("web"),
-  client_name: z.literal("Phone Trading POC"),
+  application_type: z.enum(["web", "native"]),
+  client_name: z.literal("Project Trishula"),
   grant_types: z.tuple([z.literal("authorization_code"), z.literal("refresh_token")]),
-  redirect_uris: z.tuple([z.literal(redirectUri)]),
+  redirect_uris: z.tuple([z.string().url()]),
   response_types: z.tuple([z.literal("code")]),
   scope: z.literal("internal"),
   token_endpoint_auth_method: z.literal("none"),
@@ -203,7 +206,7 @@ describe("Robinhood OAuth transaction", () => {
     expect(oauth.registrations).toHaveLength(1);
     expect(oauth.registrations[0]).toMatchObject({
       application_type: "web",
-      client_name: "Phone Trading POC",
+      client_name: "Project Trishula",
       grant_types: ["authorization_code", "refresh_token"],
       redirect_uris: [redirectUri],
       response_types: ["code"],
@@ -259,6 +262,7 @@ describe("Robinhood OAuth transaction", () => {
     expect(store.value?.tokens).toEqual({
       access_token: "test-access-token",
       expires_in: 3_600,
+      issuer: ROBINHOOD_MCP_URL,
       refresh_token: "test-refresh-token",
       scope: "internal",
       token_type: "Bearer",
@@ -379,5 +383,111 @@ describe("Robinhood OAuth transaction", () => {
 
     await expect(client.complete(actorId, "authorization-code", state)).rejects.toThrow(/metadata mismatch/);
     expect(store.value?.oauthTransaction).toBeUndefined();
+  });
+
+  it("uses native application_type for loopback redirect URIs and tracks token expiry", async () => {
+    const store = new MemoryActorStore();
+    const oauth = createRobinhoodFetchMock();
+    const loopbackUri = "http://127.0.0.1:8787/callback";
+    let now = 1_800_000_000_000;
+    const client = new RobinhoodMcpClient({
+      store,
+      serverUrl: ROBINHOOD_MCP_URL,
+      redirectUri: loopbackUri,
+      fetchFn: oauth.fetchFn,
+      now: () => now,
+      verifyConnection: async () => undefined,
+    });
+
+    const pending = await client.start(actorId);
+    expect(pending.status).toBe("authorization_required");
+    expect(oauth.registrations[0]?.application_type).toBe("native");
+    expect(oauth.registrations[0]?.redirect_uris).toEqual([loopbackUri]);
+
+    const state = pendingState(store);
+    await client.complete(actorId, "loopback-code", state);
+    expect(store.value?.tokenObtainedAt).toBe(now);
+    expect(store.value?.tokenExpiresAt).toBe(now + 3_600 * 1_000);
+
+    // Advance inside the refresh skew window and verify proactive token refresh
+    now += 3_600 * 1_000 - TOKEN_REFRESH_SKEW_MS + 1_000;
+    const refreshed = await client.ensureFreshTokens(actorId);
+    expect(refreshed.access_token).toBe("test-access-token");
+    expect(oauth.tokenRequests).toHaveLength(2);
+    expect(oauth.tokenRequests[1]?.get("grant_type")).toBe("refresh_token");
+    expect(oauth.tokenRequests[1]?.get("refresh_token")).toBe("test-refresh-token");
+    expect(store.value?.tokenObtainedAt).toBe(now);
+  });
+
+  it("clears tokens and invokes onReauthRequired when refresh_token is rejected", async () => {
+    const store = new MemoryActorStore();
+    const now = 1_800_000_000_000;
+    store.value = {
+      schemaVersion: 1,
+      actorId,
+      clientInformation: { client_id: "test-robinhood-client" },
+      tokens: {
+        access_token: "expired-access",
+        refresh_token: "revoked-refresh",
+        token_type: "Bearer",
+        expires_in: 3_600,
+      },
+      tokenObtainedAt: now - 4_000 * 1_000,
+      tokenExpiresAt: now - 400 * 1_000,
+      grantedScopes: ["internal"],
+      updatedAt: now - 4_000 * 1_000,
+    };
+    const onReauthRequired = vi.fn(async () => undefined);
+    const fetchFn = vi.fn(async () => new Response(
+      JSON.stringify({ error: "invalid_grant", error_description: "Refresh token expired" }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    ));
+    const client = new RobinhoodMcpClient({
+      store,
+      serverUrl: ROBINHOOD_MCP_URL,
+      redirectUri: "http://127.0.0.1:8787/callback",
+      fetchFn,
+      now: () => now,
+      onReauthRequired,
+    });
+
+    await expect(client.ensureFreshTokens(actorId)).rejects.toBeInstanceOf(RobinhoodReauthRequiredError);
+    expect(onReauthRequired).toHaveBeenCalledWith(actorId, "token_refresh_failed");
+    expect(store.value?.tokens).toBeUndefined();
+    expect(store.value?.tokenExpiresAt).toBeUndefined();
+  });
+
+  it("blocks outbound OAuth discovery requests to non-Robinhood hosts", async () => {
+    const store = new MemoryActorStore();
+    const fetchFn = vi.fn(async (input: string | URL) => {
+      const url = new URL(input);
+      if (url.href === protectedResourceMetadataUrl) {
+        return jsonResponse({
+          authorization_servers: ["https://attacker.example/oauth"],
+          bearer_methods_supported: ["header"],
+          resource: ROBINHOOD_MCP_URL,
+          scopes_supported: ["internal"],
+        });
+      }
+      throw new Error(`Unexpected fetch to ${url.href}`);
+    });
+    const client = new RobinhoodMcpClient({
+      store,
+      serverUrl: ROBINHOOD_MCP_URL,
+      redirectUri: "http://127.0.0.1:8787/callback",
+      fetchFn,
+    });
+
+    await expect(client.start(actorId)).rejects.toThrow(/allowlisted Robinhood HTTPS hosts/);
+  });
+
+  it("filters Robinhood MCP tools strictly to read-only operations", () => {
+    expect(isReadOnlyRobinhoodTool({ name: "get_portfolio" })).toBe(true);
+    expect(isReadOnlyRobinhoodTool({ name: "list_option_orders" })).toBe(true);
+    expect(isReadOnlyRobinhoodTool({ name: "custom_lookup", annotations: { readOnlyHint: true } })).toBe(true);
+    expect(isReadOnlyRobinhoodTool({ name: "place_equity_order" })).toBe(false);
+    expect(isReadOnlyRobinhoodTool({ name: "cancel_order" })).toBe(false);
+    expect(isReadOnlyRobinhoodTool({ name: "buy_stock" })).toBe(false);
+    expect(isReadOnlyRobinhoodTool({ name: "get_portfolio", annotations: { destructiveHint: true } })).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RobinhoodHandoff } from "./RobinhoodHandoff";
+import { RobinhoodMcpPanelView } from "./RobinhoodMcpPanel";
 import { safeRobinhoodAuthorizationUrl } from "./robinhoodAuthorization";
 
 afterEach(() => {
@@ -78,5 +79,63 @@ describe("phone-first Robinhood handoff", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it("submits pasted loopback callback URLs and renders reauth_required guidance", async () => {
+    const onCompleteAuthorization = vi.fn(async () => undefined);
+    const onToggleConnection = vi.fn();
+
+    const { rerender } = render(
+      <RobinhoodMcpPanelView
+        status="reauth_required"
+        label="Robinhood"
+        isMock={false}
+        isLoading={false}
+        operation={null}
+        authorizationUrl={null}
+        error={null}
+        onToggleConnection={onToggleConnection}
+        onCompleteAuthorization={onCompleteAuthorization}
+        onDismissAuthorization={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Reconnect required")).toBeVisible();
+    expect(screen.getByText(/session expired/i)).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reconnect Robinhood" }),
+    );
+    expect(onToggleConnection).toHaveBeenCalledOnce();
+
+    rerender(
+      <RobinhoodMcpPanelView
+        status="connecting"
+        label="Robinhood"
+        isMock={false}
+        isLoading={false}
+        operation={null}
+        authorizationUrl="https://robinhood.com/oauth?state=s1&code_challenge=c1"
+        error={null}
+        onToggleConnection={onToggleConnection}
+        onCompleteAuthorization={onCompleteAuthorization}
+        onDismissAuthorization={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByLabelText(
+      /Step 2: Paste the redirected localhost URL/i,
+    );
+    fireEvent.change(input, {
+      target: {
+        value: "  http://127.0.0.1:8787/callback?code=code-1&state=s1  ",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Finish connection" }));
+
+    await waitFor(() => {
+      expect(onCompleteAuthorization).toHaveBeenCalledWith(
+        "http://127.0.0.1:8787/callback?code=code-1&state=s1",
+      );
+    });
   });
 });
