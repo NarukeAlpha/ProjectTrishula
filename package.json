@@ -20,8 +20,8 @@
     "check": "npm run lint && npm run check:convex && npm run check:pi && npm run check:discord && npm run check:web && npm run check:railway"
   },
   "devDependencies": {
-    "@oxlint/plugins": "1.80.0",
-    "oxlint": "1.80.0",
+    "@oxlint/plugins": "1.94.0",
+    "oxlint": "1.94.0",
     "railway": "3.10.0"
   }
 }
