@@ -70,16 +70,15 @@ export function ThreadSidebar({
         hidden={!mobileOpen}
         onClick={onClose}
       />
-      <aside className="sidebar" data-open={mobileOpen}>
+      <aside
+        className="sidebar"
+        data-open={mobileOpen}
+        aria-label="Conversation history sidebar"
+      >
         <div className="brand-row">
-          <div className="brand">
-            <div className="brand-mark" aria-hidden="true">
-              T
-            </div>
-            <div>
-              <strong>Project Trishula</strong>
-              <span>Market research agent</span>
-            </div>
+          <div className="sidebar-title-block">
+            <strong>Chat history</strong>
+            <span>Research threads</span>
           </div>
           <button
             className="icon-button sidebar-close"

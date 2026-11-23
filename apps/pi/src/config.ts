@@ -2,6 +2,14 @@ import { z } from "zod";
 import { discordCompactionThreshold } from "./discord/compaction.js";
 import { DISCORD_NATIVE_COMPACTION_LIVE_PROBE_ATTESTATION } from "./discord/native-compaction.js";
 import { ASTRA_CODEX_MODEL_ID } from "./pi/codex-catalog.js";
+import { chartImgPlans, type ChartImgPlan } from "./journal/charts/types.js";
+import { journalReasoningEfforts, type JournalReasoningEffort } from "./journal/model.js";
+
+const optionalBlankToUndefined = z
+  .string()
+  .trim()
+  .transform((value) => (value.length > 0 ? value : undefined))
+  .optional();
 
 const positiveInteger = z.coerce.number().int().positive();
 const nonnegativeMoney = z.coerce.number().finite().nonnegative();
@@ -80,6 +88,11 @@ const environmentSchema = z.object({
   ]).default("pending"),
   EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST: positiveMoney.max(100).optional(),
   PI_MARKET_RESEARCH_MODEL: z.string().trim().min(1).default(ASTRA_CODEX_MODEL_ID).transform(migrateSolModel),
+  CONVEX_CLOUD_ORIGIN: optionalBlankToUndefined,
+  CHART_IMG_API_KEY: optionalBlankToUndefined,
+  CHART_IMG_PLAN: z.enum(chartImgPlans).default("pro"),
+  JOURNAL_MODEL: z.string().trim().min(1).default(ASTRA_CODEX_MODEL_ID).transform(migrateSolModel),
+  JOURNAL_REASONING_EFFORT: z.enum(journalReasoningEfforts).default("high"),
 });
 
 export interface AppConfig {
@@ -141,6 +154,11 @@ export interface AppConfig {
   financialDatasetsOwnerDecision: "pending" | "approved" | "partial" | "rejected";
   financialDatasetsMaxCostUsdPerRequest: number | undefined;
   marketResearchModel: string;
+  convexCloudOrigin: string | undefined;
+  chartImgApiKey: string | undefined;
+  chartImgPlan: ChartImgPlan;
+  journalModel: string;
+  journalReasoningEffort: JournalReasoningEffort;
 }
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -157,6 +175,29 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
   if (value.NODE_ENV === "production" && convexUrl.protocol !== "https:") {
     throw new Error("CONVEX_SITE_URL must use HTTPS in production.");
+  }
+  let convexCloudOrigin: string | undefined;
+  if (value.CONVEX_CLOUD_ORIGIN !== undefined) {
+    let parsedCloudOrigin: URL;
+    try {
+      parsedCloudOrigin = new URL(value.CONVEX_CLOUD_ORIGIN);
+    } catch {
+      throw new Error("CONVEX_CLOUD_ORIGIN must be a valid HTTP(S) origin URL.");
+    }
+    if (
+      (parsedCloudOrigin.protocol !== "http:" && parsedCloudOrigin.protocol !== "https:")
+      || parsedCloudOrigin.username !== ""
+      || parsedCloudOrigin.password !== ""
+      || (parsedCloudOrigin.pathname !== "/" && parsedCloudOrigin.pathname !== "")
+      || parsedCloudOrigin.search !== ""
+      || parsedCloudOrigin.hash !== ""
+    ) {
+      throw new Error("CONVEX_CLOUD_ORIGIN must be a bare HTTP(S) origin URL.");
+    }
+    if (value.NODE_ENV === "production" && parsedCloudOrigin.protocol !== "https:") {
+      throw new Error("CONVEX_CLOUD_ORIGIN must use HTTPS in production.");
+    }
+    convexCloudOrigin = parsedCloudOrigin.origin;
   }
   if (value.NODE_ENV === "production" && value.BOUND_ACTOR_ID === undefined) {
     throw new Error("BOUND_ACTOR_ID is required in production.");
@@ -280,6 +321,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     financialDatasetsMaxCostUsdPerRequest:
       value.EXA_FINANCIAL_DATASETS_MAX_COST_USD_PER_REQUEST,
     marketResearchModel: value.PI_MARKET_RESEARCH_MODEL,
+    convexCloudOrigin,
+    chartImgApiKey: value.CHART_IMG_API_KEY,
+    chartImgPlan: value.CHART_IMG_PLAN,
+    journalModel: value.JOURNAL_MODEL,
+    journalReasoningEffort: value.JOURNAL_REASONING_EFFORT,
   };
   if (value.ROBINHOOD_OAUTH_CLIENT_ID !== undefined) config.robinhoodOAuthClientId = value.ROBINHOOD_OAUTH_CLIENT_ID;
   return config;

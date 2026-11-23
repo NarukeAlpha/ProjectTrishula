@@ -204,4 +204,43 @@ describe("loadConfig", () => {
     expect(config.financialDatasetsOwnerDecision).toBe("approved");
     expect(config.financialDatasetsMaxCostUsdPerRequest).toBe(0.25);
   });
+
+  it("loads optional journal configuration with valid Codex defaults", () => {
+    const defaults = loadConfig(base);
+    expect(defaults.chartImgApiKey).toBeUndefined();
+    expect(defaults.chartImgPlan).toBe("pro");
+    expect(defaults.convexCloudOrigin).toBeUndefined();
+    expect(defaults.journalModel).toBe("gpt-6-astra");
+    expect(defaults.journalReasoningEffort).toBe("high");
+
+    const blankKey = loadConfig({
+      ...base,
+      CHART_IMG_API_KEY: "   ",
+      CONVEX_CLOUD_ORIGIN: "   ",
+    });
+    expect(blankKey.chartImgApiKey).toBeUndefined();
+    expect(blankKey.convexCloudOrigin).toBeUndefined();
+
+    const configured = loadConfig({
+      ...base,
+      CHART_IMG_API_KEY: "test-chart-img-key",
+      CHART_IMG_PLAN: "mega",
+      CONVEX_CLOUD_ORIGIN: "https://cloud.convex.example.com/",
+      JOURNAL_MODEL: "gpt-5.6-sol",
+      JOURNAL_REASONING_EFFORT: "xhigh",
+    });
+    expect(configured.chartImgApiKey).toBe("test-chart-img-key");
+    expect(configured.chartImgPlan).toBe("mega");
+    expect(configured.convexCloudOrigin).toBe("https://cloud.convex.example.com");
+    expect(configured.journalModel).toBe("gpt-6-astra");
+    expect(configured.journalReasoningEffort).toBe("xhigh");
+
+    expect(() => loadConfig({
+      ...base,
+      NODE_ENV: "production",
+      CONVEX_SITE_URL: "https://site.convex.example.com/http",
+      BOUND_ACTOR_ID: "actor_1",
+      CONVEX_CLOUD_ORIGIN: "http://cloud.convex.example.com",
+    })).toThrow(/CONVEX_CLOUD_ORIGIN must use HTTPS/);
+  });
 });

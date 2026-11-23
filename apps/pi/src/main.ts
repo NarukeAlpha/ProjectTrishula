@@ -10,6 +10,10 @@ import { createMorningPaperComposer } from "./market-research/composer.js";
 import { ConvexMarketResearchClient } from "./market-research/convex-client.js";
 import { MarketResearchExaClient } from "./market-research/exa-client.js";
 import { createMarketResearchRunner } from "./market-research/runner.js";
+import { ChartImgProvider } from "./journal/charts/index.js";
+import { ConvexJournalClient } from "./journal/convex-client.js";
+import { createCodexJournalModelAdapter } from "./journal/model.js";
+import { createJournalAgentRunner } from "./journal/runner.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -51,6 +55,26 @@ async function main(): Promise<void> {
         logger: consoleLogger,
       })
     : undefined;
+  const journal = createJournalAgentRunner({
+    model: createCodexJournalModelAdapter(
+      codexRuntime,
+      config.journalModel,
+      config.journalReasoningEffort,
+    ),
+    convex: new ConvexJournalClient({
+      siteUrl: config.convexSiteUrl,
+      sharedSecret: config.sharedSecret,
+      timeoutMs: config.requestTimeoutMs,
+      logger: consoleLogger,
+    }),
+    chartProvider: new ChartImgProvider({
+      apiKey: config.chartImgApiKey,
+      plan: config.chartImgPlan,
+    }),
+    convexSiteUrl: config.convexSiteUrl,
+    ...(config.convexCloudOrigin === undefined ? {} : { convexCloudOrigin: config.convexCloudOrigin }),
+    logger: consoleLogger,
+  });
   const service = await startExecutionService(
     config,
     executor,
@@ -58,6 +82,7 @@ async function main(): Promise<void> {
     broker,
     discordAgents,
     marketResearch,
+    journal,
   );
 
   const shutdown = async (signal: string): Promise<void> => {
